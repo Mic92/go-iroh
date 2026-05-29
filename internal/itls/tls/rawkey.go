@@ -28,9 +28,11 @@ import (
 // verification is delegated to [Config.VerifyConnection], where the peer's
 // public key is available as ConnectionState.PeerCertificates[0].PublicKey.
 //
-// Session resumption must be disabled (Config.SessionTicketsDisabled) when this
-// is set, because resumed handshakes skip the Certificate message and cannot
-// renegotiate the certificate type.
+// Session resumption (including 0-RTT) is supported: a resumed handshake skips
+// the Certificate message, so the peer's raw public key is recovered from the
+// certificate stored in the session ticket. The ticket carries the bare
+// SubjectPublicKeyInfo, which [ParseSessionState] decodes via
+// parseSessionStateCertificate.
 type rawPublicKeysConfig struct {
 	enabled bool
 }

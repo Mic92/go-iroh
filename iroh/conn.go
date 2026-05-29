@@ -2,6 +2,7 @@ package iroh
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/tmc/go-iroh/base"
@@ -111,6 +112,37 @@ func (c *Conn) Context() context.Context { return c.qc.Context() }
 // reason.
 func (c *Conn) CloseWithError(code uint64, reason string) error {
 	return c.qc.CloseWithError(quic.ApplicationErrorCode(code), reason)
+}
+
+// maxVarInt is the largest value a QUIC variable-length integer can hold
+// (2^62-1). Application error codes are encoded as VarInts, so a larger code
+// cannot be put on the wire.
+const maxVarInt = 1<<62 - 1
+
+// Close closes the connection with an application error code and reason,
+// sending a CONNECTION_CLOSE frame to the peer and blocking until the close is
+// processed. code must be within the QUIC VarInt range [0, 2^62-1].
+func (c *Conn) Close(code uint64, reason []byte) error {
+	if code > maxVarInt {
+		return fmt.Errorf("close code %d out of QUIC varint range", code)
+	}
+	return c.qc.CloseWithError(quic.ApplicationErrorCode(code), string(reason))
+}
+
+// Closed returns a channel that is closed when the connection is closed, either
+// locally or by the peer. After it fires, [Conn.CloseReason] reports why.
+func (c *Conn) Closed() <-chan struct{} { return c.qc.Context().Done() }
+
+// CloseReason returns the error that closed the connection, or nil if it is
+// still open. The error is a *[quic.ApplicationError] for an application close
+// and a *[quic.TransportError] for a transport close.
+func (c *Conn) CloseReason() error {
+	select {
+	case <-c.qc.Context().Done():
+		return context.Cause(c.qc.Context())
+	default:
+		return nil
+	}
 }
 
 // connAdapter adapts a qng *quic.Conn to the socket package's
