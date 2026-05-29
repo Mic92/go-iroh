@@ -17,6 +17,43 @@ const (
 	ProtocolV2 ProtocolVersion = 2
 )
 
+// Wire identifiers for the relay protocol versions, sent in the
+// Sec-WebSocket-Protocol header.
+const (
+	protocolV1Wire = "iroh-relay-v1"
+	protocolV2Wire = "iroh-relay-v2"
+)
+
+// SupportedProtocolVersions returns the wire identifiers of all supported
+// protocol versions, newest first (the order offered to a relay server).
+func SupportedProtocolVersions() []string {
+	return []string{protocolV2Wire, protocolV1Wire}
+}
+
+// WireString returns the wire identifier for v.
+func (v ProtocolVersion) WireString() string {
+	switch v {
+	case ProtocolV1:
+		return protocolV1Wire
+	case ProtocolV2:
+		return protocolV2Wire
+	default:
+		return ""
+	}
+}
+
+// ParseProtocolVersion parses a protocol version from its wire identifier.
+func ParseProtocolVersion(s string) (ProtocolVersion, bool) {
+	switch s {
+	case protocolV1Wire:
+		return ProtocolV1, true
+	case protocolV2Wire:
+		return ProtocolV2, true
+	default:
+		return 0, false
+	}
+}
+
 // Status is a one-way relay-to-client message declaring the connection health.
 type Status uint8
 

@@ -18,8 +18,19 @@ Rust→Go idiom conventions used throughout.
 | `base` | `iroh-base` | ported, tested |
 | `internal/pkarr` | `iroh-dns` (pkarr) | ported, tested |
 | `dns` | `iroh-dns` | ported, tested (DoH/DoT, staggered resolution deferred) |
-| `relay` | `iroh-relay` | planned |
-| `iroh` (root) | `iroh` | planned |
+| `internal/relayproto` | `iroh-relay/protos` | ported, tested (golden wire snapshots) |
+| `internal/relayclient` | `iroh-relay/client` | ported, tested (WSS + X.509, wire-compatible) |
+| `relay` | `iroh-relay` (public) | ported, tested |
+| `watch` | `n0_watcher` | ported, tested |
+| `iroh` (root) | `iroh` | in progress (needs RFC 7250 P2P TLS) |
+
+## Wire compatibility
+
+Connections to relays, pkarr, and DNS use standard WebPKI TLS and are
+wire-compatible with upstream iroh today. The direct peer-to-peer QUIC handshake
+uses TLS 1.3 Raw Public Keys (RFC 7250), which Go's `crypto/tls` does not
+support; achieving P2P wire compatibility requires a forked `crypto/tls` driven
+by quic-go (tracked, in progress). See `package-spec.md`.
 
 ## License
 
