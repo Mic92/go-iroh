@@ -1,3 +1,6 @@
 /go-list-doc.new
 *.test
 /cover.out
+
+# Local Claude Code workflow/session artifacts
+/.claude/

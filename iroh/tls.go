@@ -87,7 +87,14 @@ func peerEndpointId(cs tls.ConnectionState) (base.EndpointId, error) {
 // connect to want. It presents sk as a raw public key and verifies that the
 // peer's key equals want — the same check iroh's ServerCertificateVerifier
 // performs by decoding the dialed server name (RFC 7250 server auth).
-func clientTLSConfig(sk base.SecretKey, want base.EndpointId, alpns []string) (*tls.Config, error) {
+//
+// Session tickets are enabled and stored in cache so a repeat dial to want can
+// resume with 0-RTT early data. iroh derives a unique [ServerName] per peer, so
+// the cache keys tickets by identity automatically. cache may be nil to opt out
+// of resumption (the connection then always performs a full handshake). This
+// mirrors the Rust client config, which enables early data and stores tickets
+// in a ClientSessionMemoryCache (iroh/src/tls.rs:86-87).
+func clientTLSConfig(sk base.SecretKey, want base.EndpointId, alpns []string, cache tls.ClientSessionCache) (*tls.Config, error) {
 	cert, err := rawKeyCertificate(sk)
 	if err != nil {
 		return nil, err
@@ -97,7 +104,8 @@ func clientTLSConfig(sk base.SecretKey, want base.EndpointId, alpns []string) (*
 		RawPublicKeys:          true,
 		MinVersion:             tls.VersionTLS13,
 		MaxVersion:             tls.VersionTLS13,
-		SessionTicketsDisabled: true,
+		SessionTicketsDisabled: cache == nil,
+		ClientSessionCache:     cache,
 		NextProtos:             alpns,
 		ServerName:             ServerName(want),
 		InsecureSkipVerify:     true, // chain verification is replaced by VerifyConnection
@@ -119,6 +127,11 @@ func clientTLSConfig(sk base.SecretKey, want base.EndpointId, alpns []string) (*
 // client's identity is learned from its certificate after the handshake (iroh's
 // server does not check the client key against anything, mirroring
 // ClientCertificateVerifier).
+//
+// Session tickets are enabled so the server issues a NewSessionTicket the client
+// can later resume with for 0-RTT. The QUIC layer advertises max_early_data_size
+// = u32::MAX on those tickets when 0-RTT acceptance is enabled (RFC 9001 §4.6.1,
+// iroh/src/tls.rs:118); the iroh server opts in via [quic.Config.Allow0RTT].
 func serverTLSConfig(sk base.SecretKey, alpns []string) (*tls.Config, error) {
 	cert, err := rawKeyCertificate(sk)
 	if err != nil {
@@ -129,7 +142,7 @@ func serverTLSConfig(sk base.SecretKey, alpns []string) (*tls.Config, error) {
 		RawPublicKeys:          true,
 		MinVersion:             tls.VersionTLS13,
 		MaxVersion:             tls.VersionTLS13,
-		SessionTicketsDisabled: true,
+		SessionTicketsDisabled: false,
 		NextProtos:             alpns,
 		ClientAuth:             tls.RequireAnyClientCert,
 		InsecureSkipVerify:     true,

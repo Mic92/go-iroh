@@ -89,6 +89,19 @@ func (c *Conn) ReadDatagram(ctx context.Context) ([]byte, error) {
 	return c.qc.ReceiveDatagram(ctx)
 }
 
+// Used0RTT reports whether the connection's early data was sent as 0-RTT and
+// accepted by the peer. On the dialing side it is meaningful only after the
+// handshake completes (see [Conn.HandshakeComplete]); a value of false means the
+// peer rejected 0-RTT and any early data must be resent. It is always false for
+// accepted connections that did not resume a prior session.
+func (c *Conn) Used0RTT() bool { return c.qc.ConnectionState().Used0RTT }
+
+// HandshakeComplete returns a channel closed when the TLS handshake finishes.
+// For a 0-RTT dial, [Endpoint.Connect] may return before this fires; waiting on
+// it and then checking [Conn.Used0RTT] tells whether the 0-RTT attempt was
+// accepted or fell back to a full handshake.
+func (c *Conn) HandshakeComplete() <-chan struct{} { return c.qc.HandshakeComplete() }
+
 // Context returns a context that is cancelled when the connection is closed.
 func (c *Conn) Context() context.Context { return c.qc.Context() }
 

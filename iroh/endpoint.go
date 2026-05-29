@@ -10,6 +10,9 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/internal/socket"
+	"github.com/tmc/go-iroh/relay"
+	"github.com/tmc/go-iroh/watch"
 )
 
 // Endpoint is a bound iroh node: it owns a secret key, a UDP socket, and the
@@ -20,10 +23,15 @@ type Endpoint struct {
 	secretKey base.SecretKey
 	alpns     [][]byte
 
-	udp       *net.UDPConn
-	transport *quic.Transport
-	listener  *quic.Listener
-	quicConf  *quic.Config
+	udp          *net.UDPConn
+	sock         *socket.Socket
+	magic        *socket.MagicConn
+	relay        *socket.RelayTransport // nil when relays are disabled
+	serveStop    context.CancelFunc
+	transport    *quic.Transport
+	listener     *quic.EarlyListener
+	quicConf     *quic.Config
+	sessionCache *SessionCache
 
 	mu     sync.Mutex
 	closed bool
@@ -36,6 +44,7 @@ type config struct {
 	alpns        [][]byte
 	bindAddr     netip.AddrPort
 	haveBindAddr bool
+	relayMode    relay.Mode
 }
 
 // Option configures an [Endpoint] at [Bind] time.
@@ -66,6 +75,17 @@ func WithBindAddr(addr netip.AddrPort) Option {
 	return func(c *config) error {
 		c.bindAddr = addr
 		c.haveBindAddr = true
+		return nil
+	}
+}
+
+// WithRelayMode selects which relay servers the endpoint uses. The default is
+// [relay.ModeDisabled] (no relays), matching this build's direct-only default.
+// Pass [relay.ModeDefault], [relay.ModeStaging], or [relay.ModeCustom] to enable
+// relay connectivity.
+func WithRelayMode(mode relay.Mode) Option {
+	return func(c *config) error {
+		c.relayMode = mode
 		return nil
 	}
 }
@@ -103,18 +123,63 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		KeepAlivePeriod: HeartbeatInterval,
 		MaxIdleTimeout:  RelayPathMaxIdleTimeout,
 		EnableDatagrams: true,
+		// Accept 0-RTT early data on incoming connections that resume a prior
+		// session. Allow0RTT is ignored for dialed connections, so sharing this
+		// config with Connect is safe. Mirrors the Rust server enabling early
+		// data with max_early_data_size = u32::MAX (iroh/src/tls.rs:118).
+		Allow0RTT: true,
+		// Remember the server's NEW_TOKEN frames so a resuming dial can present a
+		// validation token. Without it the server cannot validate the client's
+		// address ahead of the handshake and rejects 0-RTT. Tokens are keyed by
+		// the TLS server name (ServerName(id)), the same per-peer bucketing the
+		// session cache uses. The capacity matches maxTLSTickets.
+		TokenStore: quic.NewLRUTokenStore(32, 8),
 	}
 
+	// The QUIC transport is driven over the magic socket rather than the raw
+	// UDP socket: a single net.PacketConn that multiplexes every iroh path. The
+	// magic socket always carries the direct-IP transport and, when relays are
+	// configured, a relay transport (DESIGN.md §3).
+	sock := socket.NewSocket()
+
+	var relayActor *socket.RelayActor
+	relayMap := c.relayMode.Map()
+	if !relayMap.IsEmpty() {
+		relayActor = socket.NewRelayActor(socket.RelayActorConfig{
+			SecretKey: c.secretKey,
+			Map:       relayMap,
+		})
+	}
+
+	magic := socket.NewMagicConnWithRelay(sock, udp, relayActor)
+	serveCtx, serveStop := context.WithCancel(context.Background())
+	go magic.Serve(serveCtx)
+
 	ep := &Endpoint{
-		secretKey: c.secretKey,
-		alpns:     c.alpns,
-		udp:       udp,
-		transport: &quic.Transport{Conn: udp},
-		quicConf:  quicConf,
+		secretKey:    c.secretKey,
+		alpns:        c.alpns,
+		udp:          udp,
+		sock:         sock,
+		magic:        magic,
+		relay:        magic.Relay(),
+		serveStop:    serveStop,
+		transport:    &quic.Transport{Conn: magic},
+		quicConf:     quicConf,
+		sessionCache: NewSessionCache(),
+	}
+
+	// Select a home relay. net_report-based selection (latency probing) is a
+	// later slice; until then the lexically-first configured relay is the home
+	// relay, which is enough to make relay connectivity work.
+	if ep.relay != nil {
+		if urls := relayMap.URLs(); len(urls) > 0 {
+			ep.relay.SetHomeRelay(urls[0])
+		}
 	}
 
 	if len(c.alpns) > 0 {
 		if err := ep.startListener(); err != nil {
+			serveStop()
 			udp.Close()
 			return nil, err
 		}
@@ -123,12 +188,14 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 }
 
 // startListener begins accepting incoming connections with the current ALPNs.
+// It uses an early listener so the QUIC stack can accept 0-RTT early data from
+// peers that resume a prior session.
 func (e *Endpoint) startListener() error {
 	serverTLS, err := serverTLSConfig(e.secretKey, alpnsToStrings(e.alpns))
 	if err != nil {
 		return err
 	}
-	ln, err := e.transport.Listen(serverTLS, e.quicConf)
+	ln, err := e.transport.ListenEarly(serverTLS, e.quicConf)
 	if err != nil {
 		return fmt.Errorf("iroh: listen: %w", err)
 	}
@@ -148,11 +215,60 @@ func (e *Endpoint) LocalAddr() netip.AddrPort {
 }
 
 // Addr returns the endpoint's [base.EndpointAddr] from currently-known local
-// information: its id plus the bound direct address. Later slices add relay and
-// reflexive addresses.
+// information: its id, the bound direct address, and (when relays are enabled
+// and a home relay is connected) its home relay URL. Later slices add reflexive
+// addresses.
 func (e *Endpoint) Addr() base.EndpointAddr {
-	return base.NewEndpointAddr(e.ID()).WithIP(e.LocalAddr())
+	a := base.NewEndpointAddr(e.ID()).WithIP(e.LocalAddr())
+	if e.relay != nil {
+		if st := e.relay.HomeRelayStatus().Get(); st != nil {
+			a = a.WithRelayURL(st.URL)
+		}
+	}
+	return a
 }
+
+// RelayStatus is the connection status of the endpoint's home relay, observed
+// through [Endpoint.HomeRelayStatus].
+type RelayStatus = socket.RelayStatus
+
+// HomeRelayStatus returns a watcher over the endpoint's home relay connection
+// status. The watched value is nil until a home relay is selected; it updates
+// whenever the home relay or its connection state changes. When relays are
+// disabled the watcher always reports nil.
+//
+// It is the Go analog of the Rust Endpoint::home_relay_status
+// (iroh/src/endpoint.rs:1324).
+func (e *Endpoint) HomeRelayStatus() watch.Watcher[*RelayStatus] {
+	if e.relay == nil {
+		return watch.NewValue[*RelayStatus](nil).Watch()
+	}
+	return e.relay.HomeRelayStatus()
+}
+
+// Online blocks until the endpoint has a connected home relay, or until ctx is
+// done. It returns nil once connected, or ctx.Err() if the context ends first.
+// When relays are disabled it returns [ErrNoRelay] immediately.
+//
+// It is the Go analog of the Rust Endpoint::online (iroh/src/endpoint.rs:1295).
+func (e *Endpoint) Online(ctx context.Context) error {
+	if e.relay == nil {
+		return ErrNoRelay
+	}
+	w := e.relay.HomeRelayStatus()
+	for {
+		if st := w.Get(); st != nil && st.IsConnected() {
+			return nil
+		}
+		if _, err := w.Updated(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+// ErrNoRelay is returned by [Endpoint.Online] when the endpoint has no relays
+// configured (relays disabled), so it can never come online via a relay.
+var ErrNoRelay = errors.New("iroh: no relays configured")
 
 // ErrEndpointClosed is returned by operations on a closed [Endpoint].
 var ErrEndpointClosed = errors.New("iroh: endpoint closed")
@@ -161,12 +277,14 @@ var ErrEndpointClosed = errors.New("iroh: endpoint closed")
 // endpoint's own id.
 var ErrSelfConnect = errors.New("iroh: cannot connect to self")
 
-// ErrNoAddress is returned when an [base.EndpointAddr] has no usable address
-// for this build (no direct IP, since relay dialing is not yet implemented).
+// ErrNoAddress is returned when an [base.EndpointAddr] has no usable address:
+// no direct IP and no relay URL (or relays are disabled on this endpoint).
 var ErrNoAddress = errors.New("iroh: no reachable address for endpoint")
 
 // Connect dials the endpoint identified by addr and negotiates alpn, returning
-// an established [Conn]. It tries the direct IP addresses in addr in order.
+// an established [Conn]. It tries the direct IP addresses in addr in order, then
+// (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
+// handshake over a relay mapped address that routes through the relay transport.
 func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []byte) (*Conn, error) {
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
@@ -174,12 +292,13 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 	if addr.Id.Equal(e.ID()) {
 		return nil, ErrSelfConnect
 	}
-	ips := addr.IPAddrs()
-	if len(ips) == 0 {
+
+	dials := e.dialTargets(addr)
+	if len(dials) == 0 {
 		return nil, ErrNoAddress
 	}
 
-	clientTLS, err := clientTLSConfig(e.secretKey, addr.Id, []string{string(alpn)})
+	clientTLS, err := clientTLSConfig(e.secretKey, addr.Id, []string{string(alpn)}, e.sessionCache)
 	if err != nil {
 		return nil, err
 	}
@@ -190,10 +309,20 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 		defer cancel()
 	}
 
+	// DialEarly attempts 0-RTT: if the session cache holds a valid ticket for
+	// addr.Id (bucketed by its SNI), the QUIC stack restores the session and
+	// DialEarly returns a Conn ready for 0-RTT early data before the handshake
+	// completes. Data written to such a Conn is sent as 0-RTT. Without a ticket,
+	// DialEarly returns only once the handshake completes, exactly like Dial.
+	//
+	// The peer identity is the dialed addr.Id; the RFC 7250 VerifyConnection
+	// check enforces it once the handshake completes, so a 0-RTT Conn carries an
+	// asserted-but-not-yet-authenticated identity. Callers that sent 0-RTT data
+	// wait on [Conn.HandshakeComplete] and check [Conn.Used0RTT] to learn whether
+	// the server accepted the early data; on rejection the data must be resent.
 	var firstErr error
-	for _, ip := range ips {
-		udpAddr := net.UDPAddrFromAddrPort(ip)
-		qc, err := e.transport.Dial(ctx, udpAddr, clientTLS, e.quicConf)
+	for _, target := range dials {
+		qc, err := e.transport.DialEarly(ctx, target, clientTLS, e.quicConf)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -203,6 +332,25 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 		return newConn(qc, addr.Id, alpn, SideClient)
 	}
 	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.Id, firstErr)
+}
+
+// dialTargets returns the ordered net.Addr dial targets for addr: real UDP
+// addresses for direct IPs, then relay mapped addresses (when relays are
+// enabled) for each relay URL. Each relay target is registered in the
+// mapped-address table so the magic socket routes its QUIC packets to the relay
+// transport.
+func (e *Endpoint) dialTargets(addr base.EndpointAddr) []net.Addr {
+	var targets []net.Addr
+	for _, ip := range addr.IPAddrs() {
+		targets = append(targets, net.UDPAddrFromAddrPort(ip))
+	}
+	if e.relay != nil {
+		for _, u := range addr.RelayURLs() {
+			m := e.sock.RelayMappedAddrFor(u, addr.Id)
+			targets = append(targets, net.UDPAddrFromAddrPort(m.AddrPort()))
+		}
+	}
+	return targets
 }
 
 // Accept blocks until an incoming connection completes its handshake, then
@@ -221,6 +369,17 @@ func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 	qc, err := e.listener.Accept(ctx)
 	if err != nil {
 		return nil, err
+	}
+	// The early listener returns connections before the handshake completes so
+	// the QUIC stack can buffer 0-RTT early data. The peer's identity is only
+	// authenticated once the handshake finishes, so wait for it before reading
+	// the verified peer id and negotiated ALPN. Any 0-RTT streams are preserved
+	// and surface through Accept{,Uni}Stream after this returns.
+	select {
+	case <-qc.HandshakeComplete():
+	case <-ctx.Done():
+		qc.CloseWithError(0, "")
+		return nil, ctx.Err()
 	}
 	remote, err := peerEndpointId(qc.ConnectionState().TLS)
 	if err != nil {
@@ -248,10 +407,13 @@ func (e *Endpoint) Close(ctx context.Context) error {
 			firstErr = err
 		}
 	}
+	// Stop the magic socket's recv loop, then close the QUIC transport (which
+	// closes the MagicConn and, through it, the UDP socket).
+	e.serveStop()
 	if err := e.transport.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if err := e.udp.Close(); err != nil && firstErr == nil {
+	if err := e.udp.Close(); err != nil && firstErr == nil && !errors.Is(err, net.ErrClosed) {
 		firstErr = err
 	}
 	return firstErr

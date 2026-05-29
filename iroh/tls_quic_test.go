@@ -33,7 +33,7 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public(), []string{alpn})
+	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public(), []string{alpn}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestIrohTLSRejectsWrongServer(t *testing.T) {
 
 	const alpn = "iroh-test/0"
 	serverTLS, _ := serverTLSConfig(serverKey, []string{alpn})
-	clientTLS, _ := clientTLSConfig(clientKey, wrong.Public(), []string{alpn})
+	clientTLS, _ := clientTLSConfig(clientKey, wrong.Public(), []string{alpn}, nil)
 
 	serverUDP, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
 	defer serverUDP.Close()
