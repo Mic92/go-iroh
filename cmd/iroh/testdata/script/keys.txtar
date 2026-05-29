@@ -1,0 +1,26 @@
+# Key generation, derivation, and encoding are deterministic for a given seed.
+# These golden values double as a cross-check against Rust iroh-base.
+
+# Generating from a fixed seed echoes the seed back as the secret key.
+iroh key gen --seed=0000000000000000000000000000000000000000000000000000000000000000
+stdout '^0000000000000000000000000000000000000000000000000000000000000000$'
+
+# The public key (endpoint id) for the all-zero seed is the standard ed25519
+# test vector public key.
+iroh key public 0000000000000000000000000000000000000000000000000000000000000000
+stdout '^3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29$'
+
+# z-base-32 form of that public key (pkarr domain encoding).
+iroh key z32 3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29
+stdout '^8pinxxgqs41n4aididenw5apqp1urfmzdztr8jt4abrkdn435ewo$'
+
+# Round-trip: parsing the public key re-prints the same hex.
+iroh id parse 3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29
+stdout '^3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29$'
+
+# The 0x2a*32 seed yields the public key used in the relay protocol snapshots.
+iroh key public 2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a
+stdout '^197f6b23e16c8532c6abc838facd5ea789be0c76b2920334039bfa8b3d368d61$'
+
+# Parsing a too-short key fails.
+! iroh id parse foobarbaz
