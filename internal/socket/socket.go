@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -103,6 +104,33 @@ func (s *Socket) CustomMappedAddrFor(c base.CustomAddr) CustomMappedAddr {
 	s.customByKey[key] = c
 	s.customMu.Unlock()
 	return s.customAddrs.Get(key)
+}
+
+// PathAddr classifies a QUIC connection's remote net.Addr into the magic
+// socket's transport [Addr]: a real IP becomes an IP path; a relay or custom
+// mapped ULA is reverse-looked-up through the mapped-address tables. An unknown
+// mapped address (or one whose mapping has been forgotten) falls back to an IP
+// path so the per-remote actor still tracks a stable address. remoteID is used
+// for relay paths, which are keyed by (relay url, endpoint id).
+func (s *Socket) PathAddr(remoteID base.EndpointId, ra net.Addr) Addr {
+	ap, ok := addrPort(ra)
+	if !ok {
+		return Addr{}
+	}
+	switch Classify(ap.Addr()) {
+	case KindRelay:
+		if rk, ok := s.LookupRelay(RelayMappedAddrFromAddr(ap.Addr())); ok {
+			return RelayAddr(rk.URL, rk.EID)
+		}
+		return IPAddr(ap)
+	case KindCustom:
+		if c, ok := s.LookupCustom(CustomMappedAddr{a: ap.Addr()}); ok {
+			return CustomAddr(c)
+		}
+		return IPAddr(ap)
+	default:
+		return IPAddr(ap)
+	}
 }
 
 // LookupCustom returns the custom address for a custom mapped address, if known.

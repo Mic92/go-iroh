@@ -86,6 +86,11 @@ func NewRelayMappedAddr() RelayMappedAddr {
 	return RelayMappedAddr{mappedAddr(subnetRelay, relayCounter.Add(1))}
 }
 
+// RelayMappedAddrFromAddr wraps an existing relay mapped IPv6 address. It is
+// used to reverse-look-up the (relay, endpoint) pair an address maps to via
+// [Socket.LookupRelay]; it does not allocate a new mapping.
+func RelayMappedAddrFromAddr(a netip.Addr) RelayMappedAddr { return RelayMappedAddr{a: a} }
+
 // NewCustomMappedAddr allocates a fresh custom mapped address.
 func NewCustomMappedAddr() CustomMappedAddr {
 	return CustomMappedAddr{mappedAddr(subnetCustom, customCounter.Add(1))}

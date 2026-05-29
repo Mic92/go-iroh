@@ -52,6 +52,22 @@ func CustomAddr(c base.CustomAddr) Addr {
 // Kind reports which variant a is.
 func (a Addr) Kind() AddrKind { return a.kind }
 
+// String renders a in a stable "kind:value" form. It is suitable as a map key
+// (two Addrs are equal iff their String values are equal) and for diagnostics.
+// It mirrors the Rust transports::Addr Display (iroh/src/socket/transports.rs).
+func (a Addr) String() string {
+	switch a.kind {
+	case AddrIP:
+		return "ip:" + a.ip.String()
+	case AddrRelay:
+		return "relay:" + a.relayURL.String() + "|" + a.eid.String()
+	case AddrCustom:
+		return "custom:" + a.custom.String()
+	default:
+		return "unknown"
+	}
+}
+
 // IP returns the IP socket address and true if a is an [AddrIP].
 func (a Addr) IP() (netip.AddrPort, bool) {
 	return a.ip, a.kind == AddrIP
