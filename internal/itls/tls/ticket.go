@@ -234,7 +234,10 @@ func ParseSessionState(data []byte) (*SessionState, error) {
 		return nil, errors.New("tls: invalid session encoding")
 	}
 	for _, cert := range cert.Certificate {
-		c, err := globalCertCache.newCert(cert)
+		// parseSessionStateCertificate falls back to RFC 7250 raw public keys when
+		// the stored Raw bytes are a bare SubjectPublicKeyInfo rather than a DER
+		// certificate, so raw-key sessions resume (and offer 0-RTT) correctly.
+		c, err := parseSessionStateCertificate(cert)
 		if err != nil {
 			return nil, err
 		}

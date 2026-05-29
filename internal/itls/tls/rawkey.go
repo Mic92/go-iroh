@@ -18,6 +18,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"errors"
+	"time"
 )
 
 // RawPublicKeys, when set on a [Config], makes the connection use RFC 7250 raw
@@ -62,11 +63,46 @@ func parseRawPublicKeyCert(spki []byte) (*x509.Certificate, error) {
 		return nil, err
 	}
 	cert := &x509.Certificate{
+		// Raw mirrors RawSubjectPublicKeyInfo so the cert survives the session-ticket
+		// round trip: SessionState.Bytes serializes peer certificates by their Raw
+		// bytes (ticket.go certificatesToBytesSlice). A raw-key "certificate" has no
+		// DER body of its own, so we carry the SPKI; parseSessionStateCertificate
+		// reads it back with parseRawPublicKeyCert when x509.ParseCertificate fails.
+		Raw:                     spki,
 		RawSubjectPublicKeyInfo: spki,
 		PublicKey:               pub,
 		PublicKeyAlgorithm:      publicKeyAlgorithmFor(pub),
+		// RFC 7250 raw public keys carry no validity period: the SubjectPublicKeyInfo
+		// has no NotBefore/NotAfter, and none is sent on the wire. The TLS session
+		// resumption logic (handshake_client.go loadSession, handshake_server_tls13.go
+		// checkForResumption) nonetheless guards on peerCertificates[0].NotAfter, so an
+		// unbounded window keeps cached raw-key sessions valid for 0-RTT instead of
+		// being discarded as expired. These fields are purely local and never serialized.
+		NotBefore: time.Unix(0, 0),
+		NotAfter:  time.Unix(1<<62, 0),
 	}
 	return cert, nil
+}
+
+// parseSessionStateCertificate reconstructs a peer certificate stored in a TLS
+// 1.3 session ticket (see [ParseSessionState]). Tickets serialize each peer
+// certificate by its Raw bytes; for an X.509 chain those are a DER certificate,
+// but for an RFC 7250 raw public key they are a bare SubjectPublicKeyInfo, which
+// x509.ParseCertificate cannot decode. When the normal parse fails, fall back to
+// parseRawPublicKeyCert so resumption and 0-RTT work for raw-key peers. The two
+// encodings are unambiguous: an SPKI is never a valid certificate and vice
+// versa, so the fallback only triggers for genuine raw keys.
+func parseSessionStateCertificate(der []byte) (*x509.Certificate, error) {
+	c, err := globalCertCache.newCert(der)
+	if err == nil {
+		return c, nil
+	}
+	raw, rawErr := parseRawPublicKeyCert(der)
+	if rawErr != nil {
+		// Surface the original X.509 error; the raw-key fallback is best-effort.
+		return nil, err
+	}
+	return raw, nil
 }
 
 // publicKeyAlgorithmFor maps a parsed public key to its x509.PublicKeyAlgorithm.
@@ -82,8 +118,6 @@ func publicKeyAlgorithmFor(pub any) x509.PublicKeyAlgorithm {
 		return x509.UnknownPublicKeyAlgorithm
 	}
 }
-
-var errRawKeyResumption = errors.New("tls: raw public keys are incompatible with session resumption; set Config.SessionTicketsDisabled")
 
 // verifyServerRawPublicKey handles the client-side verification of a server that
 // presented a raw public key (RFC 7250). The peer's public key is exposed via
