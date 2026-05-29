@@ -33,6 +33,13 @@ type Endpoint struct {
 	quicConf     *quic.Config
 	sessionCache *SessionCache
 
+	// remotes is the per-remote state registry. The endpoint owns it: it
+	// registers every established connection so the actor for that remote can
+	// track paths and select between them (DESIGN.md §3.3). The actor never holds
+	// a reference back to the endpoint, so there is no import cycle.
+	remotes *socket.RemoteMap
+	lookup  *AddressLookupServices
+
 	mu     sync.Mutex
 	closed bool
 }
@@ -45,6 +52,7 @@ type config struct {
 	bindAddr     netip.AddrPort
 	haveBindAddr bool
 	relayMode    relay.Mode
+	lookup       *AddressLookupServices
 }
 
 // Option configures an [Endpoint] at [Bind] time.
@@ -75,6 +83,18 @@ func WithBindAddr(addr netip.AddrPort) Option {
 	return func(c *config) error {
 		c.bindAddr = addr
 		c.haveBindAddr = true
+		return nil
+	}
+}
+
+// WithAddressLookup sets the address-lookup services the endpoint uses to
+// resolve additional addresses for a remote endpoint (pkarr, DNS, in-memory).
+// The per-remote state machine consults them through its resolve hook. When
+// unset, the endpoint does no lookup-driven address resolution and connects only
+// to the addresses passed to [Endpoint.Connect].
+func WithAddressLookup(s *AddressLookupServices) Option {
+	return func(c *config) error {
+		c.lookup = s
 		return nil
 	}
 }
@@ -166,7 +186,13 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		transport:    &quic.Transport{Conn: magic},
 		quicConf:     quicConf,
 		sessionCache: NewSessionCache(),
+		lookup:       c.lookup,
 	}
+	// The per-remote state registry shares the serve context: its actors stop
+	// when the endpoint's recv loop stops. Its resolve hook is backed by the
+	// endpoint's address-lookup services (slice G), passed down as a func value
+	// so internal/socket does not import iroh.
+	ep.remotes = socket.NewRemoteMap(serveCtx, socket.BiasedRttPathSelector{}, ep.resolveFunc())
 
 	// Select a home relay. net_report-based selection (latency probing) is a
 	// later slice; until then the lexically-first configured relay is the home
@@ -201,6 +227,28 @@ func (e *Endpoint) startListener() error {
 	}
 	e.listener = ln
 	return nil
+}
+
+// SetALPNs sets the ALPN protocols the endpoint accepts and begins (or
+// continues) listening for incoming connections. It is the Go analog of the Rust
+// Endpoint::set_alpns (iroh/src/endpoint.rs), used by [Router.Spawn] to register
+// every protocol's ALPN at once.
+//
+// SetALPNs must be called before any [Endpoint.Accept]: it starts the listener.
+// It cannot change the ALPNs of an already-started listener; calling it a second
+// time, or after binding with [WithALPNs], returns an error. Pass each ALPN as
+// an arbitrary byte string.
+func (e *Endpoint) SetALPNs(alpns [][]byte) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return ErrEndpointClosed
+	}
+	if e.listener != nil {
+		return errors.New("iroh: ALPNs already set; cannot change a running listener")
+	}
+	e.alpns = alpns
+	return e.startListener()
 }
 
 // ID returns the endpoint's identifier (its ed25519 public key).
@@ -329,7 +377,12 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 			}
 			continue
 		}
-		return newConn(qc, addr.Id, alpn, SideClient)
+		conn, err := newConn(qc, addr.Id, alpn, SideClient)
+		if err != nil {
+			return nil, err
+		}
+		e.registerConn(addr.Id, qc)
+		return conn, nil
 	}
 	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.Id, firstErr)
 }
@@ -387,7 +440,51 @@ func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 		return nil, err
 	}
 	alpn := []byte(qc.ConnectionState().TLS.NegotiatedProtocol)
-	return newConn(qc, remote, alpn, SideServer)
+	conn, err := newConn(qc, remote, alpn, SideServer)
+	if err != nil {
+		return nil, err
+	}
+	e.registerConn(remote, qc)
+	return conn, nil
+}
+
+// registerConn registers an established QUIC connection with the per-remote
+// state actor for remote, so the actor tracks its path and selects between
+// available paths. Registration failures are non-fatal: the connection still
+// works; it just is not path-managed. It mirrors the Rust RemoteMap::add_connection
+// (iroh/src/socket/remote_map.rs:273).
+func (e *Endpoint) registerConn(remote base.EndpointId, qc *quic.Conn) {
+	if e.remotes == nil {
+		return
+	}
+	addr := e.sock.PathAddr(remote, qc.RemoteAddr())
+	e.remotes.AddConnection(remote, newConnAdapter(qc, addr))
+}
+
+// resolveFunc returns the address-lookup hook the RemoteMap actors use to
+// resolve additional addresses for a remote, or nil when no lookup services are
+// configured. It adapts the iroh AddressLookupServices stream to the socket
+// package's ResolveFunc, so internal/socket does not import iroh.
+func (e *Endpoint) resolveFunc() socket.ResolveFunc {
+	lookup := e.lookup
+	if lookup == nil {
+		return nil
+	}
+	return func(ctx context.Context, id base.EndpointId) ([]base.TransportAddr, error) {
+		var addrs []base.TransportAddr
+		var lastErr error
+		for res := range lookup.Resolve(ctx, id) {
+			if res.Err != nil {
+				lastErr = res.Err
+				continue
+			}
+			addrs = append(addrs, res.Item.Addr().Addrs()...)
+		}
+		if len(addrs) == 0 && lastErr != nil {
+			return nil, lastErr
+		}
+		return addrs, nil
+	}
 }
 
 // Close shuts down the endpoint: it stops accepting, closes the QUIC transport,

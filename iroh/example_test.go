@@ -3,7 +3,10 @@ package iroh_test
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/netip"
 
+	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/relay"
 )
@@ -46,4 +49,64 @@ func ExampleEndpoint_HomeRelayStatus() {
 	if status != nil && status.IsConnected() {
 		fmt.Println("connected to", status.URL)
 	}
+}
+
+// echo is a ProtocolHandler that echoes a single bidirectional stream back to
+// the peer.
+type echo struct{}
+
+func (echo) Accept(ctx context.Context, conn *iroh.Conn) error {
+	s, err := conn.AcceptStream(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(s, s); err != nil {
+		return err
+	}
+	return s.Close()
+}
+
+// ExampleRouter runs an echo protocol over a direct loopback connection: a
+// server registers the echo handler via a Router, and a client connects, sends
+// a message on a stream, and reads the echo back.
+func ExampleRouter() {
+	ctx := context.Background()
+	const alpn = "iroh/echo/1"
+
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := iroh.Bind(ctx, iroh.WithSecretKey(srvKey),
+		iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		fmt.Println("bind server:", err)
+		return
+	}
+
+	router, err := iroh.NewRouter(server).Accept([]byte(alpn), echo{}).Spawn()
+	if err != nil {
+		fmt.Println("spawn:", err)
+		return
+	}
+	defer router.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		fmt.Println("bind client:", err)
+		return
+	}
+	defer client.Close(ctx)
+
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	if err != nil {
+		fmt.Println("connect:", err)
+		return
+	}
+	defer conn.CloseWithError(0, "")
+
+	s, _ := conn.OpenStream(ctx)
+	s.Write([]byte("hello"))
+	s.Close()
+	got, _ := io.ReadAll(s)
+	fmt.Printf("%s\n", got)
+	// Output: hello
 }

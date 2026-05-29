@@ -1,0 +1,166 @@
+package iroh
+
+import (
+	"context"
+	"io"
+	"net/netip"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tmc/go-iroh/base"
+)
+
+// echoHandler is a ProtocolHandler that echoes one bidirectional stream back to
+// the peer and then returns.
+type echoHandler struct{}
+
+func (echoHandler) Accept(ctx context.Context, conn *Conn) error {
+	s, err := conn.AcceptStream(ctx)
+	if err != nil {
+		return err
+	}
+	b, err := io.ReadAll(s)
+	if err != nil {
+		return err
+	}
+	if _, err := s.Write(b); err != nil {
+		return err
+	}
+	return s.Close()
+}
+
+// shutdownEcho records whether Shutdown was called, exercising the optional
+// ShutdownHandler hook.
+type shutdownEcho struct {
+	echoHandler
+	mu   sync.Mutex
+	done bool
+}
+
+func (h *shutdownEcho) Shutdown(ctx context.Context) {
+	h.mu.Lock()
+	h.done = true
+	h.mu.Unlock()
+}
+
+func (h *shutdownEcho) wasShutdown() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.done
+}
+
+// TestRouterEcho is the slice-H Router gate: two endpoints connect over a direct
+// loopback path; the server registers an echo ProtocolHandler via a Router; the
+// client connects and exchanges a stream echo dispatched by ALPN through the
+// Router.
+func TestRouterEcho(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-router-echo/0"
+
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	h := &shutdownEcho{}
+	router, err := NewRouter(server).Accept([]byte(alpn), h).Spawn()
+	if err != nil {
+		t.Fatalf("spawn router: %v", err)
+	}
+	defer router.Shutdown(ctx)
+
+	if router.Endpoint() != server {
+		t.Error("Router.Endpoint did not return the server endpoint")
+	}
+	if router.IsShutdown() {
+		t.Error("router reported shutdown before Shutdown was called")
+	}
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+
+	s, err := conn.OpenStream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const msg = "hello router"
+	if _, err := s.Write([]byte(msg)); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	got, err := io.ReadAll(s)
+	if err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if string(got) != msg {
+		t.Errorf("echo = %q, want %q", got, msg)
+	}
+
+	// Shutting down the router cancels the loop, runs handler Shutdown, and
+	// closes the endpoint.
+	if err := router.Shutdown(ctx); err != nil {
+		t.Errorf("shutdown: %v", err)
+	}
+	if !router.IsShutdown() {
+		t.Error("router did not report shutdown after Shutdown")
+	}
+	if !h.wasShutdown() {
+		t.Error("handler Shutdown hook was not called")
+	}
+}
+
+// TestRouterUnsupportedALPN checks that a connection negotiating an ALPN with no
+// registered handler is closed by the router (and the rest keeps working).
+func TestRouterUnsupportedALPN(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const goodALPN = "iroh-good/0"
+
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, err := NewRouter(server).Accept([]byte(goodALPN), echoHandler{}).Spawn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	// The server only advertises goodALPN, so a client offering only an unknown
+	// ALPN fails the handshake at the QUIC/TLS layer.
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	if _, err := client.Connect(ctx, addr, []byte("iroh-unknown/0")); err == nil {
+		t.Error("connect with unknown ALPN unexpectedly succeeded")
+	}
+
+	// A subsequent good connection still works, proving the loop survived.
+	conn, err := client.Connect(ctx, addr, []byte(goodALPN))
+	if err != nil {
+		t.Fatalf("good connect after bad: %v", err)
+	}
+	conn.CloseWithError(0, "")
+}

@@ -2,9 +2,11 @@ package iroh
 
 import (
 	"context"
+	"time"
 
 	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/internal/socket"
 )
 
 // Side reports whether a [Conn] was dialed locally or accepted from a peer.
@@ -110,3 +112,31 @@ func (c *Conn) Context() context.Context { return c.qc.Context() }
 func (c *Conn) CloseWithError(code uint64, reason string) error {
 	return c.qc.CloseWithError(quic.ApplicationErrorCode(code), reason)
 }
+
+// connAdapter adapts a qng *quic.Conn to the socket package's
+// [socket.Connection] interface so the per-remote state actor can track its
+// liveness, RTT, and path without the socket package importing iroh.
+type connAdapter struct {
+	qc   *quic.Conn
+	addr socket.Addr
+}
+
+// newConnAdapter wraps qc for the per-remote actor. addr is the connection's
+// transport path, classified by the endpoint (a real IP for a direct path, a
+// relay address for a relay path).
+func newConnAdapter(qc *quic.Conn, addr socket.Addr) *connAdapter {
+	return &connAdapter{qc: qc, addr: addr}
+}
+
+// SmoothedRTT returns the connection's active-path smoothed RTT. qng exposes no
+// per-path RTT in this single-path build (iroh/DESIGN.md O9), so this is the RTT
+// of the connection's single active path.
+func (a *connAdapter) SmoothedRTT() time.Duration { return a.qc.ConnectionStats().SmoothedRTT }
+
+// Done is closed when the connection closes.
+func (a *connAdapter) Done() <-chan struct{} { return a.qc.Context().Done() }
+
+// RemoteAddr returns the connection's transport path address.
+func (a *connAdapter) RemoteAddr() socket.Addr { return a.addr }
+
+var _ socket.Connection = (*connAdapter)(nil)
