@@ -16,7 +16,8 @@ Rust→Go idiom conventions used throughout.
 | Package | Rust crate | Status |
 |---|---|---|
 | `base` | `iroh-base` | ported, tested |
-| `dns` | `iroh-dns` | planned |
+| `internal/pkarr` | `iroh-dns` (pkarr) | ported, tested |
+| `dns` | `iroh-dns` | ported, tested (DoH/DoT, staggered resolution deferred) |
 | `relay` | `iroh-relay` | planned |
 | `iroh` (root) | `iroh` | planned |
 
