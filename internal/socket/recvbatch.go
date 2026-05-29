@@ -1,0 +1,88 @@
+package socket
+
+import (
+	"net/netip"
+
+	"github.com/tmc/go-iroh/base"
+)
+
+// AddrKind tags the variant of an [Addr].
+type AddrKind int
+
+const (
+	// AddrIP is a direct IP address path.
+	AddrIP AddrKind = iota
+	// AddrRelay is a relay path, identified by a relay URL and endpoint id.
+	AddrRelay
+	// AddrCustom is a custom-transport path.
+	AddrCustom
+)
+
+// Addr is the transport-level address of a network path, internal to the magic
+// socket. It is one of three kinds — IP, relay, or custom — mirroring the Rust
+// transports::Addr enum (iroh/src/socket/transports.rs:795). The zero Addr is an
+// unspecified IPv6 IP address, matching Rust's Default (transports.rs:830).
+//
+// An Addr is never sent on the wire; it is the magic socket's own routing key.
+type Addr struct {
+	kind     AddrKind
+	ip       netip.AddrPort  // AddrIP
+	relayURL base.RelayUrl   // AddrRelay
+	eid      base.EndpointId // AddrRelay
+	custom   base.CustomAddr // AddrCustom
+}
+
+// IPAddr returns an [Addr] for a direct IP path. The address is canonicalized
+// so an IPv4-mapped IPv6 address becomes a plain IPv4 address, matching Rust's
+// SocketAddr -> Addr conversion (iroh/src/socket/transports.rs:825).
+func IPAddr(ap netip.AddrPort) Addr {
+	return Addr{kind: AddrIP, ip: netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
+}
+
+// RelayAddr returns an [Addr] for a relay path reaching eid through url.
+func RelayAddr(url base.RelayUrl, eid base.EndpointId) Addr {
+	return Addr{kind: AddrRelay, relayURL: url, eid: eid}
+}
+
+// CustomAddr returns an [Addr] for a custom-transport path.
+func CustomAddr(c base.CustomAddr) Addr {
+	return Addr{kind: AddrCustom, custom: c}
+}
+
+// Kind reports which variant a is.
+func (a Addr) Kind() AddrKind { return a.kind }
+
+// IP returns the IP socket address and true if a is an [AddrIP].
+func (a Addr) IP() (netip.AddrPort, bool) {
+	return a.ip, a.kind == AddrIP
+}
+
+// Relay returns the relay URL, endpoint id, and true if a is an [AddrRelay].
+func (a Addr) Relay() (base.RelayUrl, base.EndpointId, bool) {
+	return a.relayURL, a.eid, a.kind == AddrRelay
+}
+
+// Custom returns the custom address and true if a is an [AddrCustom].
+func (a Addr) Custom() (base.CustomAddr, bool) {
+	return a.custom, a.kind == AddrCustom
+}
+
+// RecvInfo carries the per-datagram metadata a transport reports alongside the
+// payload: the remote [Addr] it came from and, for custom transports, the local
+// custom address that received it. It mirrors the Rust RecvInfo
+// (iroh/src/socket/transports.rs:572). For IP and relay paths Local is the zero
+// value.
+type RecvInfo struct {
+	Remote Addr
+	Local  base.CustomAddr
+	// HasLocal reports whether Local is set (custom transports only).
+	HasLocal bool
+}
+
+// recvBatch is one received datagram and its metadata, queued from a transport's
+// recv loop to [MagicConn.ReadFrom]. The payload is owned by the batch until it
+// is copied into the caller's buffer.
+type recvBatch struct {
+	data []byte
+	info RecvInfo
+}

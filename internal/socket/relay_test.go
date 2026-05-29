@@ -1,0 +1,330 @@
+package socket
+
+import (
+	"bytes"
+	"context"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/internal/relayclient"
+	"github.com/tmc/go-iroh/internal/relayproto"
+)
+
+// fakeRelayClient is an in-process relay connection used to drive the
+// [RelayActor] without a network. Sends are recorded and made available on sent;
+// the test feeds frames back through recv.
+type fakeRelayClient struct {
+	sent chan relayproto.ClientToRelayMsg
+	recv chan relayproto.RelayToClientMsg
+	done chan struct{}
+}
+
+func newFakeRelayClient() *fakeRelayClient {
+	return &fakeRelayClient{
+		sent: make(chan relayproto.ClientToRelayMsg, 64),
+		recv: make(chan relayproto.RelayToClientMsg, 64),
+		done: make(chan struct{}),
+	}
+}
+
+func (c *fakeRelayClient) Send(ctx context.Context, msg relayproto.ClientToRelayMsg) error {
+	// Auto-answer pings with a matching pong so the connection becomes
+	// established and the ping timeout never fires during tests.
+	if msg.Type == relayproto.FramePing {
+		select {
+		case c.recv <- relayproto.RelayToClientMsg{Type: relayproto.FramePong, Ping: msg.Ping}:
+		case <-c.done:
+		}
+	}
+	select {
+	case c.sent <- msg:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.done:
+		return context.Canceled
+	}
+}
+
+func (c *fakeRelayClient) Recv(ctx context.Context) (relayproto.RelayToClientMsg, error) {
+	select {
+	case msg := <-c.recv:
+		return msg, nil
+	case <-ctx.Done():
+		return relayproto.RelayToClientMsg{}, ctx.Err()
+	case <-c.done:
+		return relayproto.RelayToClientMsg{}, context.Canceled
+	}
+}
+
+func (c *fakeRelayClient) Close() error {
+	select {
+	case <-c.done:
+	default:
+		close(c.done)
+	}
+	return nil
+}
+
+func testURL(t *testing.T) base.RelayUrl {
+	t.Helper()
+	u, err := base.ParseRelayUrl("https://relay.test.example.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u
+}
+
+// startActorWith starts a RelayActor whose dialer always returns client. It
+// returns the actor and a cancel that stops it.
+func startActorWith(t *testing.T, client *fakeRelayClient) (*RelayActor, context.CancelFunc) {
+	t.Helper()
+	sk, _ := base.GenerateSecretKey()
+	a := NewRelayActor(RelayActorConfig{
+		SecretKey: sk,
+		dialer:    func(context.Context, base.RelayUrl, relayclient.Options) (relayClient, error) { return client, nil },
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go a.Run(ctx)
+	t.Cleanup(cancel)
+	return a, cancel
+}
+
+// TestSplitSegments verifies the GRO-stride splitting of a relay batch into
+// individual datagrams, matching the Rust take_segments stride
+// (iroh/src/socket/transports/relay.rs:154).
+func TestSplitSegments(t *testing.T) {
+	tests := []struct {
+		name string
+		d    relayproto.Datagrams
+		want [][]byte
+	}{
+		{
+			name: "single",
+			d:    relayproto.Datagrams{Contents: []byte("hello")},
+			want: [][]byte{[]byte("hello")},
+		},
+		{
+			name: "batch exact",
+			d:    relayproto.Datagrams{SegmentSize: 2, Contents: []byte("aabbcc")},
+			want: [][]byte{[]byte("aa"), []byte("bb"), []byte("cc")},
+		},
+		{
+			name: "batch ragged",
+			d:    relayproto.Datagrams{SegmentSize: 3, Contents: []byte("aaabbc")},
+			want: [][]byte{[]byte("aaa"), []byte("bbc")},
+		},
+		{
+			name: "batch ragged tail",
+			d:    relayproto.Datagrams{SegmentSize: 4, Contents: []byte("aaaab")},
+			want: [][]byte{[]byte("aaaa"), []byte("b")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitSegments(tt.d)
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %d segments, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if !bytes.Equal(got[i], tt.want[i]) {
+					t.Errorf("segment %d = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// TestActorSendRoutesToRelay checks that a queued send item is delivered to the
+// relay as a client-to-relay datagram frame with the destination endpoint and
+// payload preserved.
+func TestActorSendRoutesToRelay(t *testing.T) {
+	client := newFakeRelayClient()
+	a, _ := startActorWith(t, client)
+	url := testURL(t)
+	dst, _ := base.GenerateSecretKey()
+
+	a.SetHomeRelay(url)
+
+	payload := []byte("relay payload")
+	if !a.Send(RelaySendItem{
+		RemoteEndpoint: dst.Public(),
+		URL:            url,
+		Datagrams:      relayproto.DatagramsFromBytes(payload),
+	}) {
+		t.Fatal("Send returned false (dropped)")
+	}
+
+	msg := waitDatagramSend(t, client)
+	if msg.Type != relayproto.FrameClientToRelayDatagram {
+		t.Fatalf("frame = %s, want ClientToRelayDatagram", msg.Type)
+	}
+	if !msg.DstEndpointId.Equal(dst.Public()) {
+		t.Error("destination endpoint id mismatch")
+	}
+	if string(msg.Datagrams.Contents) != string(payload) {
+		t.Errorf("payload = %q, want %q", msg.Datagrams.Contents, payload)
+	}
+}
+
+// TestActorRecvForwarding checks that a relay-to-client datagram surfaces on the
+// actor's recv queue with its source and payload intact.
+func TestActorRecvForwarding(t *testing.T) {
+	client := newFakeRelayClient()
+	a, _ := startActorWith(t, client)
+	url := testURL(t)
+	src, _ := base.GenerateSecretKey()
+	a.SetHomeRelay(url)
+
+	// Kick the connection alive by queuing a send so the active relay dials.
+	dst, _ := base.GenerateSecretKey()
+	a.Send(RelaySendItem{RemoteEndpoint: dst.Public(), URL: url, Datagrams: relayproto.DatagramsFromBytes([]byte("x"))})
+	waitDatagramSend(t, client)
+
+	want := []byte("incoming")
+	client.recv <- relayproto.RelayToClientMsg{
+		Type:             relayproto.FrameRelayToClientDatagram,
+		RemoteEndpointId: src.Public(),
+		Datagrams:        relayproto.DatagramsFromBytes(want),
+	}
+
+	select {
+	case dm := <-a.Recv():
+		if !dm.Src.Equal(src.Public()) {
+			t.Error("recv src mismatch")
+		}
+		if string(dm.Datagrams.Contents) != string(want) {
+			t.Errorf("recv payload = %q, want %q", dm.Datagrams.Contents, want)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for received datagram")
+	}
+}
+
+// TestActorBatching checks that many queued sends are coalesced and delivered in
+// no more than SEND_DATAGRAM_BATCH_SIZE frames per drain, and that all payloads
+// arrive.
+func TestActorBatching(t *testing.T) {
+	client := newFakeRelayClient()
+	a, _ := startActorWith(t, client)
+	url := testURL(t)
+	dst, _ := base.GenerateSecretKey()
+	a.SetHomeRelay(url)
+
+	const n = sendDatagramBatchSize + 5
+	got := map[string]bool{}
+	for i := 0; i < n; i++ {
+		p := []byte{byte(i)}
+		a.Send(RelaySendItem{RemoteEndpoint: dst.Public(), URL: url, Datagrams: relayproto.DatagramsFromBytes(p)})
+	}
+
+	deadline := time.After(5 * time.Second)
+	for len(got) < n {
+		select {
+		case msg := <-client.sent:
+			if msg.Type == relayproto.FrameClientToRelayDatagram || msg.Type == relayproto.FrameClientToRelayDatagramBat {
+				got[string(msg.Datagrams.Contents)] = true
+			}
+		case <-deadline:
+			t.Fatalf("got %d/%d datagrams", len(got), n)
+		}
+	}
+}
+
+// TestActorHomeRelayStatus checks the home relay watcher transitions to
+// connected after a pong is received.
+func TestActorHomeRelayStatus(t *testing.T) {
+	client := newFakeRelayClient()
+	a, _ := startActorWith(t, client)
+	url := testURL(t)
+
+	w := a.HomeRelayStatus()
+	a.SetHomeRelay(url)
+
+	// Force the active relay to start (it starts on first send or on home set).
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		st, err := w.Updated(ctx)
+		if err != nil {
+			t.Fatalf("watcher: %v", err)
+		}
+		if st != nil && st.URL.Equal(url) && st.IsConnected() {
+			return
+		}
+	}
+}
+
+// TestRelayTransportSendRouting checks RelayTransport.Send looks up the relay
+// mapped address and routes to the actor, and that an unknown address is
+// reported as not-routed (dropped).
+func TestRelayTransportSendRouting(t *testing.T) {
+	client := newFakeRelayClient()
+	a, _ := startActorWith(t, client)
+	sock := NewSocket()
+	recvCh := make(chan recvBatch, 8)
+	rt := NewRelayTransport(sock, a, recvCh)
+
+	url := testURL(t)
+	peer, _ := base.GenerateSecretKey()
+	a.SetHomeRelay(url)
+	m := sock.RelayMappedAddrFor(url, peer.Public())
+
+	if !rt.Send(m, []byte("payload")) {
+		t.Fatal("Send to known relay addr returned false")
+	}
+	msg := waitDatagramSend(t, client)
+	if !msg.DstEndpointId.Equal(peer.Public()) {
+		t.Error("routed to wrong endpoint")
+	}
+
+	// An unregistered mapped address has no (url, eid) mapping: dropped.
+	unknown := NewRelayMappedAddr()
+	if rt.Send(unknown, []byte("x")) {
+		t.Error("Send to unknown relay addr should report dropped")
+	}
+}
+
+// waitDatagramSend waits for the next client-to-relay datagram frame, skipping
+// ping/pong keepalive frames.
+func waitDatagramSend(t *testing.T, c *fakeRelayClient) relayproto.ClientToRelayMsg {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case msg := <-c.sent:
+			if msg.Type == relayproto.FrameClientToRelayDatagram || msg.Type == relayproto.FrameClientToRelayDatagramBat {
+				return msg
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for datagram send")
+		}
+	}
+}
+
+// TestRelayDatagramFrameRoundTrip is the wire-compat half of the slice gate: a
+// relay datagram frame round-trips through internal/relayproto unchanged.
+func TestRelayDatagramFrameRoundTrip(t *testing.T) {
+	key, _ := base.GenerateSecretKey()
+	in := relayproto.RelayToClientMsg{
+		Type:             relayproto.FrameRelayToClientDatagramBat,
+		RemoteEndpointId: key.Public(),
+		Datagrams:        relayproto.Datagrams{Ecn: relayproto.EcnCe, SegmentSize: 4, Contents: []byte("aaaabbbb")},
+	}
+	wire := in.AppendTo(nil)
+	out, err := relayproto.ParseRelayToClientMsg(wire, relayproto.ProtocolV2)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !reflect.DeepEqual(in.Datagrams, out.Datagrams) {
+		t.Errorf("datagrams round-trip: got %+v, want %+v", out.Datagrams, in.Datagrams)
+	}
+	if !out.RemoteEndpointId.Equal(in.RemoteEndpointId) {
+		t.Error("endpoint id round-trip mismatch")
+	}
+	if out.Type != relayproto.FrameRelayToClientDatagramBat {
+		t.Errorf("type = %s, want RelayToClientDatagramBatch", out.Type)
+	}
+}

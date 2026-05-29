@@ -32,6 +32,42 @@ func TestMappedAddrBytes(t *testing.T) {
 	}
 }
 
+// TestMappedAddrGolden16 pins the full 16-byte address for each subnet against
+// hand-computed golden vectors, the strongest cross-reference to the Rust
+// scheme (iroh/src/socket/mapped_addrs.rs:20-26): 0xfd | 15 07 0a 51 0b | subnet
+// | big-endian u64 counter.
+func TestMappedAddrGolden16(t *testing.T) {
+	tests := []struct {
+		name    string
+		subnet  [2]byte
+		counter uint64
+		want    [16]byte
+	}{
+		{
+			"endpoint id #1", subnetEndpointID, 1,
+			[16]byte{0xfd, 0x15, 0x07, 0x0a, 0x51, 0x0b, 0x00, 0x00, 0, 0, 0, 0, 0, 0, 0, 1},
+		},
+		{
+			"relay #1", subnetRelay, 1,
+			[16]byte{0xfd, 0x15, 0x07, 0x0a, 0x51, 0x0b, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 1},
+		},
+		{
+			"custom #1", subnetCustom, 1,
+			[16]byte{0xfd, 0x15, 0x07, 0x0a, 0x51, 0x0b, 0x00, 0x03, 0, 0, 0, 0, 0, 0, 0, 1},
+		},
+		{
+			"relay #258 (0x102)", subnetRelay, 258,
+			[16]byte{0xfd, 0x15, 0x07, 0x0a, 0x51, 0x0b, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0x01, 0x02},
+		},
+	}
+	for _, tt := range tests {
+		got := mappedAddr(tt.subnet, tt.counter).As16()
+		if got != tt.want {
+			t.Errorf("%s: bytes = %x, want %x", tt.name, got, tt.want)
+		}
+	}
+}
+
 // TestMappedAddrPrefixExact checks the literal first 8 bytes.
 func TestMappedAddrPrefixExact(t *testing.T) {
 	a := mappedAddr(subnetRelay, 1).As16()
@@ -60,10 +96,10 @@ func TestClassify(t *testing.T) {
 		{"fd15:70a:510b::1", KindEndpointID},
 		{"fd15:70a:510b:1::1", KindRelay},
 		{"fd15:70a:510b:3::1", KindCustom},
-		{"fd15:70a:510b:2::1", KindIP},   // unused subnet -> treated as plain IP
-		{"192.0.2.1", KindIP},            // real v4
-		{"2001:db8::1", KindIP},          // real v6
-		{"fd00::1", KindIP},              // ULA but not n0's
+		{"fd15:70a:510b:2::1", KindIP}, // unused subnet -> treated as plain IP
+		{"192.0.2.1", KindIP},          // real v4
+		{"2001:db8::1", KindIP},        // real v6
+		{"fd00::1", KindIP},            // ULA but not n0's
 	}
 	for _, tt := range tests {
 		got := Classify(netip.MustParseAddr(tt.addr))

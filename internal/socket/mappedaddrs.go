@@ -146,9 +146,9 @@ type AddrMap[K comparable, V comparable] struct {
 	gen    func() V
 	addrOf func(V) netip.Addr
 
-	mu     sync.Mutex
-	fwd    map[K]V
-	rev    map[netip.Addr]K
+	mu  sync.Mutex
+	fwd map[K]V
+	rev map[netip.Addr]K
 }
 
 // NewAddrMap returns an AddrMap whose missing keys are filled with gen(), keyed
