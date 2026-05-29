@@ -97,6 +97,10 @@ type clientHelloMsg struct {
 	pskBinders                       [][]byte
 	quicTransportParameters          []byte
 	encryptedClientHello             []byte
+	// clientCertificateTypes and serverCertificateTypes carry the RFC 7250
+	// certificate_type extensions when raw public keys are offered.
+	clientCertificateTypes []uint8
+	serverCertificateTypes []uint8
 	// extensions are only populated on the server-side of a handshake
 	extensions []uint16
 }
@@ -160,6 +164,22 @@ func (m *clientHelloMsg) marshalMsg(echInner bool) ([]byte, error) {
 		exts.AddUint16(extensionQUICTransportParameters)
 		exts.AddUint16LengthPrefixed(func(exts *cryptobyte.Builder) {
 			exts.AddBytes(m.quicTransportParameters)
+		})
+	}
+	if len(m.clientCertificateTypes) > 0 { // RFC 7250
+		exts.AddUint16(extensionClientCertificateType)
+		exts.AddUint16LengthPrefixed(func(exts *cryptobyte.Builder) {
+			exts.AddUint8LengthPrefixed(func(exts *cryptobyte.Builder) {
+				exts.AddBytes(m.clientCertificateTypes)
+			})
+		})
+	}
+	if len(m.serverCertificateTypes) > 0 { // RFC 7250
+		exts.AddUint16(extensionServerCertificateType)
+		exts.AddUint16LengthPrefixed(func(exts *cryptobyte.Builder) {
+			exts.AddUint8LengthPrefixed(func(exts *cryptobyte.Builder) {
+				exts.AddBytes(m.serverCertificateTypes)
+			})
 		})
 	}
 	if len(m.encryptedClientHello) > 0 {
@@ -632,6 +652,24 @@ func (m *clientHelloMsg) unmarshal(data []byte) bool {
 			if !extData.CopyBytes(m.quicTransportParameters) {
 				return false
 			}
+		case extensionClientCertificateType: // RFC 7250
+			var types cryptobyte.String
+			if !extData.ReadUint8LengthPrefixed(&types) || types.Empty() {
+				return false
+			}
+			m.clientCertificateTypes = make([]uint8, len(types))
+			if !types.CopyBytes(m.clientCertificateTypes) {
+				return false
+			}
+		case extensionServerCertificateType: // RFC 7250
+			var types cryptobyte.String
+			if !extData.ReadUint8LengthPrefixed(&types) || types.Empty() {
+				return false
+			}
+			m.serverCertificateTypes = make([]uint8, len(types))
+			if !types.CopyBytes(m.serverCertificateTypes) {
+				return false
+			}
 		case extensionPreSharedKey:
 			// RFC 8446, Section 4.2.11
 			if !extensions.Empty() {
@@ -1006,6 +1044,10 @@ type encryptedExtensionsMsg struct {
 	earlyData               bool
 	echRetryConfigs         []byte
 	serverNameAck           bool
+	// serverCertificateType is the negotiated server certificate type (RFC 7250),
+	// set when serverCertificateTypeSet is true.
+	serverCertificateType    uint8
+	serverCertificateTypeSet bool
 }
 
 func (m *encryptedExtensionsMsg) marshal() ([]byte, error) {
@@ -1044,6 +1086,12 @@ func (m *encryptedExtensionsMsg) marshal() ([]byte, error) {
 			if m.serverNameAck {
 				b.AddUint16(extensionServerName)
 				b.AddUint16(0) // empty extension_data
+			}
+			if m.serverCertificateTypeSet { // RFC 7250: single negotiated value
+				b.AddUint16(extensionServerCertificateType)
+				b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
+					b.AddUint8(m.serverCertificateType)
+				})
 			}
 		})
 	})
@@ -1105,6 +1153,11 @@ func (m *encryptedExtensionsMsg) unmarshal(data []byte) bool {
 				return false
 			}
 			m.serverNameAck = true
+		case extensionServerCertificateType: // RFC 7250
+			if !extData.ReadUint8(&m.serverCertificateType) {
+				return false
+			}
+			m.serverCertificateTypeSet = true
 		default:
 			// Ignore unknown extensions.
 			continue
@@ -1248,6 +1301,10 @@ type certificateRequestMsgTLS13 struct {
 	supportedSignatureAlgorithms     []SignatureScheme
 	supportedSignatureAlgorithmsCert []SignatureScheme
 	certificateAuthorities           [][]byte
+	// clientCertificateType is the negotiated client certificate type (RFC 7250),
+	// set when clientCertificateTypeSet is true.
+	clientCertificateType    uint8
+	clientCertificateTypeSet bool
 }
 
 func (m *certificateRequestMsgTLS13) marshal() ([]byte, error) {
@@ -1302,6 +1359,12 @@ func (m *certificateRequestMsgTLS13) marshal() ([]byte, error) {
 							})
 						}
 					})
+				})
+			}
+			if m.clientCertificateTypeSet { // RFC 7250: single negotiated value
+				b.AddUint16(extensionClientCertificateType)
+				b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
+					b.AddUint8(m.clientCertificateType)
 				})
 			}
 		})
@@ -1373,6 +1436,11 @@ func (m *certificateRequestMsgTLS13) unmarshal(data []byte) bool {
 				}
 				m.certificateAuthorities = append(m.certificateAuthorities, ca)
 			}
+		case extensionClientCertificateType: // RFC 7250
+			if !extData.ReadUint8(&m.clientCertificateType) {
+				return false
+			}
+			m.clientCertificateTypeSet = true
 		default:
 			// Ignore unknown extensions.
 			continue

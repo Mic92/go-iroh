@@ -22,15 +22,19 @@ Rust→Go idiom conventions used throughout.
 | `internal/relayclient` | `iroh-relay/client` | ported, tested (WSS + X.509, wire-compatible) |
 | `relay` | `iroh-relay` (public) | ported, tested |
 | `watch` | `n0_watcher` | ported, tested |
-| `iroh` (root) | `iroh` | in progress (needs RFC 7250 P2P TLS) |
+| `internal/itls` | `iroh/src/tls` | vendored crypto/tls compiles + handshakes; RFC 7250 patch in progress |
+| `iroh` (root) | `iroh` | planned (after RFC 7250 TLS) |
 
 ## Wire compatibility
 
 Connections to relays, pkarr, and DNS use standard WebPKI TLS and are
 wire-compatible with upstream iroh today. The direct peer-to-peer QUIC handshake
-uses TLS 1.3 Raw Public Keys (RFC 7250), which Go's `crypto/tls` does not
-support; achieving P2P wire compatibility requires a forked `crypto/tls` driven
-by quic-go (tracked, in progress). See `package-spec.md`.
+uses TLS 1.3 Raw Public Keys (RFC 7250) with **mutual** authentication, which
+Go's `crypto/tls` does not support and quic-go drives directly with no pluggable
+seam. The approach (see `internal/itls/`): vendor `crypto/tls` out-of-tree
+(done — it compiles via small shims for the GOROOT-private dependencies and
+completes a TLS 1.3 handshake), patch it for RFC 7250 (in progress), and drive
+it from a thin quic-go fork. See `package-spec.md` and `internal/itls/DESIGN.md`.
 
 ## License
 

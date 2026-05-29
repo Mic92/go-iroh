@@ -10,10 +10,10 @@ import (
 	"crypto"
 	"crypto/hkdf"
 	"crypto/hmac"
-	tls13 "github.com/tmc/go-iroh/internal/itls/shim/fipstls13"
 	"crypto/rsa"
 	"crypto/subtle"
 	"errors"
+	tls13 "github.com/tmc/go-iroh/internal/itls/shim/fipstls13"
 	"hash"
 	"slices"
 	"time"
@@ -542,6 +542,14 @@ func (hs *clientHandshakeStateTLS13) readServerParameters() error {
 		return err
 	}
 	c.clientProtocol = encryptedExtensions.alpnProtocol
+
+	// RFC 7250: if we offered raw public keys and the server confirmed the
+	// raw-public-key server certificate type, parse the peer cert as a bare SPKI.
+	if c.config.rawPublicKeysEnabled() &&
+		encryptedExtensions.serverCertificateTypeSet &&
+		encryptedExtensions.serverCertificateType == certTypeRawPublicKey {
+		c.rawPublicKeys = true
+	}
 
 	if c.quic != nil {
 		if encryptedExtensions.quicTransportParameters == nil {

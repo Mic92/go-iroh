@@ -11,14 +11,14 @@ import (
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/hpke"
-	tls13 "github.com/tmc/go-iroh/internal/itls/shim/fipstls13"
 	"crypto/rsa"
-	"github.com/tmc/go-iroh/internal/itls/shim/fips140tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"hash"
 	"github.com/tmc/go-iroh/internal/itls/shim/byteorder"
+	"github.com/tmc/go-iroh/internal/itls/shim/fips140tls"
+	tls13 "github.com/tmc/go-iroh/internal/itls/shim/fipstls13"
+	"hash"
 	"io"
 	"slices"
 	"sort"
@@ -61,6 +61,9 @@ type serverHandshakeStateTLS13 struct {
 	transcript      hash.Hash
 	clientFinished  []byte
 	echContext      *echServerContext
+	// rawPublicKeys is true when RFC 7250 raw public keys were negotiated for
+	// this handshake (both server and client certificate types).
+	rawPublicKeys bool
 }
 
 func (hs *serverHandshakeStateTLS13) handshake() error {
@@ -286,7 +289,27 @@ func (hs *serverHandshakeStateTLS13) processClientHello() error {
 	}
 
 	c.serverName = hs.clientHello.serverName
+
+	// RFC 7250: negotiate raw public keys if the server opted in and the client
+	// offered the raw-public-key type for both directions (iroh uses mutual auth).
+	if c.config.rawPublicKeysEnabled() &&
+		containsCertType(hs.clientHello.serverCertificateTypes, certTypeRawPublicKey) &&
+		containsCertType(hs.clientHello.clientCertificateTypes, certTypeRawPublicKey) {
+		hs.rawPublicKeys = true
+		c.rawPublicKeys = true
+	}
+
 	return nil
+}
+
+// containsCertType reports whether types includes t.
+func containsCertType(types []uint8, t uint8) bool {
+	for _, x := range types {
+		if x == t {
+			return true
+		}
+	}
+	return false
 }
 
 func (hs *serverHandshakeStateTLS13) checkForResumption() error {
@@ -790,6 +813,11 @@ func (hs *serverHandshakeStateTLS13) sendServerParameters() error {
 		encryptedExtensions.serverNameAck = true
 	}
 
+	if hs.rawPublicKeys { // RFC 7250: confirm the server certificate type.
+		encryptedExtensions.serverCertificateType = certTypeRawPublicKey
+		encryptedExtensions.serverCertificateTypeSet = true
+	}
+
 	// If client sent ECH extension, but we didn't accept it,
 	// send retry configs, if available.
 	echKeys := hs.c.config.EncryptedClientHelloKeys
@@ -816,7 +844,8 @@ func (hs *serverHandshakeStateTLS13) sendServerParameters() error {
 }
 
 func (hs *serverHandshakeStateTLS13) requestClientCert() bool {
-	return hs.c.config.ClientAuth >= RequestClientCert && !hs.usingPSK
+	// With raw public keys (iroh mutual auth) always request a client cert.
+	return (hs.c.config.ClientAuth >= RequestClientCert || hs.rawPublicKeys) && !hs.usingPSK
 }
 
 func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
@@ -836,6 +865,10 @@ func (hs *serverHandshakeStateTLS13) sendServerCertificate() error {
 		certReq.supportedSignatureAlgorithmsCert = supportedSignatureAlgorithmsCert()
 		if c.config.ClientCAs != nil {
 			certReq.certificateAuthorities = c.config.ClientCAs.Subjects()
+		}
+		if hs.rawPublicKeys { // RFC 7250: confirm the client certificate type.
+			certReq.clientCertificateType = certTypeRawPublicKey
+			certReq.clientCertificateTypeSet = true
 		}
 
 		if _, err := hs.c.writeHandshakeRecord(certReq, hs.transcript); err != nil {

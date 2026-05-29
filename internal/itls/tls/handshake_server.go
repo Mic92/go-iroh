@@ -11,10 +11,10 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/subtle"
-	"github.com/tmc/go-iroh/internal/itls/shim/fips140tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"github.com/tmc/go-iroh/internal/itls/shim/fips140tls"
 	"hash"
 	"io"
 	"time"
@@ -942,6 +942,13 @@ func (c *Conn) processCertsFromClient(certificate Certificate) error {
 	certs := make([]*x509.Certificate, len(certificates))
 	var err error
 	for i, asn1Data := range certificates {
+		if c.rawPublicKeys { // RFC 7250: the entry is a bare SubjectPublicKeyInfo.
+			if certs[i], err = parseRawPublicKeyCert(asn1Data); err != nil {
+				c.sendAlert(alertDecodeError)
+				return errors.New("tls: failed to parse client raw public key: " + err.Error())
+			}
+			continue
+		}
 		if certs[i], err = x509.ParseCertificate(asn1Data); err != nil {
 			c.sendAlert(alertDecodeError)
 			return errors.New("tls: failed to parse client certificate: " + err.Error())
@@ -964,7 +971,11 @@ func (c *Conn) processCertsFromClient(certificate Certificate) error {
 		return errors.New("tls: client didn't provide a certificate")
 	}
 
-	if c.config.ClientAuth >= VerifyClientCertIfGiven && len(certs) > 0 {
+	if c.config.ClientAuth >= VerifyClientCertIfGiven && len(certs) > 0 && !c.rawPublicKeys {
+		// RFC 7250: a raw public key has no X.509 chain to verify; the application
+		// authenticates the client via VerifyConnection (the peer key is exposed
+		// as PeerCertificates[0].PublicKey). The CertificateVerify signature has
+		// already been checked against that key.
 		opts := x509.VerifyOptions{
 			Roots:         c.config.ClientCAs,
 			CurrentTime:   c.config.time(),

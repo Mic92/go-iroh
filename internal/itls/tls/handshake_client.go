@@ -11,15 +11,15 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/hpke"
-	tls13 "github.com/tmc/go-iroh/internal/itls/shim/fipstls13"
 	"crypto/rsa"
 	"crypto/subtle"
-	"github.com/tmc/go-iroh/internal/itls/shim/fips140tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"hash"
+	"github.com/tmc/go-iroh/internal/itls/shim/fips140tls"
+	tls13 "github.com/tmc/go-iroh/internal/itls/shim/fipstls13"
 	"github.com/tmc/go-iroh/internal/itls/shim/godebug"
+	"hash"
 	"io"
 	"net"
 	"slices"
@@ -80,6 +80,11 @@ func (c *Conn) makeClientHello() (*clientHelloMsg, *keySharePrivateKeys, *echCli
 		secureRenegotiationSupported: true,
 		alpnProtocols:                config.NextProtos,
 		supportedVersions:            supportedVersions,
+	}
+
+	if config.rawPublicKeysEnabled() { // RFC 7250: offer raw public keys, mutually.
+		hello.clientCertificateTypes = []uint8{certTypeRawPublicKey}
+		hello.serverCertificateTypes = []uint8{certTypeRawPublicKey}
 	}
 
 	// The version at the beginning of the ClientHello was capped at TLS 1.2
@@ -1097,6 +1102,9 @@ func checkKeySize(n int) (max int, ok bool) {
 // verifyServerCertificate parses and verifies the provided chain, setting
 // c.verifiedChains and c.peerCertificates or sending the appropriate alert.
 func (c *Conn) verifyServerCertificate(certificates [][]byte) error {
+	if c.rawPublicKeys { // RFC 7250: server cert is a bare SubjectPublicKeyInfo.
+		return c.verifyServerRawPublicKey(certificates)
+	}
 	certs := make([]*x509.Certificate, len(certificates))
 	for i, asn1Data := range certificates {
 		cert, err := globalCertCache.newCert(asn1Data)

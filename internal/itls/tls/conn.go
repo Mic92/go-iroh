@@ -48,6 +48,7 @@ type Conn struct {
 	handshakes       int
 	extMasterSecret  bool
 	didResume        bool // whether this connection was a session resumption
+	rawPublicKeys    bool // whether RFC 7250 raw public keys were negotiated
 	didHRR           bool // whether a HelloRetryRequest was sent/received
 	cipherSuite      uint16
 	curveID          CurveID

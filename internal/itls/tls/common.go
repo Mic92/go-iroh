@@ -15,10 +15,10 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha512"
-	"github.com/tmc/go-iroh/internal/itls/shim/fips140tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"github.com/tmc/go-iroh/internal/itls/shim/fips140tls"
 	"github.com/tmc/go-iroh/internal/itls/shim/godebug"
 	"io"
 	"net"
@@ -115,6 +115,8 @@ const (
 	extensionSignatureAlgorithms     uint16 = 13
 	extensionALPN                    uint16 = 16
 	extensionSCT                     uint16 = 18
+	extensionClientCertificateType   uint16 = 19 // RFC 7250
+	extensionServerCertificateType   uint16 = 20 // RFC 7250
 	extensionExtendedMasterSecret    uint16 = 23
 	extensionSessionTicket           uint16 = 35
 	extensionPreSharedKey            uint16 = 41
@@ -129,6 +131,13 @@ const (
 	extensionRenegotiationInfo       uint16 = 0xff01
 	extensionECHOuterExtensions      uint16 = 0xfd00
 	extensionEncryptedClientHello    uint16 = 0xfe0d
+)
+
+// TLS certificate types (RFC 7250, IANA TLS Certificate Types registry), used in
+// the client_certificate_type / server_certificate_type extensions.
+const (
+	certTypeX509         uint8 = 0
+	certTypeRawPublicKey uint8 = 2
 )
 
 // TLS signaling cipher suite values
@@ -675,6 +684,17 @@ type Config struct {
 	// including resumptions, regardless of InsecureSkipVerify or ClientAuth
 	// settings.
 	VerifyConnection func(ConnectionState) error
+
+	// RawPublicKeys enables RFC 7250 raw public key authentication (TLS 1.3 only,
+	// mutual). When set, the connection offers and requires the raw public key
+	// certificate type, the local Certificates leaf must be a DER
+	// SubjectPublicKeyInfo (see MarshalRawPublicKeyCertificate), and peer
+	// verification must be done in VerifyConnection via
+	// ConnectionState.PeerCertificates[0].PublicKey. SessionTicketsDisabled must
+	// be set, since resumed handshakes skip the Certificate message.
+	//
+	// This field is an extension to crypto/tls, not present upstream.
+	RawPublicKeys bool
 
 	// RootCAs defines the set of root certificate authorities
 	// that clients use when verifying server certificates.
