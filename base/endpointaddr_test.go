@@ -138,6 +138,47 @@ func TestEndpointAddrSortDedup(t *testing.T) {
 	}
 }
 
+func TestTransportAddrOrderingMatchesRustOrd(t *testing.T) {
+	// Rust derives Ord on the enum: variant order Relay < Ip < Custom, then by
+	// inner value. IP addresses compare numerically (not lexically) and custom
+	// ids compare as u64 (not by hex string). This is a regression test for the
+	// string-compare ordering bug.
+	relay, _ := ParseRelayUrl("https://relay.example.com")
+	ipLow := IPAddr{Addr: netip.MustParseAddrPort("2.0.0.1:9")}
+	ipHigh := IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:9")}
+	custLow := NewCustomAddr(0x2, nil)
+	custHigh := NewCustomAddr(0x10, nil)
+	relayAddr := RelayAddr{URL: relay}
+
+	// Numeric IP ordering: 2.0.0.1 < 127.0.0.1 (lexical string would reverse).
+	if ipLow.Compare(ipHigh) >= 0 {
+		t.Error("expected 2.0.0.1 < 127.0.0.1 numerically")
+	}
+	// Numeric custom-id ordering: 0x2 < 0x10 (lexical "10_" < "2_" would reverse).
+	if custLow.Compare(custHigh) >= 0 {
+		t.Error("expected custom id 0x2 < 0x10 numerically")
+	}
+	// Variant order: relay < ip < custom.
+	if relayAddr.Compare(ipLow) >= 0 {
+		t.Error("expected relay < ip")
+	}
+	if ipHigh.Compare(custLow) >= 0 {
+		t.Error("expected ip < custom")
+	}
+
+	// Full sort of a mixed set must come out in Rust Ord order.
+	got := sortDedupAddrs([]TransportAddr{custHigh, ipHigh, custLow, ipLow, relayAddr})
+	want := []TransportAddr{relayAddr, ipLow, ipHigh, custLow, custHigh}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Compare(want[i]) != 0 {
+			t.Errorf("sorted[%d] = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
+
 func TestEndpointAddrEmpty(t *testing.T) {
 	sk, _ := GenerateSecretKey()
 	a := NewEndpointAddr(sk.Public())

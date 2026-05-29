@@ -1,6 +1,8 @@
 package base
 
 import (
+	"bytes"
+	"cmp"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -18,10 +20,27 @@ import (
 type TransportAddr interface {
 	// String renders the address in its "kind:value" form, e.g. "ip:127.0.0.1:9".
 	String() string
-	// compareKey returns a stable key used to order and deduplicate addresses
-	// within an EndpointAddr.
-	compareKey() string
+	// Compare returns -1, 0, or +1 ordering this address against other. The
+	// order matches the Rust reference's derived Ord on the TransportAddr enum:
+	// by kind first (relay < ip < custom), then by value (relay URLs by their
+	// normalized string, IP addresses numerically, custom by id then data).
+	Compare(other TransportAddr) int
 	isTransportAddr()
+}
+
+// transportKind is the kind ordinal used as the primary ordering key, matching
+// the Rust enum variant order: Relay(0) < Ip(1) < Custom(2).
+func transportKind(a TransportAddr) int {
+	switch a.(type) {
+	case RelayAddr:
+		return 0
+	case IPAddr:
+		return 1
+	case CustomAddr:
+		return 2
+	default:
+		return 3
+	}
 }
 
 // RelayAddr is a [TransportAddr] reachable via a relay server.
@@ -55,9 +74,32 @@ func (a RelayAddr) String() string  { return "relay:" + a.URL.String() }
 func (a IPAddr) String() string     { return "ip:" + a.Addr.String() }
 func (a CustomAddr) String() string { return "custom:" + a.customString() }
 
-func (a RelayAddr) compareKey() string  { return "0relay:" + a.URL.String() }
-func (a IPAddr) compareKey() string     { return "1ip:" + a.Addr.String() }
-func (a CustomAddr) compareKey() string { return "2custom:" + a.customString() }
+// Compare orders relay addresses by their normalized URL string.
+func (a RelayAddr) Compare(other TransportAddr) int {
+	if b, ok := other.(RelayAddr); ok {
+		return a.URL.Compare(b.URL)
+	}
+	return cmp.Compare(transportKind(a), transportKind(other))
+}
+
+// Compare orders IP addresses numerically (by [netip.AddrPort.Compare]).
+func (a IPAddr) Compare(other TransportAddr) int {
+	if b, ok := other.(IPAddr); ok {
+		return a.Addr.Compare(b.Addr)
+	}
+	return cmp.Compare(transportKind(a), transportKind(other))
+}
+
+// Compare orders custom addresses by numeric transport id, then by data bytes.
+func (a CustomAddr) Compare(other TransportAddr) int {
+	if b, ok := other.(CustomAddr); ok {
+		if c := cmp.Compare(a.id, b.id); c != 0 {
+			return c
+		}
+		return bytes.Compare(a.data, b.data)
+	}
+	return cmp.Compare(transportKind(a), transportKind(other))
+}
 
 // NewCustomAddr creates a CustomAddr from a transport id and raw address data.
 // The data is copied.
@@ -222,10 +264,8 @@ func (a EndpointAddr) RelayURLs() []RelayUrl {
 }
 
 func sortDedupAddrs(addrs []TransportAddr) []TransportAddr {
-	slices.SortFunc(addrs, func(x, y TransportAddr) int {
-		return strings.Compare(x.compareKey(), y.compareKey())
-	})
+	slices.SortFunc(addrs, TransportAddr.Compare)
 	return slices.CompactFunc(addrs, func(x, y TransportAddr) bool {
-		return x.compareKey() == y.compareKey()
+		return x.Compare(y) == 0
 	})
 }
