@@ -1,0 +1,252 @@
+package relayproto
+
+import (
+	"encoding/binary"
+	"fmt"
+	"time"
+
+	"github.com/tmc/go-iroh/base"
+)
+
+// ProtocolVersion is the negotiated relay protocol version for a connection.
+type ProtocolVersion int
+
+// Relay protocol versions.
+const (
+	ProtocolV1 ProtocolVersion = 1
+	ProtocolV2 ProtocolVersion = 2
+)
+
+// Status is a one-way relay-to-client message declaring the connection health.
+type Status uint8
+
+const (
+	// StatusHealthy reports the connection recovered from previous problems.
+	StatusHealthy Status = 0
+	// StatusSameEndpointIdConnected reports another endpoint connected with the
+	// same id; no more messages will be received.
+	StatusSameEndpointIdConnected Status = 1
+)
+
+// RelayToClientMsg is a message a relay sends to a client. Exactly one of its
+// fields is meaningful, selected by Type.
+type RelayToClientMsg struct {
+	Type FrameType
+	// Datagrams / RemoteEndpointId for FrameRelayToClientDatagram(Batch).
+	RemoteEndpointId base.EndpointId
+	Datagrams        Datagrams
+	// EndpointGone for FrameEndpointGone.
+	EndpointGone base.EndpointId
+	// Status for FrameStatus.
+	Status Status
+	// Ping/Pong payload for FramePing/FramePong.
+	Ping [8]byte
+	// Restarting durations for FrameRestarting.
+	ReconnectIn time.Duration
+	TryFor      time.Duration
+	// Health problem text for FrameHealth (deprecated, V1 only).
+	Health string
+}
+
+// AppendTo appends the wire encoding of m to dst.
+func (m RelayToClientMsg) AppendTo(dst []byte) []byte {
+	dst = writeFrameType(dst, m.frameType())
+	switch m.Type {
+	case FrameRelayToClientDatagram, FrameRelayToClientDatagramBat:
+		id := m.RemoteEndpointId.Bytes()
+		dst = append(dst, id[:]...)
+		dst = m.Datagrams.appendTo(dst)
+	case FrameEndpointGone:
+		id := m.EndpointGone.Bytes()
+		dst = append(dst, id[:]...)
+	case FramePing, FramePong:
+		dst = append(dst, m.Ping[:]...)
+	case FrameHealth:
+		dst = append(dst, m.Health...)
+	case FrameRestarting:
+		dst = binary.BigEndian.AppendUint32(dst, uint32(m.ReconnectIn.Milliseconds()))
+		dst = binary.BigEndian.AppendUint32(dst, uint32(m.TryFor.Milliseconds()))
+	case FrameStatus:
+		dst = append(dst, byte(m.Status))
+	}
+	return dst
+}
+
+// EncodedLen returns the number of bytes AppendTo writes.
+func (m RelayToClientMsg) EncodedLen() int {
+	payload := 0
+	switch m.Type {
+	case FrameRelayToClientDatagram, FrameRelayToClientDatagramBat:
+		payload = 32 + m.Datagrams.encodedLen()
+	case FrameEndpointGone:
+		payload = 32
+	case FramePing, FramePong:
+		payload = 8
+	case FrameStatus:
+		payload = 1
+	case FrameRestarting:
+		payload = 8
+	case FrameHealth:
+		payload = len(m.Health)
+	}
+	return frameTypeEncodedLen(m.frameType()) + payload
+}
+
+// frameType returns the wire frame type for m, deriving the datagram batch
+// variant from the segment size.
+func (m RelayToClientMsg) frameType() FrameType {
+	if m.Type == FrameRelayToClientDatagram || m.Type == FrameRelayToClientDatagramBat {
+		if m.Datagrams.isBatch() {
+			return FrameRelayToClientDatagramBat
+		}
+		return FrameRelayToClientDatagram
+	}
+	return m.Type
+}
+
+// ParseRelayToClientMsg decodes a relay-to-client message. version gates the
+// deprecated Health (V1 only) and Status (V2+) frames.
+func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClientMsg, error) {
+	ft, rest, err := readFrameType(content)
+	if err != nil {
+		return RelayToClientMsg{}, err
+	}
+	if len(rest) > MaxPacketSize {
+		return RelayToClientMsg{}, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(rest))
+	}
+	switch ft {
+	case FrameRelayToClientDatagram, FrameRelayToClientDatagramBat:
+		if len(rest) < base.PublicKeyLength {
+			return RelayToClientMsg{}, ErrInvalidFrame
+		}
+		id, err := base.PublicKeyFromSlice(rest[:base.PublicKeyLength])
+		if err != nil {
+			return RelayToClientMsg{}, err
+		}
+		dg, err := datagramsFromBytes(rest[base.PublicKeyLength:], ft == FrameRelayToClientDatagramBat)
+		if err != nil {
+			return RelayToClientMsg{}, err
+		}
+		return RelayToClientMsg{Type: ft, RemoteEndpointId: id, Datagrams: dg}, nil
+	case FrameEndpointGone:
+		if len(rest) != base.PublicKeyLength {
+			return RelayToClientMsg{}, ErrInvalidFrame
+		}
+		id, err := base.PublicKeyFromSlice(rest)
+		if err != nil {
+			return RelayToClientMsg{}, err
+		}
+		return RelayToClientMsg{Type: ft, EndpointGone: id}, nil
+	case FramePing, FramePong:
+		if len(rest) != 8 {
+			return RelayToClientMsg{}, ErrInvalidFrame
+		}
+		var p [8]byte
+		copy(p[:], rest)
+		return RelayToClientMsg{Type: ft, Ping: p}, nil
+	case FrameHealth:
+		if version != ProtocolV1 {
+			return RelayToClientMsg{}, ErrFrameNotAllowedInVersion
+		}
+		return RelayToClientMsg{Type: ft, Health: string(rest)}, nil
+	case FrameRestarting:
+		if len(rest) != 8 {
+			return RelayToClientMsg{}, ErrInvalidFrame
+		}
+		reconnect := time.Duration(binary.BigEndian.Uint32(rest[:4])) * time.Millisecond
+		tryFor := time.Duration(binary.BigEndian.Uint32(rest[4:])) * time.Millisecond
+		return RelayToClientMsg{Type: ft, ReconnectIn: reconnect, TryFor: tryFor}, nil
+	case FrameStatus:
+		if version < ProtocolV2 {
+			return RelayToClientMsg{}, ErrFrameNotAllowedInVersion
+		}
+		if len(rest) < 1 {
+			return RelayToClientMsg{}, ErrInvalidFrame
+		}
+		return RelayToClientMsg{Type: ft, Status: Status(rest[0])}, nil
+	default:
+		return RelayToClientMsg{}, fmt.Errorf("%w: %s", ErrUnknownFrameType, ft)
+	}
+}
+
+// ClientToRelayMsg is a message a client sends to a relay. Exactly one of its
+// fields is meaningful, selected by Type.
+type ClientToRelayMsg struct {
+	Type FrameType
+	// DstEndpointId / Datagrams for FrameClientToRelayDatagram(Batch).
+	DstEndpointId base.EndpointId
+	Datagrams     Datagrams
+	// Ping/Pong payload for FramePing/FramePong.
+	Ping [8]byte
+}
+
+// AppendTo appends the wire encoding of m to dst.
+func (m ClientToRelayMsg) AppendTo(dst []byte) []byte {
+	dst = writeFrameType(dst, m.frameType())
+	switch m.Type {
+	case FrameClientToRelayDatagram, FrameClientToRelayDatagramBat:
+		id := m.DstEndpointId.Bytes()
+		dst = append(dst, id[:]...)
+		dst = m.Datagrams.appendTo(dst)
+	case FramePing, FramePong:
+		dst = append(dst, m.Ping[:]...)
+	}
+	return dst
+}
+
+// EncodedLen returns the number of bytes AppendTo writes.
+func (m ClientToRelayMsg) EncodedLen() int {
+	payload := 0
+	switch m.Type {
+	case FrameClientToRelayDatagram, FrameClientToRelayDatagramBat:
+		payload = 32 + m.Datagrams.encodedLen()
+	case FramePing, FramePong:
+		payload = 8
+	}
+	return frameTypeEncodedLen(m.frameType()) + payload
+}
+
+func (m ClientToRelayMsg) frameType() FrameType {
+	if m.Type == FrameClientToRelayDatagram || m.Type == FrameClientToRelayDatagramBat {
+		if m.Datagrams.isBatch() {
+			return FrameClientToRelayDatagramBat
+		}
+		return FrameClientToRelayDatagram
+	}
+	return m.Type
+}
+
+// ParseClientToRelayMsg decodes a client-to-relay message.
+func ParseClientToRelayMsg(content []byte) (ClientToRelayMsg, error) {
+	ft, rest, err := readFrameType(content)
+	if err != nil {
+		return ClientToRelayMsg{}, err
+	}
+	if len(rest) > MaxPacketSize {
+		return ClientToRelayMsg{}, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(rest))
+	}
+	switch ft {
+	case FrameClientToRelayDatagram, FrameClientToRelayDatagramBat:
+		if len(rest) < base.PublicKeyLength {
+			return ClientToRelayMsg{}, ErrInvalidFrame
+		}
+		id, err := base.PublicKeyFromSlice(rest[:base.PublicKeyLength])
+		if err != nil {
+			return ClientToRelayMsg{}, err
+		}
+		dg, err := datagramsFromBytes(rest[base.PublicKeyLength:], ft == FrameClientToRelayDatagramBat)
+		if err != nil {
+			return ClientToRelayMsg{}, err
+		}
+		return ClientToRelayMsg{Type: ft, DstEndpointId: id, Datagrams: dg}, nil
+	case FramePing, FramePong:
+		if len(rest) != 8 {
+			return ClientToRelayMsg{}, ErrInvalidFrame
+		}
+		var p [8]byte
+		copy(p[:], rest)
+		return ClientToRelayMsg{Type: ft, Ping: p}, nil
+	default:
+		return ClientToRelayMsg{}, fmt.Errorf("%w: %s", ErrUnknownFrameType, ft)
+	}
+}
