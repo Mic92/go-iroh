@@ -151,6 +151,17 @@ type Conn struct {
 	// once multipathNegotiated() is true.
 	multipathManager *multipathManager
 
+	// perPathDestConnIDs holds the destination connection IDs the peer issued
+	// for non-zero QUIC multipath paths via PATH_NEW_CONNECTION_ID (0x3e78),
+	// keyed by protocol.PathID. The send side uses these as the DCID for 1-RTT
+	// packets on a path != 0 (consumed by the packer in 5d via
+	// destConnIDForPath). It is STRICTLY SEPARATE from connIDManager (the
+	// connection-level / PathID 0 DCID source) and from
+	// connIDManager.pathProbing (the RFC 9000 int64 single-path migration CID
+	// set). PathIDZero is never stored here; its DCID always comes from
+	// connIDManager.Get.
+	perPathDestConnIDs map[protocol.PathID]protocol.ConnectionID
+
 	streamsMap      *streamsMap
 	connIDManager   *connIDManager
 	connIDGenerator *connIDGenerator
@@ -521,6 +532,7 @@ var newClientConnection = func(
 func (c *Conn) preSetup() {
 	c.largestRcvdAppData = protocol.InvalidPacketNumber
 	c.multipathManager = newMultipathManager()
+	c.perPathDestConnIDs = make(map[protocol.PathID]protocol.ConnectionID)
 	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient)
 	c.handshakeStream = newCryptoStream()
 	c.sendQueue = newSendQueue(c.conn)
@@ -1006,7 +1018,58 @@ func (c *Conn) handleHandshakeConfirmed(now monotime.Time) error {
 	if !c.config.DisablePathMTUDiscovery && c.conn.capabilities().DF {
 		c.mtuDiscoverer.Start(now)
 	}
+
+	// Advertise the largest PathID we will accept now that 1-RTT keys are
+	// confirmed (MAX_PATH_ID is a 1-RTT-only frame). With multipath
+	// un-negotiated this queues nothing, so the single-path send loop is
+	// unchanged. handleHandshakeConfirmed runs exactly once per connection
+	// (gated by !c.handshakeConfirmed at every call site), so the frame is
+	// queued exactly once.
+	c.queueMaxPathID()
 	return nil
+}
+
+// ourLocalMaxPathID returns the largest PathID we will accept, i.e. the value
+// advertised in our initial_max_path_id transport parameter (Config.InitialMaxPathID,
+// transport_parameters.rs:121). MAX_PATH_ID frames raise this initial value; in
+// this sub-increment we only advertise the initial value and never raise it, so
+// the local max equals the configured value. Caller must hold multipath
+// negotiated (Config.InitialMaxPathID != nil).
+func (c *Conn) ourLocalMaxPathID() protocol.PathID {
+	return protocol.PathID(*c.config.InitialMaxPathID)
+}
+
+// queueMaxPathID queues a MAX_PATH_ID frame (frame.rs:1407-1432, type 0x3e7a)
+// advertising the largest PathID we will accept (ourLocalMaxPathID). It is a
+// no-op unless multipath was negotiated, so a single-path connection never
+// emits a MAX_PATH_ID frame and its send loop is byte-identical. MAX_PATH_ID is
+// admitted only at 1-RTT (frame_type.go isAllowedAtEncLevel), which is why this
+// is called from handleHandshakeConfirmed rather than earlier.
+func (c *Conn) queueMaxPathID() {
+	if !c.multipathNegotiated() {
+		return
+	}
+	c.queueControlFrame(&wire.MaxPathIDFrame{PathID: c.ourLocalMaxPathID()})
+}
+
+// canOpenPath reports whether we may open the path identified by pid. A path may
+// be opened only when multipath was negotiated and pid is within both the peer's
+// advertised max (peerMaxPathID, raised by the peer's MAX_PATH_ID frames,
+// multipath_manager.go) and our own advertised max (ourLocalMaxPathID).
+// PathIDZero is the always-present initial path and is never "opened" through
+// this gate. This is a guard only; this sub-increment does not open any path.
+func (c *Conn) canOpenPath(pid protocol.PathID) bool {
+	if !c.multipathNegotiated() {
+		return false
+	}
+	if pid == protocol.PathIDZero {
+		return false
+	}
+	peerMax, ok := c.multipathManager.peerMax()
+	if !ok || pid > peerMax {
+		return false
+	}
+	return pid <= c.ourLocalMaxPathID()
 }
 
 const maxPacketsToProcess = 32
@@ -1949,7 +2012,7 @@ func (c *Conn) handleFrame(
 	case *wire.NewTokenFrame:
 		err = c.handleNewTokenFrame(frame)
 	case *wire.NewConnectionIDFrame:
-		err = c.connIDManager.Add(frame)
+		err = c.handleNewConnectionIDFrame(frame)
 	case *wire.RetireConnectionIDFrame:
 		err = c.connIDGenerator.Retire(frame.SequenceNumber, destConnID, rcvTime.Add(3*c.rttStats.PTO(false)))
 	case *wire.HandshakeDoneFrame:
@@ -1972,6 +2035,58 @@ func (c *Conn) handleFrame(
 		err = fmt.Errorf("unexpected frame type: %s", reflect.ValueOf(&frame).Elem().Type().Name())
 	}
 	return pathChallenge, err
+}
+
+// handleNewConnectionIDFrame routes a NEW_CONNECTION_ID frame. A plain frame
+// (PathID == nil, the RFC 9000 0x18 form) is handled by connIDManager exactly
+// as before — byte-identical, no multipath involvement. A path-qualified
+// PATH_NEW_CONNECTION_ID (0x3e78, PathID != nil) is the peer issuing a DCID for
+// a non-zero QUIC multipath path; we record it in perPathDestConnIDs for the
+// send side and do NOT feed it to connIDManager (whose sequence-number space is
+// the connection-level / PathID 0 space, conn_id_manager.go:74-130). A
+// path-qualified frame on a single-path connection is a protocol violation.
+func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) error {
+	if frame.PathID == nil {
+		return c.connIDManager.Add(frame)
+	}
+	if err := c.rejectIfMultipathOff("PATH_NEW_CONNECTION_ID"); err != nil {
+		return err
+	}
+	if *frame.PathID == protocol.PathIDZero {
+		// PathID 0's connection IDs are carried by the plain NEW_CONNECTION_ID
+		// form; an explicit PATH_NEW_CONNECTION_ID{PathID:0} is malformed.
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: "received a PATH_NEW_CONNECTION_ID frame for PathID 0",
+		}
+	}
+	c.perPathDestConnIDs[*frame.PathID] = frame.ConnectionID
+	return nil
+}
+
+// destConnIDForPath returns the destination connection ID to use when sending a
+// 1-RTT packet on path pid. For PathIDZero it returns connIDManager.Get — the
+// single connection-level DCID — so every single-path send is byte-identical to
+// today. For a non-zero path it returns the DCID the peer issued via
+// PATH_NEW_CONNECTION_ID (perPathDestConnIDs); ok is false until the peer has
+// issued one. This is consumed by the packer's per-path send path (5d).
+func (c *Conn) destConnIDForPath(pid protocol.PathID) (protocol.ConnectionID, bool) {
+	if pid == protocol.PathIDZero {
+		return c.connIDManager.Get(), true
+	}
+	connID, ok := c.perPathDestConnIDs[pid]
+	return connID, ok
+}
+
+// issuePathConnID issues one of our connection IDs for the QUIC multipath path
+// pid and queues a PATH_NEW_CONNECTION_ID frame (0x3e78) advertising it to the
+// peer, so the peer can address pid's packets to it. It is the local
+// counterpart of the peer-issued CIDs recorded in perPathDestConnIDs, and is
+// driven by the path-open orchestration (5f). It must not be called for
+// PathIDZero, whose CIDs are issued through the connection-level connIDGenerator
+// (issueNewConnID), and only after multipath is negotiated.
+func (c *Conn) issuePathConnID(pid protocol.PathID) (protocol.ConnectionID, error) {
+	return c.connIDGenerator.issuePathConnID(pid)
 }
 
 // rejectIfMultipathOff returns a ProtocolViolation TransportError unless

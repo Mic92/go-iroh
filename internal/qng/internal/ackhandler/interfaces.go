@@ -17,6 +17,12 @@ type SentPacketHandler interface {
 	// application-data packet number space identified by pid. An unknown pid
 	// is a protocol violation; it never falls back to PathIDZero.
 	ReceivedAckForPath(f *wire.AckFrame, pid protocol.PathID, rcvTime monotime.Time) (bool /* 1-RTT packet acked */, error)
+	// AddPath provisions a genuinely-new application-data path (pid !=
+	// PathIDZero) with its own RTT estimator and its own congestion controller
+	// (never the connection-level objects PathIDZero aliases). It does not
+	// schedule any send over the path. pid == PathIDZero or an already-present
+	// pid is an error. It is only called once multipath is negotiated.
+	AddPath(pid protocol.PathID) error
 	ReceivedPacket(protocol.EncryptionLevel, monotime.Time)
 	ReceivedBytes(_ protocol.ByteCount, rcvTime monotime.Time)
 	DropPackets(_ protocol.EncryptionLevel, rcvTime monotime.Time)

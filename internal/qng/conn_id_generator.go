@@ -52,6 +52,17 @@ type connIDGenerator struct {
 	connIDsToRetire         []connIDToRetire       // sorted by t
 	initialClientDestConnID *protocol.ConnectionID // nil for the client
 
+	// pathSrcConnIDs / pathHighestSeq hold the connection IDs we (the issuer)
+	// emit for QUIC multipath (draft-ietf-quic-multipath) paths via
+	// PATH_NEW_CONNECTION_ID (0x3e78). They are keyed by protocol.PathID and are
+	// STRICTLY SEPARATE from activeSrcConnIDs/highestSeq, which serve the single
+	// connection-level CID sequence space (PathID 0). Each multipath PathID owns
+	// an independent CID sequence number space (frame.rs:2005-2012 IssuedCid is
+	// scoped to its path_id). Lazily initialized: no entry exists, and no frame
+	// is emitted, unless multipath is negotiated and a non-zero path is opened.
+	pathSrcConnIDs map[protocol.PathID]map[uint64]protocol.ConnectionID
+	pathHighestSeq map[protocol.PathID]uint64
+
 	statelessResetter *statelessResetter
 
 	queueControlFrame func(wire.Frame)
@@ -150,6 +161,52 @@ func (m *connIDGenerator) issueNewConnID() error {
 	return nil
 }
 
+// issuePathConnID issues a connection ID for the QUIC multipath path pid and
+// emits a PATH_NEW_CONNECTION_ID frame (0x3e78) advertising it. It mirrors
+// issueNewConnID, but the frame carries pid (NewConnectionIDFrame.PathID) and
+// the sequence number is drawn from pid's own per-path sequence space, not the
+// connection-level highestSeq. This is the draft-multipath CID-issuance side; it
+// must never be called for PathIDZero, whose CIDs flow through issueNewConnID.
+//
+// Reference: frame.rs:2015-2026 (NewConnectionId::encode writes path_id then
+// sequence) and frame.rs:2005-2012 (IssuedCid scoped to path_id). The wire codec
+// is new_connection_id_frame.go:84-90.
+func (m *connIDGenerator) issuePathConnID(pid protocol.PathID) (protocol.ConnectionID, error) {
+	if pid == protocol.PathIDZero {
+		return protocol.ConnectionID{}, fmt.Errorf("issuePathConnID called with PathIDZero")
+	}
+	if m.generator.ConnectionIDLen() == 0 {
+		// Zero-length connection IDs: nothing to issue, and the peer addresses
+		// us by 4-tuple. Return the zero-length CID without emitting a frame.
+		return protocol.ConnectionID{}, nil
+	}
+	connID, err := m.generator.GenerateConnectionID()
+	if err != nil {
+		return protocol.ConnectionID{}, err
+	}
+	if m.pathSrcConnIDs == nil {
+		m.pathSrcConnIDs = make(map[protocol.PathID]map[uint64]protocol.ConnectionID)
+		m.pathHighestSeq = make(map[protocol.PathID]uint64)
+	}
+	ids, ok := m.pathSrcConnIDs[pid]
+	if !ok {
+		ids = make(map[uint64]protocol.ConnectionID)
+		m.pathSrcConnIDs[pid] = ids
+	}
+	seq := m.pathHighestSeq[pid]
+	ids[seq] = connID
+	m.pathHighestSeq[pid] = seq + 1
+	m.connRunners.AddConnectionID(connID)
+	pidCopy := pid
+	m.queueControlFrame(&wire.NewConnectionIDFrame{
+		PathID:              &pidCopy,
+		SequenceNumber:      seq,
+		ConnectionID:        connID,
+		StatelessResetToken: m.statelessResetter.GetStatelessResetToken(connID),
+	})
+	return connID, nil
+}
+
 func (m *connIDGenerator) SetHandshakeComplete(connIDExpiry monotime.Time) {
 	if m.initialClientDestConnID != nil {
 		m.queueConnIDForRetiring(*m.initialClientDestConnID, connIDExpiry)
@@ -177,6 +234,11 @@ func (m *connIDGenerator) RemoveAll() {
 	for _, connID := range m.activeSrcConnIDs {
 		m.connRunners.RemoveConnectionID(connID)
 	}
+	for _, ids := range m.pathSrcConnIDs {
+		for _, connID := range ids {
+			m.connRunners.RemoveConnectionID(connID)
+		}
+	}
 	for _, c := range m.connIDsToRetire {
 		m.connRunners.RemoveConnectionID(c.connID)
 	}
@@ -189,6 +251,11 @@ func (m *connIDGenerator) ReplaceWithClosed(connClose []byte, expiry time.Durati
 	}
 	for _, connID := range m.activeSrcConnIDs {
 		connIDs = append(connIDs, connID)
+	}
+	for _, ids := range m.pathSrcConnIDs {
+		for _, connID := range ids {
+			connIDs = append(connIDs, connID)
+		}
 	}
 	for _, c := range m.connIDsToRetire {
 		connIDs = append(connIDs, c.connID)
@@ -208,5 +275,10 @@ func (m *connIDGenerator) AddConnRunner(runner connRunner, r connRunnerCallbacks
 	}
 	for _, connID := range m.activeSrcConnIDs {
 		r.AddConnectionID(connID)
+	}
+	for _, ids := range m.pathSrcConnIDs {
+		for _, connID := range ids {
+			r.AddConnectionID(connID)
+		}
 	}
 }

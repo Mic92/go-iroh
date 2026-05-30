@@ -1,6 +1,7 @@
 package ackhandler
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -92,6 +93,71 @@ func ackFrameForPN(pn protocol.PacketNumber) *wire.AckFrame {
 	return &wire.AckFrame{AckRanges: []wire.AckRange{{Smallest: pn, Largest: pn}}}
 }
 
+// ackRangesForPNs builds the AckRanges acknowledging exactly the supplied
+// packet numbers and nothing else. The appData generator skips packet numbers
+// at random, so a window of sent PNs is not necessarily contiguous; a single
+// {Smallest,Largest} range would acknowledge a skipped (never-sent) PN, which
+// ReceivedAck rejects as an optimistic-ACK attack. This coalesces the sent PNs
+// into the gap-respecting ranges the wire expects (descending, non-overlapping).
+func ackRangesForPNs(pns []protocol.PacketNumber) []wire.AckRange {
+	if len(pns) == 0 {
+		return nil
+	}
+	sorted := append([]protocol.PacketNumber(nil), pns...)
+	slices.Sort(sorted)
+	var ranges []wire.AckRange
+	lo, hi := sorted[0], sorted[0]
+	flush := func() {
+		ranges = append(ranges, wire.AckRange{Smallest: lo, Largest: hi})
+	}
+	for _, pn := range sorted[1:] {
+		if pn == hi+1 {
+			hi = pn
+			continue
+		}
+		flush()
+		lo, hi = pn, pn
+	}
+	flush()
+	// AckFrame ranges run from the largest packet number to the smallest.
+	slices.Reverse(ranges)
+	return ranges
+}
+
+// TestAckRangesForPNs pins ackRangesForPNs: it must emit gap-respecting,
+// descending ranges so a skipped (never-sent) packet number is never
+// acknowledged. This is the helper that keeps TestSentPacketHandlerAckBookkeeping
+// from flaking when the appData generator skips a PN inside the acked window.
+func TestAckRangesForPNs(t *testing.T) {
+	tests := []struct {
+		name string
+		pns  []protocol.PacketNumber
+		want []wire.AckRange
+	}{
+		{name: "empty", pns: nil, want: nil},
+		{name: "single", pns: []protocol.PacketNumber{2}, want: []wire.AckRange{{Smallest: 2, Largest: 2}}},
+		{name: "contiguous", pns: []protocol.PacketNumber{0, 1, 2, 3}, want: []wire.AckRange{{Smallest: 0, Largest: 3}}},
+		{
+			name: "one gap (a skipped PN inside the window)",
+			pns:  []protocol.PacketNumber{0, 1, 2, 3, 5}, // 4 skipped
+			want: []wire.AckRange{{Smallest: 5, Largest: 5}, {Smallest: 0, Largest: 3}},
+		},
+		{
+			name: "two gaps unsorted input",
+			pns:  []protocol.PacketNumber{5, 0, 2, 3},
+			want: []wire.AckRange{{Smallest: 5, Largest: 5}, {Smallest: 2, Largest: 3}, {Smallest: 0, Largest: 0}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ackRangesForPNs(tt.pns)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("ackRangesForPNs(%v) = %v, want %v", tt.pns, got, tt.want)
+			}
+		})
+	}
+}
+
 // outstandingPNs returns the still-outstanding packet numbers in the appData
 // history, in ascending order.
 func outstandingPNs(h *sentPacketHandler) []protocol.PacketNumber {
@@ -165,7 +231,10 @@ func TestSentPacketHandlerAckBookkeeping(t *testing.T) {
 			}
 
 			wantLargestAcked := sent[tt.ackHiIdx]
-			ack := &wire.AckFrame{AckRanges: []wire.AckRange{{Smallest: sent[tt.ackLoIdx], Largest: sent[tt.ackHiIdx]}}}
+			// Acknowledge exactly the PNs actually sent in [ackLoIdx, ackHiIdx];
+			// the generator may have skipped a PN inside that window, and a
+			// single contiguous range would ACK a never-sent PN.
+			ack := &wire.AckFrame{AckRanges: ackRangesForPNs(sent[tt.ackLoIdx : tt.ackHiIdx+1])}
 			acked1RTT, err := h.ReceivedAck(ack, protocol.Encryption1RTT, now)
 			if err != nil {
 				t.Fatalf("ReceivedAck: %v", err)
@@ -459,6 +528,98 @@ func TestReceivedAckForPathUnknownPathID(t *testing.T) {
 	}
 	if got := h.getAppDataPath(protocol.PathIDZero).bytesInFlight; got != 1000 {
 		t.Errorf("bytesInFlight after rejected ACK = %d, want 1000 (path 0 untouched)", got)
+	}
+}
+
+// TestSentPacketHandlerAddPathDistinctController is the Stage 5a (4b-flagged)
+// gate: a genuinely-new path (PathID != 0) MUST get its OWN congestion
+// controller and its OWN RTT estimator. It must NOT alias the connection-level
+// rttStats/congestion that PathIDZero shares (Stage 4 spec risk #4: the
+// connection rttStats drives idle/keepalive/connID-retirement timers and must
+// never track a non-zero path's RTT). This mirrors PathData::new
+// (paths.rs:304-310), which builds a fresh RttEstimator and a fresh congestion
+// controller per path.
+func TestSentPacketHandlerAddPathDistinctController(t *testing.T) {
+	h, connRTTStats := newOracleSentHandler(t)
+
+	path0 := h.getAppDataPath(protocol.PathIDZero)
+	// PathIDZero aliases the connection objects — this is the invariant that
+	// must stay (single-path byte-identical).
+	if path0.rttStats != connRTTStats {
+		t.Fatalf("PathIDZero rttStats must alias the connection rttStats")
+	}
+	if path0.rttStats != h.rttStats {
+		t.Fatalf("PathIDZero rttStats must alias h.rttStats")
+	}
+	if path0.congestion != h.congestion {
+		t.Fatalf("PathIDZero congestion must alias h.congestion")
+	}
+
+	if err := h.AddPath(protocol.PathID(1)); err != nil {
+		t.Fatalf("AddPath(1): %v", err)
+	}
+	path1 := h.getAppDataPath(protocol.PathID(1))
+	if path1 == nil {
+		t.Fatalf("path 1 not present after AddPath(1)")
+	}
+
+	// Distinct-pointer assertions: path 1's rttStats and congestion must be
+	// independent of both path 0 and the connection.
+	if path1.rttStats == path0.rttStats {
+		t.Errorf("path 1 rttStats aliases path 0 rttStats")
+	}
+	if path1.rttStats == h.rttStats {
+		t.Errorf("path 1 rttStats aliases the connection rttStats (risk #4)")
+	}
+	if path1.congestion == path0.congestion {
+		t.Errorf("path 1 congestion aliases path 0 congestion")
+	}
+	if path1.congestion == h.congestion {
+		t.Errorf("path 1 congestion aliases the connection congestion controller")
+	}
+
+	// Behavioral isolation: capture path 0 / connection state, then drive an
+	// RTT sample and an OnPacketSent into path 1 only. Path 0's smoothed RTT and
+	// congestion window must be unchanged.
+	path0SmoothedRTT := path0.rttStats.SmoothedRTT()
+	connSmoothedRTT := h.rttStats.SmoothedRTT()
+	path0Cwnd := path0.congestion.GetCongestionWindow()
+
+	path1.rttStats.UpdateRTT(500*time.Millisecond, 0)
+	path1.congestion.OnPacketSent(monotime.Now(), 0, 1, 1200, true)
+
+	if got := path0.rttStats.SmoothedRTT(); got != path0SmoothedRTT {
+		t.Errorf("path 0 SmoothedRTT changed after path 1 RTT sample: %v != %v", got, path0SmoothedRTT)
+	}
+	if got := h.rttStats.SmoothedRTT(); got != connSmoothedRTT {
+		t.Errorf("connection SmoothedRTT changed after path 1 RTT sample: %v != %v (risk #4)", got, connSmoothedRTT)
+	}
+	if got := path0.congestion.GetCongestionWindow(); got != path0Cwnd {
+		t.Errorf("path 0 congestion window changed after path 1 OnPacketSent: %d != %d", got, path0Cwnd)
+	}
+
+	// The fresh path-1 RTT sample is distinct from path 0 / connection (proving
+	// the sample landed on the independent estimator).
+	if path1.rttStats.SmoothedRTT() == path0.rttStats.SmoothedRTT() {
+		t.Errorf("path 1 SmoothedRTT == path 0 SmoothedRTT after independent sample")
+	}
+}
+
+// TestSentPacketHandlerAddPathErrors pins the AddPath guards: the reserved
+// PathIDZero is rejected (it is the connection-aliased path, built at
+// construction), and adding the same path twice is rejected.
+func TestSentPacketHandlerAddPathErrors(t *testing.T) {
+	h, _ := newOracleSentHandler(t)
+
+	if err := h.AddPath(protocol.PathIDZero); err == nil {
+		t.Errorf("AddPath(PathIDZero) should error")
+	}
+
+	if err := h.AddPath(protocol.PathID(1)); err != nil {
+		t.Fatalf("first AddPath(1): %v", err)
+	}
+	if err := h.AddPath(protocol.PathID(1)); err == nil {
+		t.Errorf("double AddPath(1) should error")
 	}
 }
 

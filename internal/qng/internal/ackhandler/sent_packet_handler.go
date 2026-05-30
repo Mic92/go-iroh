@@ -150,6 +150,13 @@ type sentPacketHandler struct {
 
 	enableECN bool
 
+	// initialMaxDatagramSize is the size NewSentPacketHandler built the
+	// connection-level congestion controller with. addPath replays it to build
+	// an identical-but-independent controller for a genuinely-new path, so the
+	// per-path controller starts from the same initial window the connection's
+	// did (mirroring config.get_initial_mtu() in paths.rs:307).
+	initialMaxDatagramSize protocol.ByteCount
+
 	perspective protocol.Perspective
 
 	qlogger     qlogwriter.Recorder
@@ -199,19 +206,82 @@ func NewSentPacketHandler(
 		appDataPaths: map[protocol.PathID]*appDataPath{
 			protocol.PathIDZero: path0,
 		},
-		rttStats:           rttStats,
-		connStats:          connStats,
-		congestion:         congestion,
-		ignorePacketsBelow: ignorePacketsBelow,
-		perspective:        pers,
-		qlogger:            qlogger,
-		logger:             logger,
+		rttStats:               rttStats,
+		connStats:              connStats,
+		congestion:             congestion,
+		initialMaxDatagramSize: initialMaxDatagramSize,
+		ignorePacketsBelow:     ignorePacketsBelow,
+		perspective:            pers,
+		qlogger:                qlogger,
+		logger:                 logger,
 	}
 	if enableECN {
 		h.enableECN = true
 		path0.ecnTracker = newECNTracker(logger, qlogger)
 	}
 	return h
+}
+
+// newPathCongestionController builds a congestion controller for a path,
+// identical in construction to the one NewSentPacketHandler builds for the
+// connection but bound to the supplied rttStats. addPath uses it to give a
+// genuinely-new path its own controller (paths.rs:304-307 builds a fresh
+// controller per PathData via the congestion-controller factory); PathIDZero
+// keeps aliasing the connection's controller.
+func (h *sentPacketHandler) newPathCongestionController(rttStats *utils.RTTStats) congestion.SendAlgorithmWithDebugInfos {
+	return congestion.NewCubicSender(
+		congestion.DefaultClock{},
+		rttStats,
+		h.connStats,
+		h.initialMaxDatagramSize,
+		true, // use Reno
+		h.qlogger,
+	)
+}
+
+// AddPath registers a genuinely-new application-data path (pid != PathIDZero)
+// so that subsequent send/recovery bookkeeping for that path is tracked
+// independently. It gives the path its OWN RTT estimator and its OWN congestion
+// controller — never the connection-level h.rttStats / h.congestion that
+// PathIDZero aliases — mirroring PathData::new (paths.rs:304-310), which builds
+// a fresh controller and a fresh RttEstimator per path. Repointing the
+// connection-level rttStats here would leak this path's RTT samples into the
+// connection's idle/keepalive/connID-retirement timers (Stage 4 spec risk #4),
+// so the per-path controller is constructed against the per-path rttStats.
+//
+// AddPath is only ever called once multipath is negotiated and a second path is
+// opened (Stage 5). With multipath off it is never invoked, so the path map
+// stays single-entry and single-path behavior is byte-identical.
+//
+// AddPath does NOT schedule any send over the new path; the send loop, SendMode
+// and SentPacket still operate on PathIDZero until a later sub-increment routes
+// them per path. It only provisions the per-path recovery state.
+func (h *sentPacketHandler) AddPath(pid protocol.PathID) error {
+	return h.addPath(pid)
+}
+
+func (h *sentPacketHandler) addPath(pid protocol.PathID) error {
+	if pid == protocol.PathIDZero {
+		return fmt.Errorf("cannot add path with reserved id %d", protocol.PathIDZero)
+	}
+	if _, ok := h.appDataPaths[pid]; ok {
+		return fmt.Errorf("path %d already exists", pid)
+	}
+	// A brand-new multipath path gets a fresh RTT estimator (paths.rs:310,
+	// RttEstimator::new) and a fresh congestion controller built against it
+	// (paths.rs:304-307). Neither is the connection alias.
+	rttStats := utils.NewRTTStats()
+	path := &appDataPath{
+		space:       newPacketNumberSpace(0, true),
+		lostPackets: *newLostPacketTracker(64),
+		rttStats:    rttStats,
+		congestion:  h.newPathCongestionController(rttStats),
+	}
+	if h.enableECN {
+		path.ecnTracker = newECNTracker(h.logger, h.qlogger)
+	}
+	h.appDataPaths[pid] = path
+	return nil
 }
 
 // bytesInFlightFor returns a pointer to the bytes-in-flight counter for

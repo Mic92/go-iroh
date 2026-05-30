@@ -138,6 +138,14 @@ func (m *multipathManager) handleMaxPathID(pid protocol.PathID) {
 	}
 }
 
+// peerMax returns the largest PathID the peer will accept and whether the peer
+// has advertised it yet (via a MAX_PATH_ID frame). The send side consults this
+// to gate path opening: until the peer raises its max path id, no non-zero path
+// may be opened.
+func (m *multipathManager) peerMax() (protocol.PathID, bool) {
+	return m.peerMaxPathID, m.peerMaxPathIDSet
+}
+
 // handlePathsBlocked records a PATHS_BLOCKED frame: the peer wants to open more
 // paths than its current max path id allows. Informational in Stage 4c.
 func (m *multipathManager) handlePathsBlocked(maxPathID protocol.PathID) {
