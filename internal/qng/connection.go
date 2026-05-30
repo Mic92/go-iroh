@@ -8,6 +8,7 @@ import (
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
 	"io"
 	"net"
+	"net/netip"
 	"reflect"
 	"slices"
 	"sync"
@@ -197,6 +198,23 @@ type Conn struct {
 	// can confirm path-1 packets really flowed in path 1's own number space and
 	// controller. It is never used on a production connection.
 	pathStatsQueue chan *pathStatsRequest
+
+	// nextObservedAddrSeqNo is the sequence number for the next OBSERVED_ADDRESS
+	// frame this endpoint emits (QUIC Address Discovery). It increments once per
+	// emitted frame, mirroring next_observed_addr_seq_no (mod.rs:238,6196-6197).
+	// Run goroutine only.
+	nextObservedAddrSeqNo uint64
+	// observedAddr holds the most recent reflexive address the peer reported to
+	// us via OBSERVED_ADDRESS, kept under observedAddrMu so a QAD client
+	// (netreport) can read it from another goroutine. observedAddrSeqNo records
+	// the highest seq_no seen so a stale report is ignored (highest-seq_no wins),
+	// mirroring update_observed_addr_report (paths.rs:615-640). observedAddrValid
+	// distinguishes "no report yet" from a zero AddrPort.
+	observedAddrMu     sync.Mutex
+	observedAddr       netip.AddrPort
+	observedAddrSeqNo  uint64
+	observedAddrValid  bool
+	observedAddrSeqSet bool
 
 	streamsMap      *streamsMap
 	connIDManager   *connIDManager
@@ -401,6 +419,7 @@ var newConnection = func(
 		RetrySourceConnectionID:   retrySrcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
 		InitialMaxPathID:          initialMaxPathIDParam(s.config.InitialMaxPathID),
+		AddressDiscoveryRole:      addressDiscoveryRole(s.config),
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = wire.MaxDatagramSize
@@ -1391,6 +1410,12 @@ func (c *Conn) handleShortHeaderPacket(
 		return false, err
 	}
 
+	// QUIC Address Discovery: report the source address of this 1-RTT packet
+	// back to the peer so it learns its reflexive address. This is a no-op
+	// unless address discovery was negotiated to report, so it is inert (and
+	// byte-identical) on a connection that did not negotiate QAD.
+	c.maybeQueueObservedAddr(p.remoteAddr)
+
 	// In RFC 9000, only the client can migrate between paths.
 	if c.perspective == protocol.PerspectiveClient {
 		return true, nil
@@ -2135,6 +2160,8 @@ func (c *Conn) handleFrame(
 		err = c.handlePathsBlockedFrame(frame)
 	case *wire.PathCIDsBlockedFrame:
 		err = c.handlePathCIDsBlockedFrame(frame)
+	case *wire.ObservedAddrFrame:
+		err = c.handleObservedAddrFrame(frame)
 	default:
 		err = fmt.Errorf("unexpected frame type: %s", reflect.ValueOf(&frame).Elem().Type().Name())
 	}
@@ -2863,6 +2890,11 @@ func (c *Conn) applyTransportParameters() {
 	// initial_max_path_id transport parameter. Until then the parser stays in
 	// single-path mode, so multipath frame types are rejected as unknown.
 	c.frameParser.SetSupportsMultipath(c.multipathNegotiated())
+	// Admit OBSERVED_ADDRESS frames only once the peer's address-discovery role
+	// permits it to report to us and ours permits receiving. Until then the
+	// parser rejects them as unknown, keeping un-negotiated connections
+	// byte-identical.
+	c.frameParser.SetSupportsAddressDiscovery(c.acceptsObservedAddr())
 	c.connFlowController.UpdateSendWindow(params.InitialMaxData)
 	c.rttStats.SetMaxAckDelay(params.MaxAckDelay)
 	c.connIDGenerator.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
@@ -2906,6 +2938,114 @@ func initialMaxPathIDParam(v *uint32) *protocol.PathID {
 	}
 	id := protocol.PathID(*v)
 	return &id
+}
+
+// addressDiscoveryRole derives the QUIC Address Discovery role to advertise from
+// the two config flags, mirroring noq's
+// send_observed_address_reports/receive_observed_address_reports setters
+// (config/transport.rs:372-388, address_discovery.rs Role transitions). Neither
+// flag set leaves the role Disabled, so the observed_address transport parameter
+// is omitted and QAD stays un-negotiated (byte-identical default).
+func addressDiscoveryRole(config *Config) wire.AddressDiscoveryRole {
+	switch {
+	case config.SendObservedAddressReports && config.ReceiveObservedAddressReports:
+		return wire.AddressDiscoveryBoth
+	case config.SendObservedAddressReports:
+		return wire.AddressDiscoverySendOnly
+	case config.ReceiveObservedAddressReports:
+		return wire.AddressDiscoveryReceiveOnly
+	default:
+		return wire.AddressDiscoveryDisabled
+	}
+}
+
+// reportsObservedAddr reports whether this endpoint should emit OBSERVED_ADDRESS
+// frames to the peer: our role must be a reporter and the peer's role must
+// accept reports, i.e. local.should_report(peer) (address_discovery.rs:54-56,
+// the send-side gate at mod.rs:6184-6188). It must be called only after the
+// peer's transport parameters have been processed.
+func (c *Conn) reportsObservedAddr() bool {
+	if c.peerParams == nil {
+		return false
+	}
+	return addressDiscoveryRole(c.config).ShouldReport(c.peerParams.AddressDiscoveryRole)
+}
+
+// acceptsObservedAddr reports whether this endpoint should admit OBSERVED_ADDRESS
+// frames from the peer: the peer's role must be a reporter and our role must
+// accept reports, i.e. peer.should_report(local) (the receive-side gate at
+// mod.rs:5333-5341). It must be called only after the peer's transport
+// parameters have been processed.
+func (c *Conn) acceptsObservedAddr() bool {
+	if c.peerParams == nil {
+		return false
+	}
+	return c.peerParams.AddressDiscoveryRole.ShouldReport(addressDiscoveryRole(c.config))
+}
+
+// handleObservedAddrFrame records a reflexive address the peer reported for us.
+// It rejects the frame as a protocol violation if address discovery was not
+// negotiated in this direction (mod.rs:5333-5341) and applies highest-seq_no
+// wins: a frame whose seq_no does not exceed the last recorded one is ignored
+// (paths.rs:615-640). The recorded address is surfaced via Conn.ObservedAddr.
+func (c *Conn) handleObservedAddrFrame(frame *wire.ObservedAddrFrame) error {
+	if !c.acceptsObservedAddr() {
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: "received OBSERVED_ADDRESS frame when not negotiated",
+		}
+	}
+	c.observedAddrMu.Lock()
+	defer c.observedAddrMu.Unlock()
+	if c.observedAddrSeqSet && frame.SeqNo <= c.observedAddrSeqNo {
+		// Stale or duplicate report; ignore (paths.rs:621-622).
+		return nil
+	}
+	c.observedAddrSeqNo = frame.SeqNo
+	c.observedAddrSeqSet = true
+	c.observedAddr = netip.AddrPortFrom(frame.Addr, frame.Port)
+	c.observedAddrValid = true
+	return nil
+}
+
+// maybeQueueObservedAddr queues an OBSERVED_ADDRESS frame reporting remote (the
+// source address of a packet just received from the peer) when address
+// discovery permits this endpoint to report. The sequence number increments per
+// emitted frame, mirroring the send-side logic (mod.rs:6189-6198). remote must
+// be a *net.UDPAddr; any other address type (e.g. a relay's virtual address) is
+// skipped, as only UDP source addresses are meaningful reflexive addresses.
+// Run goroutine only.
+func (c *Conn) maybeQueueObservedAddr(remote net.Addr) {
+	if !c.reportsObservedAddr() {
+		return
+	}
+	udp, ok := remote.(*net.UDPAddr)
+	if !ok {
+		return
+	}
+	ap := udp.AddrPort()
+	if !ap.IsValid() {
+		return
+	}
+	c.queueControlFrame(&wire.ObservedAddrFrame{
+		SeqNo: c.nextObservedAddrSeqNo,
+		Addr:  ap.Addr().Unmap(),
+		Port:  ap.Port(),
+	})
+	c.nextObservedAddrSeqNo++
+}
+
+// ObservedAddr returns the most recent reflexive address the peer reported via
+// the QUIC Address Discovery OBSERVED_ADDRESS extension and whether one has been
+// received. It returns ok=false when address discovery was not negotiated to
+// receive reports, or when no report has arrived yet.
+func (c *Conn) ObservedAddr() (netip.AddrPort, bool) {
+	c.observedAddrMu.Lock()
+	defer c.observedAddrMu.Unlock()
+	if !c.observedAddrValid {
+		return netip.AddrPort{}, false
+	}
+	return c.observedAddr, true
 }
 
 func (c *Conn) triggerSending(now monotime.Time) error {

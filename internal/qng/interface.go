@@ -184,6 +184,22 @@ type Config struct {
 	// both peers advertise the parameter.
 	InitialMaxPathID *uint32
 
+	// SendObservedAddressReports enables sending QUIC Address Discovery
+	// OBSERVED_ADDRESS frames (draft-seemann-quic-address-discovery): on each
+	// 1-RTT packet received from the peer this endpoint reports the peer's source
+	// address back to it. Mirrors noq's
+	// TransportConfig::send_observed_address_reports (config/transport.rs:372).
+	SendObservedAddressReports bool
+	// ReceiveObservedAddressReports enables receiving QUIC Address Discovery
+	// OBSERVED_ADDRESS frames: this endpoint accepts the peer's reports of its
+	// own reflexive address and records the latest (highest seq_no). Mirrors
+	// noq's TransportConfig::receive_observed_address_reports
+	// (config/transport.rs:383). Together these two flags determine the
+	// address-discovery role advertised in the observed_address transport
+	// parameter; address discovery is negotiated only when each side's role
+	// permits the corresponding direction (address_discovery.rs should_report).
+	ReceiveObservedAddressReports bool
+
 	Tracer func(ctx context.Context, isClient bool, connID ConnectionID) qlogwriter.Trace
 }
 

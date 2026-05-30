@@ -124,6 +124,8 @@ func populateConfig(config *Config) *Config {
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
 		InitialMaxPathID:                 config.InitialMaxPathID,
+		SendObservedAddressReports:       config.SendObservedAddressReports,
+		ReceiveObservedAddressReports:    config.ReceiveObservedAddressReports,
 		Allow0RTT:                        config.Allow0RTT,
 		Tracer:                           config.Tracer,
 	}
