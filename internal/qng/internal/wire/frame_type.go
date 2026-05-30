@@ -38,6 +38,22 @@ const (
 
 	FrameTypeDatagramNoLength   FrameType = 0x30
 	FrameTypeDatagramWithLength FrameType = 0x31
+
+	// QUIC multipath frame types (draft-ietf-quic-multipath), as used by iroh's
+	// noq QUIC fork. See internal/qng/n0ext/reference/frame.rs (lines 104-124).
+	// These constants are defined so the multipath frame codecs can reference
+	// them; they are not yet admitted by the frame parser or emitted by the
+	// packer (that wiring is a later stage of the multipath port).
+	FrameTypePathAck                FrameType = 0x3e
+	FrameTypePathAckECN             FrameType = 0x3f
+	FrameTypePathAbandon            FrameType = 0x3e75
+	FrameTypePathStatusBackup       FrameType = 0x3e76
+	FrameTypePathStatusAvailable    FrameType = 0x3e77
+	FrameTypePathNewConnectionID    FrameType = 0x3e78
+	FrameTypePathRetireConnectionID FrameType = 0x3e79
+	FrameTypeMaxPathID              FrameType = 0x3e7a
+	FrameTypePathsBlocked           FrameType = 0x3e7b
+	FrameTypePathCIDsBlocked        FrameType = 0x3e7c
 )
 
 func (t FrameType) IsStreamFrameType() bool {
