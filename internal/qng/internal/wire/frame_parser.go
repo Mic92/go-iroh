@@ -18,18 +18,22 @@ type FrameParser struct {
 	supportsDatagrams     bool
 	supportsResetStreamAt bool
 	supportsAckFrequency  bool
+	supportsMultipath     bool
 
 	// To avoid allocating when parsing, keep a single ACK frame struct.
 	// It is used over and over again.
 	ackFrame *AckFrame
 }
 
-// NewFrameParser creates a new frame parser.
-func NewFrameParser(supportsDatagrams, supportsResetStreamAt, supportsAckFrequency bool) *FrameParser {
+// NewFrameParser creates a new frame parser. supportsMultipath admits the QUIC
+// multipath frame types (draft-ietf-quic-multipath); it is false unless the
+// connection has negotiated multipath, so single-path parsing is unchanged.
+func NewFrameParser(supportsDatagrams, supportsResetStreamAt, supportsAckFrequency, supportsMultipath bool) *FrameParser {
 	return &FrameParser{
 		supportsDatagrams:     supportsDatagrams,
 		supportsResetStreamAt: supportsResetStreamAt,
 		supportsAckFrequency:  supportsAckFrequency,
+		supportsMultipath:     supportsMultipath,
 		ackFrame:              &AckFrame{},
 	}
 }
@@ -55,7 +59,8 @@ func (p *FrameParser) ParseType(b []byte, encLevel protocol.EncryptionLevel) (Fr
 		valid := ft.isValidRFC9000() ||
 			(p.supportsDatagrams && ft.IsDatagramFrameType()) ||
 			(p.supportsResetStreamAt && ft == FrameTypeResetStreamAt) ||
-			(p.supportsAckFrequency && (ft == FrameTypeAckFrequency || ft == FrameTypeImmediateAck))
+			(p.supportsAckFrequency && (ft == FrameTypeAckFrequency || ft == FrameTypeImmediateAck)) ||
+			(p.supportsMultipath && ft.isMultipathFrameType())
 		if !valid {
 			return 0, parsed, &qerr.TransportError{
 				ErrorCode:    qerr.FrameEncodingError,
@@ -148,9 +153,9 @@ func (p *FrameParser) ParseLessCommonFrame(frameType FrameType, data []byte, v p
 	case FrameTypeBidiStreamBlocked, FrameTypeUniStreamBlocked:
 		frame, l, err = parseStreamsBlockedFrame(data, frameType, v)
 	case FrameTypeNewConnectionID:
-		frame, l, err = parseNewConnectionIDFrame(data, v)
+		frame, l, err = parseNewConnectionIDFrame(data, false, v)
 	case FrameTypeRetireConnectionID:
-		frame, l, err = parseRetireConnectionIDFrame(data, v)
+		frame, l, err = parseRetireConnectionIDFrame(data, false, v)
 	case FrameTypePathChallenge:
 		frame, l, err = parsePathChallengeFrame(data, v)
 	case FrameTypePathResponse:
@@ -165,6 +170,31 @@ func (p *FrameParser) ParseLessCommonFrame(frameType FrameType, data []byte, v p
 		frame, l, err = parseAckFrequencyFrame(data, v)
 	case FrameTypeImmediateAck:
 		frame = &ImmediateAckFrame{}
+	// QUIC multipath frames (draft-ietf-quic-multipath). ParseType only routes
+	// here when supportsMultipath is set, so these cases are inert single-path.
+	// PATH_ACK/PATH_ACK_ECN are not base ACK types (IsAckFrameType is false for
+	// 0x3e/0x3f), so they arrive here rather than in ParseAckFrame; multipath is
+	// 1-RTT only, so the negotiated ack delay exponent always applies.
+	case FrameTypePathAck:
+		frame, l, err = parsePathAckFrame(data, false, p.ackDelayExponent, v)
+	case FrameTypePathAckECN:
+		frame, l, err = parsePathAckFrame(data, true, p.ackDelayExponent, v)
+	case FrameTypePathAbandon:
+		frame, l, err = parsePathAbandonFrame(data, v)
+	case FrameTypePathStatusBackup:
+		frame, l, err = parsePathStatusBackupFrame(data, v)
+	case FrameTypePathStatusAvailable:
+		frame, l, err = parsePathStatusAvailableFrame(data, v)
+	case FrameTypePathNewConnectionID:
+		frame, l, err = parseNewConnectionIDFrame(data, true, v)
+	case FrameTypePathRetireConnectionID:
+		frame, l, err = parseRetireConnectionIDFrame(data, true, v)
+	case FrameTypeMaxPathID:
+		frame, l, err = parseMaxPathIDFrame(data, v)
+	case FrameTypePathsBlocked:
+		frame, l, err = parsePathsBlockedFrame(data, v)
+	case FrameTypePathCIDsBlocked:
+		frame, l, err = parsePathCIDsBlockedFrame(data, v)
 	default:
 		err = errUnknownFrameType
 	}
@@ -182,6 +212,14 @@ func (p *FrameParser) ParseLessCommonFrame(frameType FrameType, data []byte, v p
 // This value is used to scale the ACK Delay field in the ACK frame.
 func (p *FrameParser) SetAckDelayExponent(exp uint8) {
 	p.ackDelayExponent = exp
+}
+
+// SetSupportsMultipath admits the QUIC multipath frame types
+// (draft-ietf-quic-multipath). It is set after the handshake, once both peers
+// have advertised the initial_max_path_id transport parameter. Before that the
+// parser stays in single-path mode and rejects multipath frames as unknown.
+func (p *FrameParser) SetSupportsMultipath(supported bool) {
+	p.supportsMultipath = supported
 }
 
 func replaceUnexpectedEOF(e error) error {

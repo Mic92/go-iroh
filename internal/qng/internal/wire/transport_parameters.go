@@ -50,6 +50,12 @@ const (
 	resetStreamAtParameterID transportParameterID = 0x17f7586d2cb571
 	// https://datatracker.ietf.org/doc/draft-ietf-quic-ack-frequency/11/
 	minAckDelayParameterID transportParameterID = 0xff04de1b
+	// https://datatracker.ietf.org/doc/html/draft-ietf-quic-multipath
+	// The value is a PathID (u32) encoded as a QUIC varint.
+	// See n0ext/reference/transport_parameters.rs:729 (InitialMaxPathId = 0x3e).
+	// NB: the multipath frame-type id PATH_ACK also uses 0x3e, but frame-type
+	// ids and transport-parameter ids live in separate namespaces.
+	initialMaxPathIDParameterID transportParameterID = 0x3e
 )
 
 // PreferredAddress is the value encoding in the preferred_address transport parameter
@@ -90,6 +96,13 @@ type TransportParameters struct {
 	MaxDatagramFrameSize protocol.ByteCount // RFC 9221
 	EnableResetStreamAt  bool               // https://datatracker.ietf.org/doc/draft-ietf-quic-reliable-stream-reset/06/
 	MinAckDelay          *time.Duration
+
+	// InitialMaxPathID is the multipath extension's initial_max_path_id
+	// transport parameter (draft-ietf-quic-multipath). A nil pointer means the
+	// parameter was not sent (multipath disabled); a non-nil pointer carries the
+	// largest path id the endpoint is initially willing to use.
+	// See n0ext/reference/transport_parameters.rs:121,537-548.
+	InitialMaxPathID *protocol.PathID
 }
 
 // Unmarshal the transport parameters
@@ -210,6 +223,22 @@ func (p *TransportParameters) unmarshal(b []byte, sentBy protocol.Perspective, f
 				return fmt.Errorf("wrong length for reset_stream_at: %d (expected empty)", paramLen)
 			}
 			p.EnableResetStreamAt = true
+		case initialMaxPathIDParameterID:
+			// Multipath extension. Mirrors transport_parameters.rs:537-548: reject
+			// a duplicate, decode a PathID varint (errors on >u32::MAX), and
+			// require the declared length to equal the varint's encoded size.
+			if p.InitialMaxPathID != nil {
+				return fmt.Errorf("received duplicate transport parameter %#x", paramID)
+			}
+			pathID, l, err := parsePathID(b)
+			if err != nil {
+				return err
+			}
+			if uint64(l) != paramLen {
+				return fmt.Errorf("inconsistent transport parameter length for transport parameter %#x", paramID)
+			}
+			b = b[paramLen:]
+			p.InitialMaxPathID = &pathID
 		default:
 			b = b[paramLen:]
 		}
@@ -458,6 +487,12 @@ func (p *TransportParameters) Marshal(pers protocol.Perspective) []byte {
 	if p.MinAckDelay != nil {
 		b = p.marshalVarintParam(b, minAckDelayParameterID, uint64(*p.MinAckDelay/time.Microsecond))
 	}
+	// initial_max_path_id (multipath extension).
+	// transport_parameters.rs:412-418: write the id, then the PathID's varint
+	// size, then the PathID encoded as a varint.
+	if p.InitialMaxPathID != nil {
+		b = p.marshalVarintParam(b, initialMaxPathIDParameterID, uint64(*p.InitialMaxPathID))
+	}
 
 	if pers == protocol.PerspectiveClient && len(AdditionalTransportParametersClient) > 0 {
 		for k, v := range AdditionalTransportParametersClient {
@@ -577,6 +612,10 @@ func (p *TransportParameters) String() string {
 	if p.MinAckDelay != nil {
 		logString += ", MinAckDelay: %s"
 		logParams = append(logParams, *p.MinAckDelay)
+	}
+	if p.InitialMaxPathID != nil {
+		logString += ", InitialMaxPathID: %d"
+		logParams = append(logParams, *p.InitialMaxPathID)
 	}
 	logString += "}"
 	return fmt.Sprintf(logString, logParams...)

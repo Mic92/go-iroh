@@ -176,6 +176,14 @@ type Config struct {
 	// See https://datatracker.ietf.org/doc/html/draft-ietf-quic-reliable-stream-reset-07.
 	EnableStreamResetPartialDelivery bool
 
+	// InitialMaxPathID enables the QUIC multipath extension
+	// (draft-ietf-quic-multipath) by advertising the initial_max_path_id
+	// transport parameter with the given value (the largest path id this
+	// endpoint is initially willing to use). A nil pointer leaves multipath
+	// disabled, and the parameter is not sent. Multipath is only negotiated when
+	// both peers advertise the parameter.
+	InitialMaxPathID *uint32
+
 	Tracer func(ctx context.Context, isClient bool, connID ConnectionID) qlogwriter.Trace
 }
 

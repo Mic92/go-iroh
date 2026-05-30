@@ -9,16 +9,35 @@ import (
 	"github.com/tmc/go-iroh/internal/qng/quicvarint"
 )
 
-// A NewConnectionIDFrame is a NEW_CONNECTION_ID frame
+// A NewConnectionIDFrame is a NEW_CONNECTION_ID frame.
+//
+// When PathID is non-nil the frame is the QUIC multipath path-qualified variant
+// PATH_NEW_CONNECTION_ID (0x3e78): the path id is encoded immediately after the
+// frame type, before the sequence number (frame.rs:2015-2030, NewConnectionId
+// encode with Option<PathId>). A nil PathID encodes a plain NEW_CONNECTION_ID
+// (0x18) byte-for-byte as before.
 type NewConnectionIDFrame struct {
+	PathID              *protocol.PathID
 	SequenceNumber      uint64
 	RetirePriorTo       uint64
 	ConnectionID        protocol.ConnectionID
 	StatelessResetToken protocol.StatelessResetToken
 }
 
-func parseNewConnectionIDFrame(b []byte, _ protocol.Version) (*NewConnectionIDFrame, int, error) {
+// parseNewConnectionIDFrame parses a NEW_CONNECTION_ID frame. readPath selects
+// the path-qualified PATH_NEW_CONNECTION_ID variant, in which a path id varint
+// precedes the sequence number (frame.rs:1973-2004, NewConnectionId::read).
+func parseNewConnectionIDFrame(b []byte, readPath bool, _ protocol.Version) (*NewConnectionIDFrame, int, error) {
 	startLen := len(b)
+	var pathID *protocol.PathID
+	if readPath {
+		pid, l, err := parsePathID(b)
+		if err != nil {
+			return nil, 0, err
+		}
+		b = b[l:]
+		pathID = &pid
+	}
 	seq, l, err := quicvarint.Parse(b)
 	if err != nil {
 		return nil, 0, replaceUnexpectedEOF(err)
@@ -48,6 +67,7 @@ func parseNewConnectionIDFrame(b []byte, _ protocol.Version) (*NewConnectionIDFr
 		return nil, 0, io.EOF
 	}
 	frame := &NewConnectionIDFrame{
+		PathID:         pathID,
 		SequenceNumber: seq,
 		RetirePriorTo:  ret,
 		ConnectionID:   protocol.ParseConnectionID(b[:connIDLen]),
@@ -61,7 +81,12 @@ func parseNewConnectionIDFrame(b []byte, _ protocol.Version) (*NewConnectionIDFr
 }
 
 func (f *NewConnectionIDFrame) Append(b []byte, _ protocol.Version) ([]byte, error) {
-	b = append(b, byte(FrameTypeNewConnectionID))
+	if f.PathID != nil {
+		b = quicvarint.Append(b, uint64(FrameTypePathNewConnectionID))
+		b = quicvarint.Append(b, uint64(*f.PathID))
+	} else {
+		b = append(b, byte(FrameTypeNewConnectionID))
+	}
 	b = quicvarint.Append(b, f.SequenceNumber)
 	b = quicvarint.Append(b, f.RetirePriorTo)
 	connIDLen := f.ConnectionID.Len()
@@ -76,5 +101,9 @@ func (f *NewConnectionIDFrame) Append(b []byte, _ protocol.Version) ([]byte, err
 
 // Length of a written frame
 func (f *NewConnectionIDFrame) Length(protocol.Version) protocol.ByteCount {
-	return 1 + protocol.ByteCount(quicvarint.Len(f.SequenceNumber)+quicvarint.Len(f.RetirePriorTo)+1 /* connection ID length */ +f.ConnectionID.Len()) + 16
+	typeLen := protocol.ByteCount(1)
+	if f.PathID != nil {
+		typeLen = protocol.ByteCount(quicvarint.Len(uint64(FrameTypePathNewConnectionID)) + quicvarint.Len(uint64(*f.PathID)))
+	}
+	return typeLen + protocol.ByteCount(quicvarint.Len(f.SequenceNumber)+quicvarint.Len(f.RetirePriorTo)+1 /* connection ID length */ +f.ConnectionID.Len()) + 16
 }

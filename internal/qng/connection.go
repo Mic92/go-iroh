@@ -346,6 +346,7 @@ var newConnection = func(
 		InitialSourceConnectionID: srcConnID,
 		RetrySourceConnectionID:   retrySrcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
+		InitialMaxPathID:          initialMaxPathIDParam(s.config.InitialMaxPathID),
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = wire.MaxDatagramSize
@@ -472,6 +473,7 @@ var newClientConnection = func(
 		ActiveConnectionIDLimit:   protocol.MaxActiveConnectionIDs,
 		InitialSourceConnectionID: srcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
+		InitialMaxPathID:          initialMaxPathIDParam(s.config.InitialMaxPathID),
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = wire.MaxDatagramSize
@@ -519,6 +521,7 @@ func (c *Conn) preSetup() {
 		c.config.EnableDatagrams,
 		c.config.EnableStreamResetPartialDelivery,
 		false, // ACK_FREQUENCY is not supported yet
+		false, // multipath is not negotiated yet (Stage 3)
 	)
 	c.rttStats = utils.NewRTTStats()
 	c.connFlowController = flowcontrol.NewConnectionFlowController(
@@ -2421,6 +2424,10 @@ func (c *Conn) applyTransportParameters() {
 	c.keepAliveInterval = min(c.config.KeepAlivePeriod, c.idleTimeout/2)
 	c.streamsMap.HandleTransportParameters(params)
 	c.frameParser.SetAckDelayExponent(params.AckDelayExponent)
+	// Admit QUIC multipath frames only once both peers advertised the
+	// initial_max_path_id transport parameter. Until then the parser stays in
+	// single-path mode, so multipath frame types are rejected as unknown.
+	c.frameParser.SetSupportsMultipath(c.multipathNegotiated())
 	c.connFlowController.UpdateSendWindow(params.InitialMaxData)
 	c.rttStats.SetMaxAckDelay(params.MaxAckDelay)
 	c.connIDGenerator.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
@@ -2442,6 +2449,28 @@ func (c *Conn) applyTransportParameters() {
 		maxPacketSize,
 		c.qlogger,
 	)
+}
+
+// multipathNegotiated reports whether the QUIC multipath extension
+// (draft-ietf-quic-multipath) was negotiated. This is the case only when both
+// peers advertised the initial_max_path_id transport parameter: the local side
+// via Config.InitialMaxPathID, and the peer in its received parameters. It must
+// be called only after the peer's transport parameters have been processed.
+func (c *Conn) multipathNegotiated() bool {
+	return c.config.InitialMaxPathID != nil &&
+		c.peerParams != nil &&
+		c.peerParams.InitialMaxPathID != nil
+}
+
+// initialMaxPathIDParam converts a Config.InitialMaxPathID (*uint32) to the
+// transport parameter representation (*protocol.PathID). A nil value leaves the
+// parameter unset, keeping multipath disabled.
+func initialMaxPathIDParam(v *uint32) *protocol.PathID {
+	if v == nil {
+		return nil
+	}
+	id := protocol.PathID(*v)
+	return &id
 }
 
 func (c *Conn) triggerSending(now monotime.Time) error {

@@ -123,6 +123,7 @@ func populateConfig(config *Config) *Config {
 		InitialPacketSize:                initialPacketSize,
 		DisablePathMTUDiscovery:          config.DisablePathMTUDiscovery,
 		EnableStreamResetPartialDelivery: config.EnableStreamResetPartialDelivery,
+		InitialMaxPathID:                 config.InitialMaxPathID,
 		Allow0RTT:                        config.Allow0RTT,
 		Tracer:                           config.Tracer,
 	}

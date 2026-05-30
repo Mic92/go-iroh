@@ -72,7 +72,29 @@ func (t FrameType) IsDatagramFrameType() bool {
 	return t == FrameTypeDatagramNoLength || t == FrameTypeDatagramWithLength
 }
 
+// isMultipathFrameType reports whether t is one of the QUIC multipath frame
+// types. These match the Rust Frame::is_multipath_frame set (frame.rs:543-560):
+// PathAck, PathAckEcn, PathAbandon, PathStatus{Backup,Available},
+// Path{New,Retire}ConnectionId, MaxPathId, PathsBlocked, PathCidsBlocked.
+func (t FrameType) isMultipathFrameType() bool {
+	switch t {
+	case FrameTypePathAck, FrameTypePathAckECN,
+		FrameTypePathAbandon, FrameTypePathStatusBackup, FrameTypePathStatusAvailable,
+		FrameTypePathNewConnectionID, FrameTypePathRetireConnectionID,
+		FrameTypeMaxPathID, FrameTypePathsBlocked, FrameTypePathCIDsBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
 func (t FrameType) isAllowedAtEncLevel(encLevel protocol.EncryptionLevel) bool {
+	// All multipath frames MUST only be sent in 1-RTT packets; receiving one in
+	// any other packet type is a PROTOCOL_VIOLATION
+	// (frame.rs:524-535, Frame::is_1rtt; draft-ietf-quic-multipath-17 §4-1).
+	if t.isMultipathFrameType() {
+		return encLevel == protocol.Encryption1RTT
+	}
 	//nolint:exhaustive
 	switch encLevel {
 	case protocol.EncryptionInitial, protocol.EncryptionHandshake:
