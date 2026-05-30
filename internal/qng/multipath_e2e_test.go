@@ -282,6 +282,12 @@ func TestMultipathTwoPathE2E(t *testing.T) {
 	if !serverConn.multipathNegotiated() {
 		t.Fatalf("server multipathNegotiated() = false, want true")
 	}
+	if !clientConn.ConnectionState().MultipathNegotiated {
+		t.Fatalf("client ConnectionState().MultipathNegotiated = false, want true")
+	}
+	if !serverConn.ConnectionState().MultipathNegotiated {
+		t.Fatalf("server ConnectionState().MultipathNegotiated = false, want true")
+	}
 
 	// (2) Open a second path from the client. OpenPath schedules the path-open
 	// onto the run goroutine (the thread-safe seam, 5f), issues a path-1

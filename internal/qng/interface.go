@@ -232,6 +232,9 @@ type ConnectionState struct {
 	}
 	// Used0RTT says if 0-RTT resumption was used.
 	Used0RTT bool
+	// MultipathNegotiated reports whether both peers advertised the QUIC
+	// multipath extension.
+	MultipathNegotiated bool
 	// Version is the QUIC version of the QUIC connection.
 	Version Version
 	// GSO says if generic segmentation offload is used.

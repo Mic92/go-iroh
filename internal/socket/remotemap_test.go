@@ -14,10 +14,11 @@ import (
 // fakeConn is a test [Connection]. Close() ends it; SmoothedRTT and RemoteAddr
 // are fixed.
 type fakeConn struct {
-	addr Addr
-	rtt  time.Duration
-	done chan struct{}
-	once sync.Once
+	addr                Addr
+	rtt                 time.Duration
+	multipathNegotiated bool
+	done                chan struct{}
+	once                sync.Once
 }
 
 func newFakeConn(addr Addr, rtt time.Duration) *fakeConn {
@@ -27,6 +28,7 @@ func newFakeConn(addr Addr, rtt time.Duration) *fakeConn {
 func (c *fakeConn) SmoothedRTT() time.Duration { return c.rtt }
 func (c *fakeConn) Done() <-chan struct{}      { return c.done }
 func (c *fakeConn) RemoteAddr() Addr           { return c.addr }
+func (c *fakeConn) MultipathNegotiated() bool  { return c.multipathNegotiated }
 func (c *fakeConn) Close()                     { c.once.Do(func() { close(c.done) }) }
 
 func testEndpointId(t *testing.T) base.EndpointId {

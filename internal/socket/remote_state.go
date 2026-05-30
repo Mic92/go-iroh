@@ -39,6 +39,10 @@ const (
 // hole-punching. This is a documented degradation, not a bug.
 var ErrExtensionNotNegotiated = errors.New("socket: QUIC extension not negotiated (qng X1/X2/X3 gate)")
 
+// ErrHolepunchNotImplemented is returned when the active connection has
+// negotiated qng multipath, but the QNT hole-punch driver has not been wired.
+var ErrHolepunchNotImplemented = errors.New("socket: hole-punch driver not implemented")
+
 // Connection is the minimal view of a QUIC connection the [RemoteStateActor]
 // needs. The iroh package adapts a qng *quic.Conn to it; tests use a fake. It
 // stays small on purpose: the actor only reads liveness and RTT.
@@ -54,6 +58,10 @@ type Connection interface {
 	Done() <-chan struct{}
 	// RemoteAddr returns the transport address the connection is using.
 	RemoteAddr() Addr
+}
+
+type multipathConnection interface {
+	MultipathNegotiated() bool
 }
 
 // ResolveFunc resolves additional transport addresses for a remote endpoint. It
@@ -374,12 +382,20 @@ func (a *RemoteStateActor) reselect() {
 	a.watcher.Send(PathEvent{Kind: PathEventSelected, Addr: selected})
 }
 
-// TriggerHolepunch attempts to open a new direct path by NAT traversal. In this
-// build it always returns [ErrExtensionNotNegotiated]: hole-punching lives
-// inside qng's QNT extension (X2), which is not implemented. The actor falls
-// back to the relay path and any pre-validated direct path. See iroh/DESIGN.md
-// §3.4.
+// TriggerHolepunch attempts to open a new direct path by NAT traversal. It
+// stays fail-closed until qng multipath is negotiated by at least one active
+// connection. After that gate, this build reports [ErrHolepunchNotImplemented]:
+// the remaining work is the QNT hole-punch driver. The actor falls back to the
+// relay path and any pre-validated direct path. See iroh/DESIGN.md §3.4.
 func (a *RemoteStateActor) TriggerHolepunch() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for conn := range a.conns {
+		mp, ok := conn.(multipathConnection)
+		if ok && mp.MultipathNegotiated() {
+			return ErrHolepunchNotImplemented
+		}
+	}
 	return ErrExtensionNotNegotiated
 }
 

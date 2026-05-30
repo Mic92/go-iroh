@@ -547,6 +547,7 @@ var newClientConnection = func(
 		InitialSourceConnectionID: srcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
 		InitialMaxPathID:          initialMaxPathIDParam(s.config.InitialMaxPathID),
+		AddressDiscoveryRole:      addressDiscoveryRole(s.config),
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = wire.MaxDatagramSize
@@ -880,6 +881,7 @@ func (c *Conn) ConnectionState() ConnectionState {
 	}
 	c.connState.SupportsDatagrams.Local = c.config.EnableDatagrams
 	c.connState.SupportsStreamResetPartialDelivery.Local = c.config.EnableStreamResetPartialDelivery
+	c.connState.MultipathNegotiated = c.multipathNegotiated()
 	c.connState.GSO = c.conn.capabilities().GSO
 	return c.connState
 }

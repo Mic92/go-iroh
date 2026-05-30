@@ -511,6 +511,26 @@ func TestTriggerHolepunchSentinel(t *testing.T) {
 	}
 }
 
+func TestTriggerHolepunchAfterMultipathNegotiated(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	conn.multipathNegotiated = true
+	if _, ok := a.AddConnection(conn); !ok {
+		t.Fatal("AddConnection failed")
+	}
+
+	err := a.TriggerHolepunch()
+	if errors.Is(err, ErrExtensionNotNegotiated) {
+		t.Fatalf("TriggerHolepunch() = %v, still reports extension not negotiated", err)
+	}
+	if !errors.Is(err, ErrHolepunchNotImplemented) {
+		t.Fatalf("TriggerHolepunch() = %v, want ErrHolepunchNotImplemented", err)
+	}
+}
+
 // TestSocketCustomMappedAddrFor checks the custom mapped-address table is stable
 // for the same CustomAddr and that LookupCustom round-trips it (socket.go:101,
 // 137).

@@ -171,4 +171,10 @@ func (a *connAdapter) Done() <-chan struct{} { return a.qc.Context().Done() }
 // RemoteAddr returns the connection's transport path address.
 func (a *connAdapter) RemoteAddr() socket.Addr { return a.addr }
 
+// MultipathNegotiated reports whether qng negotiated the QUIC multipath
+// extension on this connection.
+func (a *connAdapter) MultipathNegotiated() bool {
+	return a.qc.ConnectionState().MultipathNegotiated
+}
+
 var _ socket.Connection = (*connAdapter)(nil)
