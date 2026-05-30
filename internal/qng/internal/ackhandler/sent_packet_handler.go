@@ -469,7 +469,37 @@ func (h *sentPacketHandler) getPacketNumberSpace(encLevel protocol.EncryptionLev
 	}
 }
 
+// ReceivedAck processes an ACK frame for the given encryption level. For
+// application data (0-RTT/1-RTT) it delegates to ReceivedAckForPath with
+// PathIDZero, so single-path behavior is bit-identical to the per-path form.
 func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.EncryptionLevel, rcvTime monotime.Time) (bool /* contained 1-RTT packet */, error) {
+	if encLevel == protocol.Encryption0RTT || encLevel == protocol.Encryption1RTT {
+		return h.ReceivedAckForPath(ack, protocol.PathIDZero, rcvTime)
+	}
+	return h.receivedAck(ack, encLevel, rcvTime)
+}
+
+// ReceivedAckForPath processes a (possibly multipath) ACK that acknowledges
+// packets sent on the application-data packet number space identified by pid.
+//
+// An unknown pid (no entry in appDataPaths) is a protocol violation: the peer
+// cannot acknowledge a path we never opened. We MUST NOT fall back to
+// PathIDZero, because path pid carries an independent packet-number sequence —
+// matching it against path 0's history would corrupt loss detection and ACK
+// attribution (Stage 4 spec risk #1; QNG-MULTIPATH-PLAN.md:94-96). Until a
+// second path is opened on the send side (Stage 5), the map only ever contains
+// PathIDZero, so any non-zero pid is rejected here.
+func (h *sentPacketHandler) ReceivedAckForPath(ack *wire.AckFrame, pid protocol.PathID, rcvTime monotime.Time) (bool /* contained 1-RTT packet */, error) {
+	if h.getAppDataPath(pid) == nil {
+		return false, &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: fmt.Sprintf("received ACK for unknown path %d", pid),
+		}
+	}
+	return h.receivedAck(ack, protocol.Encryption1RTT, rcvTime)
+}
+
+func (h *sentPacketHandler) receivedAck(ack *wire.AckFrame, encLevel protocol.EncryptionLevel, rcvTime monotime.Time) (bool /* contained 1-RTT packet */, error) {
 	pnSpace := h.getPacketNumberSpace(encLevel)
 
 	largestAcked := ack.LargestAcked()

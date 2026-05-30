@@ -375,6 +375,93 @@ func TestSentPacketHandlerLossTimeAndSpaceSinglePath(t *testing.T) {
 	}
 }
 
+// TestReceivedAckForPathDelegatesToPathIDZero pins that ReceivedAckForPath with
+// PathIDZero is bit-identical to ReceivedAck at 1-RTT (Stage 4c). The two paths
+// must drive the same recovery state, since ReceivedAck(1-RTT) delegates to
+// ReceivedAckForPath(PathIDZero) — single-path stays unchanged.
+func TestReceivedAckForPathDelegatesToPathIDZero(t *testing.T) {
+	const packetSize = protocol.ByteCount(1000)
+
+	// run drives N sends then a single-PN ack via fn, returning the observable
+	// recovery state after the ack.
+	run := func(fn func(h *sentPacketHandler, pn protocol.PacketNumber, now monotime.Time) (bool, error)) (acked bool, bytesInFlight protocol.ByteCount, largestAcked protocol.PacketNumber, outstanding []protocol.PacketNumber) {
+		h, _ := newOracleSentHandler(t)
+		now := monotime.Now()
+		sent := make([]protocol.PacketNumber, 3)
+		for i := range sent {
+			sent[i] = sendAppDataPacket(h, now, packetSize)
+		}
+		var err error
+		acked, err = fn(h, sent[1], now)
+		if err != nil {
+			t.Fatalf("ack: %v", err)
+		}
+		return acked, h.getAppDataPath(protocol.PathIDZero).bytesInFlight,
+			h.getAppDataPath(protocol.PathIDZero).space.largestAcked, outstandingPNs(h)
+	}
+
+	viaReceivedAck := func(h *sentPacketHandler, pn protocol.PacketNumber, now monotime.Time) (bool, error) {
+		return h.ReceivedAck(ackFrameForPN(pn), protocol.Encryption1RTT, now)
+	}
+	viaForPath := func(h *sentPacketHandler, pn protocol.PacketNumber, now monotime.Time) (bool, error) {
+		return h.ReceivedAckForPath(ackFrameForPN(pn), protocol.PathIDZero, now)
+	}
+
+	a1, bif1, la1, out1 := run(viaReceivedAck)
+	a2, bif2, la2, out2 := run(viaForPath)
+
+	if a1 != a2 {
+		t.Errorf("acked1RTT differs: ReceivedAck=%v ReceivedAckForPath=%v", a1, a2)
+	}
+	if bif1 != bif2 {
+		t.Errorf("bytesInFlight differs: ReceivedAck=%d ReceivedAckForPath=%d", bif1, bif2)
+	}
+	if la1 != la2 {
+		t.Errorf("largestAcked differs: ReceivedAck=%d ReceivedAckForPath=%d", la1, la2)
+	}
+	if !equalPNs(out1, out2) {
+		t.Errorf("outstanding differs: ReceivedAck=%v ReceivedAckForPath=%v", out1, out2)
+	}
+}
+
+// TestReceivedAckForPathUnknownPathID is the headline Stage 4c safety test
+// (spec risk #1, QNG-MULTIPATH-PLAN.md:94-96): an ACK for a path with no entry
+// in the appData path map MUST return a ProtocolViolation and MUST NOT fall
+// back to PathIDZero. Until Stage 5 opens a second path, the map only holds
+// PathIDZero, so any non-zero pid is rejected — the peer cannot acknowledge a
+// path we never opened.
+func TestReceivedAckForPathUnknownPathID(t *testing.T) {
+	h, _ := newOracleSentHandler(t)
+	now := monotime.Now()
+	pn := sendAppDataPacket(h, now, 1000)
+
+	// Sanity: PathIDZero is the only entry.
+	if _, ok := h.appDataPaths[protocol.PathID(1)]; ok {
+		t.Fatalf("path 1 must not exist before Stage 5")
+	}
+
+	_, err := h.ReceivedAckForPath(ackFrameForPN(pn), protocol.PathID(1), now)
+	if err == nil {
+		t.Fatalf("expected ProtocolViolation for ACK on unknown path, got nil")
+	}
+	transportErr, ok := err.(*qerr.TransportError)
+	if !ok {
+		t.Fatalf("error type = %T, want *qerr.TransportError", err)
+	}
+	if transportErr.ErrorCode != qerr.ProtocolViolation {
+		t.Errorf("error code = %v, want ProtocolViolation", transportErr.ErrorCode)
+	}
+
+	// The unknown-path ACK must not perturb PathIDZero's state: the packet we
+	// sent stays outstanding (the ACK was rejected, never attributed to path 0).
+	if got := outstandingPNs(h); !equalPNs(got, []protocol.PacketNumber{pn}) {
+		t.Errorf("outstanding after rejected ACK = %v, want %v (path 0 untouched)", got, []protocol.PacketNumber{pn})
+	}
+	if got := h.getAppDataPath(protocol.PathIDZero).bytesInFlight; got != 1000 {
+		t.Errorf("bytesInFlight after rejected ACK = %d, want 1000 (path 0 untouched)", got)
+	}
+}
+
 func equalPNs(a, b []protocol.PacketNumber) bool {
 	if len(a) != len(b) {
 		return false

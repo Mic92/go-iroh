@@ -144,6 +144,13 @@ type Conn struct {
 	largestRcvdAppData  protocol.PacketNumber
 	pathManagerOutgoing atomic.Pointer[pathManagerOutgoing]
 
+	// multipathManager records the read-side state of QUIC multipath
+	// (draft-ietf-quic-multipath) paths, keyed by protocol.PathID. It is
+	// distinct from pathManager (the RFC 9000 single-path migration manager,
+	// keyed by an int64 path id). It is only consulted for frames admitted
+	// once multipathNegotiated() is true.
+	multipathManager *multipathManager
+
 	streamsMap      *streamsMap
 	connIDManager   *connIDManager
 	connIDGenerator *connIDGenerator
@@ -513,6 +520,7 @@ var newClientConnection = func(
 
 func (c *Conn) preSetup() {
 	c.largestRcvdAppData = protocol.InvalidPacketNumber
+	c.multipathManager = newMultipathManager()
 	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient)
 	c.handshakeStream = newCryptoStream()
 	c.sendQueue = newSendQueue(c.conn)
@@ -1946,10 +1954,96 @@ func (c *Conn) handleFrame(
 		err = c.connIDGenerator.Retire(frame.SequenceNumber, destConnID, rcvTime.Add(3*c.rttStats.PTO(false)))
 	case *wire.HandshakeDoneFrame:
 		err = c.handleHandshakeDoneFrame(rcvTime)
+	case *wire.PathAckFrame:
+		err = c.handlePathAckFrame(frame, rcvTime)
+	case *wire.PathStatusBackupFrame:
+		err = c.handlePathStatusBackupFrame(frame)
+	case *wire.PathStatusAvailableFrame:
+		err = c.handlePathStatusAvailableFrame(frame)
+	case *wire.PathAbandonFrame:
+		err = c.handlePathAbandonFrame(frame)
+	case *wire.MaxPathIDFrame:
+		err = c.handleMaxPathIDFrame(frame)
+	case *wire.PathsBlockedFrame:
+		err = c.handlePathsBlockedFrame(frame)
+	case *wire.PathCIDsBlockedFrame:
+		err = c.handlePathCIDsBlockedFrame(frame)
 	default:
 		err = fmt.Errorf("unexpected frame type: %s", reflect.ValueOf(&frame).Elem().Type().Name())
 	}
 	return pathChallenge, err
+}
+
+// rejectIfMultipathOff returns a ProtocolViolation TransportError unless
+// multipath has been negotiated. The frame parser already refuses to admit
+// multipath frames when multipath is off (it is constructed with
+// SetSupportsMultipath(c.multipathNegotiated())), so reaching handleFrame
+// already implies negotiation. This is a defensive double-guard, matching the
+// perspective guard in handleHandshakeDoneFrame: a multipath frame on a
+// single-path connection is a protocol violation.
+func (c *Conn) rejectIfMultipathOff(frameName string) error {
+	if c.multipathNegotiated() {
+		return nil
+	}
+	return &qerr.TransportError{
+		ErrorCode:    qerr.ProtocolViolation,
+		ErrorMessage: "received a " + frameName + " frame without multipath negotiated",
+	}
+}
+
+func (c *Conn) handlePathAckFrame(frame *wire.PathAckFrame, rcvTime monotime.Time) error {
+	if err := c.rejectIfMultipathOff("PATH_ACK"); err != nil {
+		return err
+	}
+	return c.handleAckFrameForPath(&frame.Ack, frame.PathID, rcvTime)
+}
+
+func (c *Conn) handlePathStatusBackupFrame(frame *wire.PathStatusBackupFrame) error {
+	if err := c.rejectIfMultipathOff("PATH_STATUS_BACKUP"); err != nil {
+		return err
+	}
+	c.multipathManager.handleStatusBackup(frame.PathID, frame.SeqNo)
+	return nil
+}
+
+func (c *Conn) handlePathStatusAvailableFrame(frame *wire.PathStatusAvailableFrame) error {
+	if err := c.rejectIfMultipathOff("PATH_STATUS_AVAILABLE"); err != nil {
+		return err
+	}
+	c.multipathManager.handleStatusAvailable(frame.PathID, frame.SeqNo)
+	return nil
+}
+
+func (c *Conn) handlePathAbandonFrame(frame *wire.PathAbandonFrame) error {
+	if err := c.rejectIfMultipathOff("PATH_ABANDON"); err != nil {
+		return err
+	}
+	c.multipathManager.handleAbandon(frame.PathID, frame.ErrorCode)
+	return nil
+}
+
+func (c *Conn) handleMaxPathIDFrame(frame *wire.MaxPathIDFrame) error {
+	if err := c.rejectIfMultipathOff("MAX_PATH_ID"); err != nil {
+		return err
+	}
+	c.multipathManager.handleMaxPathID(frame.PathID)
+	return nil
+}
+
+func (c *Conn) handlePathsBlockedFrame(frame *wire.PathsBlockedFrame) error {
+	if err := c.rejectIfMultipathOff("PATHS_BLOCKED"); err != nil {
+		return err
+	}
+	c.multipathManager.handlePathsBlocked(frame.MaxPathID)
+	return nil
+}
+
+func (c *Conn) handlePathCIDsBlockedFrame(frame *wire.PathCIDsBlockedFrame) error {
+	if err := c.rejectIfMultipathOff("PATH_CIDS_BLOCKED"); err != nil {
+		return err
+	}
+	c.multipathManager.handlePathCIDsBlocked(frame.PathID, frame.NextSeq)
+	return nil
 }
 
 // handlePacket is called by the server with a new packet
@@ -2130,6 +2224,38 @@ func (c *Conn) handleAckFrame(frame *wire.AckFrame, encLevel protocol.Encryption
 		}
 	}
 	// If one of the acknowledged packets was a Path MTU probe packet, this might have increased the Path MTU estimate.
+	if c.mtuDiscoverer != nil {
+		if mtu := c.mtuDiscoverer.CurrentSize(); mtu > protocol.ByteCount(c.currentMTUEstimate.Load()) {
+			c.currentMTUEstimate.Store(uint32(mtu))
+			c.sentPacketHandler.SetMaxDatagramSize(mtu)
+		}
+	}
+	return c.cryptoStreamHandler.SetLargest1RTTAcked(frame.LargestAcked())
+}
+
+// handleAckFrameForPath processes a PATH_ACK frame's ACK against the
+// application-data packet number space identified by pid. It routes to
+// ReceivedAckForPath, which rejects an unknown pid with a ProtocolViolation
+// rather than mis-attributing the ACK to PathIDZero (Stage 4 spec risk #1).
+// Until a second path is opened on the send side (Stage 5), only PathIDZero
+// exists, so any non-zero pid is rejected there.
+//
+// Multipath ACKs are 1-RTT only by construction (the parser admits them only
+// from the application-data space), so the post-ACK handling mirrors the 1-RTT
+// branch of handleAckFrame.
+func (c *Conn) handleAckFrameForPath(frame *wire.AckFrame, pid protocol.PathID, rcvTime monotime.Time) error {
+	acked1RTTPacket, err := c.sentPacketHandler.ReceivedAckForPath(frame, pid, c.lastPacketReceivedTime)
+	if err != nil {
+		return err
+	}
+	if !acked1RTTPacket {
+		return nil
+	}
+	if c.perspective == protocol.PerspectiveClient && !c.handshakeConfirmed {
+		if err := c.handleHandshakeConfirmed(rcvTime); err != nil {
+			return err
+		}
+	}
 	if c.mtuDiscoverer != nil {
 		if mtu := c.mtuDiscoverer.CurrentSize(); mtu > protocol.ByteCount(c.currentMTUEstimate.Load()) {
 			c.currentMTUEstimate.Store(uint32(mtu))

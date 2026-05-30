@@ -8,6 +8,10 @@ func IsFrameTypeAckEliciting(t wire.FrameType) bool {
 	switch t {
 	case wire.FrameTypeAck, wire.FrameTypeAckECN:
 		return false
+	// PATH_ACK / PATH_ACK_ECN are ACKs qualified by a path id; like the base
+	// ACK frames they are not ack-eliciting (draft-ietf-quic-multipath).
+	case wire.FrameTypePathAck, wire.FrameTypePathAckECN:
+		return false
 	case wire.FrameTypeConnectionClose, wire.FrameTypeApplicationClose:
 		return false
 	default:
