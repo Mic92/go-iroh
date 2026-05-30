@@ -14,11 +14,12 @@ var errUnknownFrameType = errors.New("unknown frame type")
 
 // The FrameParser parses QUIC frames, one by one.
 type FrameParser struct {
-	ackDelayExponent      uint8
-	supportsDatagrams     bool
-	supportsResetStreamAt bool
-	supportsAckFrequency  bool
-	supportsMultipath     bool
+	ackDelayExponent         uint8
+	supportsDatagrams        bool
+	supportsResetStreamAt    bool
+	supportsAckFrequency     bool
+	supportsMultipath        bool
+	supportsAddressDiscovery bool
 
 	// To avoid allocating when parsing, keep a single ACK frame struct.
 	// It is used over and over again.
@@ -60,7 +61,8 @@ func (p *FrameParser) ParseType(b []byte, encLevel protocol.EncryptionLevel) (Fr
 			(p.supportsDatagrams && ft.IsDatagramFrameType()) ||
 			(p.supportsResetStreamAt && ft == FrameTypeResetStreamAt) ||
 			(p.supportsAckFrequency && (ft == FrameTypeAckFrequency || ft == FrameTypeImmediateAck)) ||
-			(p.supportsMultipath && ft.isMultipathFrameType())
+			(p.supportsMultipath && ft.isMultipathFrameType()) ||
+			(p.supportsAddressDiscovery && ft.isAddressDiscoveryFrameType())
 		if !valid {
 			return 0, parsed, &qerr.TransportError{
 				ErrorCode:    qerr.FrameEncodingError,
@@ -170,6 +172,14 @@ func (p *FrameParser) ParseLessCommonFrame(frameType FrameType, data []byte, v p
 		frame, l, err = parseAckFrequencyFrame(data, v)
 	case FrameTypeImmediateAck:
 		frame = &ImmediateAckFrame{}
+	// QUIC Address Discovery OBSERVED_ADDRESS frames
+	// (draft-seemann-quic-address-discovery). ParseType only routes here when
+	// supportsAddressDiscovery is set, so these cases are inert until QAD is
+	// negotiated. The frame type selects the address family (frame.rs:1665-1668).
+	case FrameTypeObservedIPv4Addr:
+		frame, l, err = parseObservedAddrFrame(data, false, v)
+	case FrameTypeObservedIPv6Addr:
+		frame, l, err = parseObservedAddrFrame(data, true, v)
 	// QUIC multipath frames (draft-ietf-quic-multipath). ParseType only routes
 	// here when supportsMultipath is set, so these cases are inert single-path.
 	// PATH_ACK/PATH_ACK_ECN are not base ACK types (IsAckFrameType is false for
@@ -220,6 +230,16 @@ func (p *FrameParser) SetAckDelayExponent(exp uint8) {
 // parser stays in single-path mode and rejects multipath frames as unknown.
 func (p *FrameParser) SetSupportsMultipath(supported bool) {
 	p.supportsMultipath = supported
+}
+
+// SetSupportsAddressDiscovery admits the QUIC Address Discovery
+// OBSERVED_ADDRESS frame types (draft-seemann-quic-address-discovery). It is set
+// after the handshake, once the peer's address-discovery role permits it to
+// report observed addresses to us (i.e. peer.should_report(local) is true).
+// Before that the parser rejects OBSERVED_ADDRESS frames as unknown, keeping
+// un-negotiated connections byte-identical.
+func (p *FrameParser) SetSupportsAddressDiscovery(supported bool) {
+	p.supportsAddressDiscovery = supported
 }
 
 func replaceUnexpectedEOF(e error) error {

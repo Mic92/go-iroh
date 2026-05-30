@@ -39,6 +39,13 @@ const (
 	FrameTypeDatagramNoLength   FrameType = 0x30
 	FrameTypeDatagramWithLength FrameType = 0x31
 
+	// QUIC Address Discovery OBSERVED_ADDRESS frame types
+	// (draft-seemann-quic-address-discovery), as used by iroh's noq QUIC fork.
+	// The frame type selects the reported address family. See
+	// internal/qng/n0ext/reference/frame.rs:100-103.
+	FrameTypeObservedIPv4Addr FrameType = 0x9f81a6
+	FrameTypeObservedIPv6Addr FrameType = 0x9f81a7
+
 	// QUIC multipath frame types (draft-ietf-quic-multipath), as used by iroh's
 	// noq QUIC fork. See internal/qng/n0ext/reference/frame.rs (lines 104-124).
 	// These constants are defined so the multipath frame codecs can reference
@@ -88,11 +95,22 @@ func (t FrameType) isMultipathFrameType() bool {
 	}
 }
 
+// isAddressDiscoveryFrameType reports whether t is one of the QUIC Address
+// Discovery OBSERVED_ADDRESS frame types (frame.rs:100-103).
+func (t FrameType) isAddressDiscoveryFrameType() bool {
+	return t == FrameTypeObservedIPv4Addr || t == FrameTypeObservedIPv6Addr
+}
+
 func (t FrameType) isAllowedAtEncLevel(encLevel protocol.EncryptionLevel) bool {
 	// All multipath frames MUST only be sent in 1-RTT packets; receiving one in
 	// any other packet type is a PROTOCOL_VIOLATION
 	// (frame.rs:524-535, Frame::is_1rtt; draft-ietf-quic-multipath-17 §4-1).
 	if t.isMultipathFrameType() {
+		return encLevel == protocol.Encryption1RTT
+	}
+	// OBSERVED_ADDRESS is likewise 1-RTT only (frame.rs Frame::is_1rtt; the
+	// receive path rejects it outside the data space, mod.rs:5343-5347).
+	if t.isAddressDiscoveryFrameType() {
 		return encLevel == protocol.Encryption1RTT
 	}
 	//nolint:exhaustive

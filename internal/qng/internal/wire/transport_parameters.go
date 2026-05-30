@@ -50,6 +50,12 @@ const (
 	resetStreamAtParameterID transportParameterID = 0x17f7586d2cb571
 	// https://datatracker.ietf.org/doc/draft-ietf-quic-ack-frequency/11/
 	minAckDelayParameterID transportParameterID = 0xff04de1b
+	// https://datatracker.ietf.org/doc/draft-seemann-quic-address-discovery/
+	// The value is the peer's address-discovery role as a QUIC varint (0 =
+	// SendOnly, 1 = ReceiveOnly, 2 = Both); a disabled role omits the parameter.
+	// See n0ext/reference/transport_parameters.rs:726 (ObservedAddr =
+	// 0x9f81a176) and address_discovery.rs:117-125.
+	observedAddrParameterID transportParameterID = 0x9f81a176
 	// https://datatracker.ietf.org/doc/html/draft-ietf-quic-multipath
 	// The value is a PathID (u32) encoded as a QUIC varint.
 	// See n0ext/reference/transport_parameters.rs:729 (InitialMaxPathId = 0x3e).
@@ -57,6 +63,77 @@ const (
 	// ids and transport-parameter ids live in separate namespaces.
 	initialMaxPathIDParameterID transportParameterID = 0x3e
 )
+
+// AddressDiscoveryRole is the peer's role in QUIC Address Discovery
+// (draft-seemann-quic-address-discovery), carried in the observed_address
+// transport parameter. It mirrors address_discovery::Role
+// (n0ext/reference/address_discovery.rs:10-22). The zero value
+// (AddressDiscoveryDisabled) means the parameter is absent.
+type AddressDiscoveryRole uint8
+
+const (
+	// AddressDiscoveryDisabled means address discovery is off; the
+	// observed_address transport parameter is not sent. This is the default.
+	AddressDiscoveryDisabled AddressDiscoveryRole = iota
+	// AddressDiscoverySendOnly reports observed addresses to the peer but does
+	// not accept reports about its own address (TP varint value 0).
+	AddressDiscoverySendOnly
+	// AddressDiscoveryReceiveOnly accepts reports about its own observed address
+	// but does not report back (TP varint value 1).
+	AddressDiscoveryReceiveOnly
+	// AddressDiscoveryBoth both reports and accepts reports (TP varint value 2).
+	AddressDiscoveryBoth
+)
+
+// isReporter reports whether this role allows reporting observed addresses to
+// the peer (address_discovery.rs:44-46).
+func (r AddressDiscoveryRole) isReporter() bool {
+	return r == AddressDiscoverySendOnly || r == AddressDiscoveryBoth
+}
+
+// receivesReports reports whether this role accepts observed-address reports
+// from the peer (address_discovery.rs:49-51).
+func (r AddressDiscoveryRole) receivesReports() bool {
+	return r == AddressDiscoveryReceiveOnly || r == AddressDiscoveryBoth
+}
+
+// ShouldReport reports whether a peer with role r should report observed
+// addresses to a peer with role other: r must be a reporter and other must
+// accept reports (address_discovery.rs:54-56).
+func (r AddressDiscoveryRole) ShouldReport(other AddressDiscoveryRole) bool {
+	return r.isReporter() && other.receivesReports()
+}
+
+// asTransportParameterValue returns the TP varint encoding of r and whether the
+// parameter should be written. Disabled omits the parameter
+// (address_discovery.rs:117-125).
+func (r AddressDiscoveryRole) asTransportParameterValue() (uint64, bool) {
+	switch r {
+	case AddressDiscoverySendOnly:
+		return 0, true
+	case AddressDiscoveryReceiveOnly:
+		return 1, true
+	case AddressDiscoveryBoth:
+		return 2, true
+	default:
+		return 0, false
+	}
+}
+
+// addressDiscoveryRoleFromValue decodes a TP varint into a role, rejecting
+// out-of-range values (address_discovery.rs:24-35: only 0, 1, 2 are legal).
+func addressDiscoveryRoleFromValue(v uint64) (AddressDiscoveryRole, error) {
+	switch v {
+	case 0:
+		return AddressDiscoverySendOnly, nil
+	case 1:
+		return AddressDiscoveryReceiveOnly, nil
+	case 2:
+		return AddressDiscoveryBoth, nil
+	default:
+		return AddressDiscoveryDisabled, fmt.Errorf("illegal address-discovery role value %d", v)
+	}
+}
 
 // PreferredAddress is the value encoding in the preferred_address transport parameter
 type PreferredAddress struct {
@@ -103,6 +180,14 @@ type TransportParameters struct {
 	// largest path id the endpoint is initially willing to use.
 	// See n0ext/reference/transport_parameters.rs:121,537-548.
 	InitialMaxPathID *protocol.PathID
+
+	// AddressDiscoveryRole is the QUIC Address Discovery role
+	// (draft-seemann-quic-address-discovery) carried in the observed_address
+	// transport parameter. AddressDiscoveryDisabled (the default) means the
+	// parameter was not sent. See
+	// n0ext/reference/transport_parameters.rs:118,404-411,522-536 and
+	// address_discovery.rs.
+	AddressDiscoveryRole AddressDiscoveryRole
 }
 
 // Unmarshal the transport parameters
@@ -223,6 +308,27 @@ func (p *TransportParameters) unmarshal(b []byte, sentBy protocol.Perspective, f
 				return fmt.Errorf("wrong length for reset_stream_at: %d (expected empty)", paramLen)
 			}
 			p.EnableResetStreamAt = true
+		case observedAddrParameterID:
+			// QUIC Address Discovery. Mirrors transport_parameters.rs:522-536:
+			// reject a duplicate (a non-disabled role means we already read one),
+			// decode the role varint (rejecting out-of-range values), and require
+			// the declared length to equal the varint's encoded size.
+			if p.AddressDiscoveryRole != AddressDiscoveryDisabled {
+				return fmt.Errorf("received duplicate transport parameter %#x", paramID)
+			}
+			val, l, err := quicvarint.Parse(b[:paramLen])
+			if err != nil {
+				return err
+			}
+			if uint64(l) != paramLen {
+				return fmt.Errorf("inconsistent transport parameter length for transport parameter %#x", paramID)
+			}
+			role, err := addressDiscoveryRoleFromValue(val)
+			if err != nil {
+				return err
+			}
+			b = b[paramLen:]
+			p.AddressDiscoveryRole = role
 		case initialMaxPathIDParameterID:
 			// Multipath extension. Mirrors transport_parameters.rs:537-548: reject
 			// a duplicate, decode a PathID varint (errors on >u32::MAX), and
@@ -487,6 +593,12 @@ func (p *TransportParameters) Marshal(pers protocol.Perspective) []byte {
 	if p.MinAckDelay != nil {
 		b = p.marshalVarintParam(b, minAckDelayParameterID, uint64(*p.MinAckDelay/time.Microsecond))
 	}
+	// observed_address (QUIC Address Discovery).
+	// transport_parameters.rs:404-411: write the id, then the role varint's
+	// size, then the role encoded as a varint. A disabled role omits it.
+	if val, ok := p.AddressDiscoveryRole.asTransportParameterValue(); ok {
+		b = p.marshalVarintParam(b, observedAddrParameterID, val)
+	}
 	// initial_max_path_id (multipath extension).
 	// transport_parameters.rs:412-418: write the id, then the PathID's varint
 	// size, then the PathID encoded as a varint.
@@ -616,6 +728,10 @@ func (p *TransportParameters) String() string {
 	if p.InitialMaxPathID != nil {
 		logString += ", InitialMaxPathID: %d"
 		logParams = append(logParams, *p.InitialMaxPathID)
+	}
+	if p.AddressDiscoveryRole != AddressDiscoveryDisabled {
+		logString += ", AddressDiscoveryRole: %d"
+		logParams = append(logParams, p.AddressDiscoveryRole)
 	}
 	logString += "}"
 	return fmt.Sprintf(logString, logParams...)
