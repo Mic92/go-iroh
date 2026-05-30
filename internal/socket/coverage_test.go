@@ -1,0 +1,809 @@
+package socket
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/internal/relayclient"
+	"github.com/tmc/go-iroh/internal/relayproto"
+)
+
+// TestTimeoutError pins the net.Error contract of the read-deadline error: its
+// message is exactly "i/o timeout" (matching net.OpError's timeout wording) and
+// it reports both Timeout and Temporary so quic-go treats a read timeout as a
+// retriable, non-fatal condition rather than a dead socket (deadline.go:86-88).
+func TestTimeoutError(t *testing.T) {
+	var e error = timeoutError{}
+	if got := e.Error(); got != "i/o timeout" {
+		t.Errorf("Error() = %q, want %q", got, "i/o timeout")
+	}
+	ne, ok := e.(net.Error)
+	if !ok {
+		t.Fatalf("timeoutError does not satisfy net.Error")
+	}
+	if !ne.Timeout() {
+		t.Error("Timeout() = false, want true")
+	}
+	if !ne.Temporary() {
+		t.Error("Temporary() = false, want true")
+	}
+}
+
+// TestNewMappedAddrConstructors checks the three allocating constructors produce
+// addresses in the correct n0 ULA subnet with a monotonically increasing
+// counter. The counters are process-global atomics (mapped_addrs.rs:57-64), so
+// the test asserts the subnet/prefix bytes and that successive allocations
+// strictly increase, rather than absolute counter values (which other tests in
+// the package also consume).
+func TestNewMappedAddrConstructors(t *testing.T) {
+	tests := []struct {
+		name   string
+		gen    func() netip.Addr
+		subnet [2]byte
+	}{
+		{"endpoint id", func() netip.Addr { return NewEndpointIDMappedAddr().Addr() }, subnetEndpointID},
+		{"relay", func() netip.Addr { return NewRelayMappedAddr().Addr() }, subnetRelay},
+		{"custom", func() netip.Addr { return NewCustomMappedAddr().Addr() }, subnetCustom},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := tt.gen().As16()
+			b := tt.gen().As16()
+			// Prefix 0xfd | n0 global id 15 07 0a 51 0b | subnet.
+			wantPrefix := []byte{0xfd, 0x15, 0x07, 0x0a, 0x51, 0x0b, tt.subnet[0], tt.subnet[1]}
+			for i, w := range wantPrefix {
+				if a[i] != w {
+					t.Errorf("addr byte %d = 0x%02x, want 0x%02x", i, a[i], w)
+				}
+				if b[i] != w {
+					t.Errorf("second addr byte %d = 0x%02x, want 0x%02x", i, b[i], w)
+				}
+			}
+			ca := uint64(a[8])<<56 | uint64(a[9])<<48 | uint64(a[10])<<40 | uint64(a[11])<<32 |
+				uint64(a[12])<<24 | uint64(a[13])<<16 | uint64(a[14])<<8 | uint64(a[15])
+			cb := uint64(b[8])<<56 | uint64(b[9])<<48 | uint64(b[10])<<40 | uint64(b[11])<<32 |
+				uint64(b[12])<<24 | uint64(b[13])<<16 | uint64(b[14])<<8 | uint64(b[15])
+			if cb <= ca {
+				t.Errorf("counter did not increase: first=%d second=%d", ca, cb)
+			}
+			if ca == 0 {
+				t.Error("counter is 0; Rust starts at 1 (AtomicU64::new(1))")
+			}
+		})
+	}
+}
+
+// TestMappedAddrAddrAndAddrPort checks the three mapped-address types return
+// their underlying IPv6 unchanged from Addr() and pin the dummy port (12345,
+// MAPPED_PORT in mapped_addrs.rs:55) from AddrPort().
+func TestMappedAddrAddrAndAddrPort(t *testing.T) {
+	eid := NewEndpointIDMappedAddr()
+	relay := NewRelayMappedAddr()
+	custom := NewCustomMappedAddr()
+
+	tests := []struct {
+		name string
+		addr netip.Addr
+		port uint16
+	}{
+		{"endpoint id", eid.Addr(), eid.AddrPort().Port()},
+		{"relay", relay.Addr(), relay.AddrPort().Port()},
+		{"custom", custom.Addr(), custom.AddrPort().Port()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.addr.Is6() || tt.addr.Is4In6() {
+				t.Errorf("Addr() = %s, want plain IPv6", tt.addr)
+			}
+			if tt.port != 12345 {
+				t.Errorf("AddrPort port = %d, want 12345", tt.port)
+			}
+		})
+	}
+
+	// AddrPort's address must equal Addr().
+	if eid.AddrPort().Addr() != eid.Addr() {
+		t.Error("EndpointIDMappedAddr.AddrPort addr != Addr()")
+	}
+	if relay.AddrPort().Addr() != relay.Addr() {
+		t.Error("RelayMappedAddr.AddrPort addr != Addr()")
+	}
+	if custom.AddrPort().Addr() != custom.Addr() {
+		t.Error("CustomMappedAddr.AddrPort addr != Addr()")
+	}
+}
+
+// TestRelayMappedAddrFromAddr checks the reverse-lookup wrapper returns the same
+// address it wrapped without allocating a new counter (mapped_addrs.rs:25-26).
+func TestRelayMappedAddrFromAddr(t *testing.T) {
+	orig := netip.MustParseAddr("fd15:70a:510b:1::2a")
+	m := RelayMappedAddrFromAddr(orig)
+	if m.Addr() != orig {
+		t.Errorf("Addr() = %s, want %s (wrap must not modify)", m.Addr(), orig)
+	}
+	if Classify(m.Addr()) != KindRelay {
+		t.Errorf("wrapped addr classified as %v, want KindRelay", Classify(m.Addr()))
+	}
+}
+
+// TestPathStatusString pins the lowercase rendering of each PathStatus, including
+// the out-of-range fallback (path_state.go:38).
+func TestPathStatusString(t *testing.T) {
+	tests := []struct {
+		s    PathStatus
+		want string
+	}{
+		{PathStatusUnknown, "unknown"},
+		{PathStatusOpen, "open"},
+		{PathStatusInactive, "inactive"},
+		{PathStatusUnusable, "unusable"},
+		{PathStatus(99), "invalid"},
+	}
+	for _, tt := range tests {
+		if got := tt.s.String(); got != tt.want {
+			t.Errorf("PathStatus(%d).String() = %q, want %q", tt.s, got, tt.want)
+		}
+	}
+}
+
+// TestPathEventKindString pins the lowercase rendering of each PathEventKind,
+// including the out-of-range fallback (path_watcher.go:29).
+func TestPathEventKindString(t *testing.T) {
+	tests := []struct {
+		k    PathEventKind
+		want string
+	}{
+		{PathEventOpened, "opened"},
+		{PathEventClosed, "closed"},
+		{PathEventSelected, "selected"},
+		{PathEventLagged, "lagged"},
+		{PathEventKind(42), "invalid"},
+	}
+	for _, tt := range tests {
+		if got := tt.k.String(); got != tt.want {
+			t.Errorf("PathEventKind(%d).String() = %q, want %q", tt.k, got, tt.want)
+		}
+	}
+}
+
+// TestRemotePathStateIsEmptyAndAddrs checks IsEmpty flips false on the first
+// path and that Addrs returns every known address (order-independent), nil-ish
+// for an empty state (path_state.go:96,102).
+func TestRemotePathStateIsEmptyAndAddrs(t *testing.T) {
+	p := NewRemotePathState()
+	if !p.IsEmpty() {
+		t.Error("fresh RemotePathState is not empty")
+	}
+	if got := p.Addrs(); len(got) != 0 {
+		t.Errorf("empty Addrs() len = %d, want 0", len(got))
+	}
+
+	want := []Addr{ipPath(1), ipPath(2), ipPath(3)}
+	for _, a := range want {
+		p.SetOpen(a)
+	}
+	if p.IsEmpty() {
+		t.Error("RemotePathState with 3 paths reports empty")
+	}
+	got := p.Addrs()
+	if len(got) != 3 {
+		t.Fatalf("Addrs() len = %d, want 3", len(got))
+	}
+	have := map[string]bool{}
+	for _, a := range got {
+		have[a.String()] = true
+	}
+	for _, a := range want {
+		if !have[a.String()] {
+			t.Errorf("Addrs() missing %s", a)
+		}
+	}
+}
+
+// TestAddrRelayAndCustom checks the Addr type's Relay/Custom extractors: they
+// return true with the embedded value only for the matching kind, and false for
+// an IP addr. This backs the recvBatch routing (a RelayAddr surfaces a relay
+// path, a CustomAddr a custom path), recvbatch.go Addr.Relay/Addr.Custom.
+func TestAddrRelayAndCustom(t *testing.T) {
+	u, err := base.ParseRelayUrl("https://relay.example.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, _ := base.GenerateSecretKey()
+	eid := sk.Public()
+
+	relay := RelayAddr(u, eid)
+	if gotURL, gotEID, ok := relay.Relay(); !ok {
+		t.Error("RelayAddr.Relay() ok = false, want true")
+	} else if !gotURL.Equal(u) || !gotEID.Equal(eid) {
+		t.Errorf("Relay() = (%s, %s), want (%s, %s)", gotURL, gotEID, u, eid)
+	}
+	if _, ok := relay.Custom(); ok {
+		t.Error("RelayAddr.Custom() ok = true, want false")
+	}
+
+	c := base.CustomAddr{}
+	custom := CustomAddr(c)
+	if _, ok := custom.Custom(); !ok {
+		t.Error("CustomAddr.Custom() ok = false, want true")
+	}
+	if _, _, ok := custom.Relay(); ok {
+		t.Error("CustomAddr.Relay() ok = true, want false")
+	}
+
+	ip := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
+	if _, _, ok := ip.Relay(); ok {
+		t.Error("IPAddr.Relay() ok = true, want false")
+	}
+	if _, ok := ip.Custom(); ok {
+		t.Error("IPAddr.Custom() ok = true, want false")
+	}
+}
+
+// TestAddrStringForms pins the "kind:value" rendering of each Addr variant
+// (recvbatch.go Addr.String); the relay form joins url and eid with '|'.
+func TestAddrStringForms(t *testing.T) {
+	ip := IPAddr(netip.AddrPortFrom(netip.AddrFrom4([4]byte{127, 0, 0, 1}), 7))
+	if got := ip.String(); !strings.HasPrefix(got, "ip:") {
+		t.Errorf("IP Addr.String() = %q, want ip: prefix", got)
+	}
+	u, _ := base.ParseRelayUrl("https://relay.example.")
+	var eid base.EndpointId
+	relay := RelayAddr(u, eid)
+	if got := relay.String(); !strings.HasPrefix(got, "relay:") || !strings.Contains(got, "|") {
+		t.Errorf("relay Addr.String() = %q, want relay:...|... form", got)
+	}
+	if got := CustomAddr(base.CustomAddr{}).String(); !strings.HasPrefix(got, "custom:") {
+		t.Errorf("custom Addr.String() = %q, want custom: prefix", got)
+	}
+	// Out-of-range kind renders "unknown".
+	if got := (Addr{kind: AddrKind(99)}).String(); got != "unknown" {
+		t.Errorf("unknown Addr.String() = %q, want unknown", got)
+	}
+}
+
+// TestActiveRelaySetHomeHome checks the mutex-protected home flag round-trips.
+func TestActiveRelaySetHomeHome(t *testing.T) {
+	r := newActiveRelay(&RelayActor{}, base.RelayUrl{}, false)
+	if r.home() {
+		t.Error("newActiveRelay(home=false).home() = true")
+	}
+	r.setHome(true)
+	if !r.home() {
+		t.Error("after setHome(true), home() = false")
+	}
+	r.setHome(false)
+	if r.home() {
+		t.Error("after setHome(false), home() = true")
+	}
+
+	// Construct home=true.
+	r2 := newActiveRelay(&RelayActor{}, base.RelayUrl{}, true)
+	if !r2.home() {
+		t.Error("newActiveRelay(home=true).home() = false")
+	}
+}
+
+// TestActiveRelayRoutes checks the routes map lifecycle: an unseen endpoint has
+// no route; noteRoute records it (hasRoute=true); dropRoute (EndpointGone)
+// removes it again (relay_actor.go:448,456,468).
+func TestActiveRelayRoutes(t *testing.T) {
+	r := newActiveRelay(&RelayActor{}, base.RelayUrl{}, false)
+	sk, _ := base.GenerateSecretKey()
+	eid := sk.Public()
+
+	if r.hasRoute(eid) {
+		t.Error("fresh activeRelay hasRoute = true, want false")
+	}
+	r.noteRoute(eid)
+	if !r.hasRoute(eid) {
+		t.Error("after noteRoute, hasRoute = false, want true")
+	}
+	r.dropRoute(eid)
+	if r.hasRoute(eid) {
+		t.Error("after dropRoute, hasRoute = true, want false")
+	}
+}
+
+// TestRouteForEndpointLocked checks the actor picks the active relay that knows
+// a route to an endpoint, or nil when none does (relay_actor.go:301).
+func TestRouteForEndpointLocked(t *testing.T) {
+	a := NewRelayActor(RelayActorConfig{})
+	u1, _ := base.ParseRelayUrl("https://relay1.example.")
+	u2, _ := base.ParseRelayUrl("https://relay2.example.")
+	r1 := newActiveRelay(a, u1, false)
+	r2 := newActiveRelay(a, u2, false)
+	a.active[u1.String()] = r1
+	a.active[u2.String()] = r2
+
+	sk, _ := base.GenerateSecretKey()
+	eid := sk.Public()
+
+	a.mu.Lock()
+	if got := a.routeForEndpointLocked(eid); got != nil {
+		a.mu.Unlock()
+		t.Fatal("routeForEndpointLocked found a route before any noteRoute")
+	}
+	a.mu.Unlock()
+
+	r2.noteRoute(eid)
+
+	a.mu.Lock()
+	got := a.routeForEndpointLocked(eid)
+	a.mu.Unlock()
+	if got != r2 {
+		t.Errorf("routeForEndpointLocked = %p, want r2 (%p)", got, r2)
+	}
+}
+
+// TestJitterBounds checks jitter scales a duration by a factor in [0.5, 1.5),
+// matching the Rust ExponentialBuilder jitter (relay_actor.go:760).
+func TestJitterBounds(t *testing.T) {
+	const base = 100 * time.Millisecond
+	lo := base / 2
+	hi := base * 3 / 2
+	var sum time.Duration
+	const n = 1000
+	for i := 0; i < n; i++ {
+		got := jitter(base)
+		if got < lo || got >= hi {
+			t.Fatalf("jitter(%v) = %v, want in [%v, %v)", base, got, lo, hi)
+		}
+		sum += got
+	}
+	mean := sum / n
+	// Mean should be near base (the midpoint of [0.5,1.5) is 1.0); allow slop.
+	if mean < base*3/4 || mean > base*5/4 {
+		t.Errorf("jitter mean = %v, want near %v", mean, base)
+	}
+}
+
+// TestDrain checks drain empties a channel without blocking and is a no-op on an
+// already-empty channel (relay_actor.go:765).
+func TestDrain(t *testing.T) {
+	ch := make(chan int, 4)
+	ch <- 1
+	ch <- 2
+	ch <- 3
+	drain(ch)
+	if len(ch) != 0 {
+		t.Errorf("after drain, len = %d, want 0", len(ch))
+	}
+	// Idempotent: draining an empty channel does not block or panic.
+	drain(ch)
+	if len(ch) != 0 {
+		t.Errorf("after second drain, len = %d, want 0", len(ch))
+	}
+}
+
+// TestRelayConnStateString pins the lowercase rendering of each RelayConnState,
+// including the out-of-range fallback (relay_actor.go:75).
+func TestRelayConnStateString(t *testing.T) {
+	tests := []struct {
+		s    RelayConnState
+		want string
+	}{
+		{RelayConnecting, "connecting"},
+		{RelayConnected, "connected"},
+		{RelayDisconnected, "disconnected"},
+		{RelayConnState(7), "unknown"},
+	}
+	for _, tt := range tests {
+		if got := tt.s.String(); got != tt.want {
+			t.Errorf("RelayConnState(%d).String() = %q, want %q", tt.s, got, tt.want)
+		}
+	}
+}
+
+// TestRemoteStateActorID checks ID returns the endpoint the actor manages.
+func TestRemoteStateActorID(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	id := testEndpointId(t)
+	a := m.Actor(id)
+	if !a.ID().Equal(id) {
+		t.Errorf("ID() = %s, want %s", a.ID(), id)
+	}
+}
+
+// TestRemoteStateActorPathEvents checks PathEvents returns a fresh subscription
+// that receives events and a cancel that closes the channel.
+func TestRemoteStateActorPathEvents(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+
+	ch, cancelSub := a.PathEvents()
+
+	// Adding a connection drives Opened/Selected events to all subscribers,
+	// including this one.
+	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 4243))
+	c := newFakeConn(addr, 5*time.Millisecond)
+	defer c.Close()
+	m.AddConnection(a.ID(), c)
+
+	select {
+	case ev, ok := <-ch:
+		if !ok {
+			t.Fatal("PathEvents channel closed before any event")
+		}
+		if ev.Kind != PathEventOpened && ev.Kind != PathEventSelected {
+			t.Errorf("event kind = %v, want opened or selected", ev.Kind)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("PathEvents subscription received no event")
+	}
+
+	// Cancelling the subscription closes its channel.
+	cancelSub()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				return // closed: success
+			}
+		case <-deadline:
+			t.Fatal("PathEvents channel not closed after cancel")
+		}
+	}
+}
+
+// TestRemoteMapDropIfStopped checks the identity guard in dropIfStopped: it
+// removes the actor only when the instance passed is the one registered under id
+// (remotemap.go:156). The "is it stopped" decision is the caller's
+// (AddConnection guards on donec before calling); dropIfStopped's own invariant
+// is that it never evicts a *different* actor that has since taken the id, which
+// is what makes the spawn/teardown retry in AddConnection safe (O12).
+func TestRemoteMapDropIfStopped(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	id := testEndpointId(t)
+
+	// A stale actor reference whose registration was already replaced must not
+	// evict the current actor: m.actors[id] != stale, so dropIfStopped is a
+	// no-op. Use the live actor's own pointer offset by a fresh, unregistered
+	// actor under a different id to stand in as "stale for this id".
+	current := m.Actor(id)
+	other := m.Actor(testEndpointId(t)) // registered under a different id
+	if m.Len() != 2 {
+		t.Fatalf("Len = %d, want 2 after two distinct Actor() calls", m.Len())
+	}
+
+	// dropIfStopped(id, other): other != m.actors[id], so nothing is removed.
+	m.dropIfStopped(id, other)
+	if m.Len() != 2 {
+		t.Errorf("dropIfStopped with a non-matching actor evicted something; Len = %d, want 2", m.Len())
+	}
+	if got := m.Actor(id); got != current {
+		t.Error("dropIfStopped with a non-matching actor replaced the live actor")
+	}
+
+	// dropIfStopped(id, current): current == m.actors[id], so it is removed,
+	// freeing the id for a fresh actor on the next reference.
+	m.dropIfStopped(id, current)
+	if got := m.Actor(id); got == current {
+		t.Error("after dropIfStopped(id, current), Actor returned the dropped actor")
+	}
+}
+
+// TestTriggerHolepunchSentinel asserts the qng X2 degradation contract using
+// errors.Is against the exact ErrExtensionNotNegotiated sentinel
+// (remote_state.go:382). Hole-punching is gated behind the unported QNT
+// extension and must fail closed, never silently pretend success.
+func TestTriggerHolepunchSentinel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+	err := a.TriggerHolepunch()
+	if !errors.Is(err, ErrExtensionNotNegotiated) {
+		t.Errorf("TriggerHolepunch() = %v, want errors.Is ErrExtensionNotNegotiated", err)
+	}
+}
+
+// TestSocketCustomMappedAddrFor checks the custom mapped-address table is stable
+// for the same CustomAddr and that LookupCustom round-trips it (socket.go:101,
+// 137).
+func TestSocketCustomMappedAddrFor(t *testing.T) {
+	s := NewSocket()
+	c := base.CustomAddr{}
+
+	m1 := s.CustomMappedAddrFor(c)
+	m2 := s.CustomMappedAddrFor(c)
+	if m1 != m2 {
+		t.Error("CustomMappedAddrFor is not stable for the same CustomAddr")
+	}
+	if Classify(m1.Addr()) != KindCustom {
+		t.Errorf("custom mapped addr %s did not classify as custom", m1.Addr())
+	}
+
+	got, ok := s.LookupCustom(m1)
+	if !ok {
+		t.Fatal("LookupCustom(known) ok = false, want true")
+	}
+	if got.String() != c.String() {
+		t.Errorf("LookupCustom = %s, want %s", got, c)
+	}
+
+	// An unregistered custom mapped address is unknown.
+	if _, ok := s.LookupCustom(NewCustomMappedAddr()); ok {
+		t.Error("LookupCustom(unknown) ok = true, want false")
+	}
+}
+
+// TestSocketPathAddr checks PathAddr classifies a real IP as an IP path, a
+// registered relay mapped ULA back to its RelayAddr, and an unknown mapped ULA
+// down to a fallback IP path (socket.go:115).
+func TestSocketPathAddr(t *testing.T) {
+	s := NewSocket()
+	u, _ := base.ParseRelayUrl("https://relay.example.")
+	sk, _ := base.GenerateSecretKey()
+	eid := sk.Public()
+
+	// Real IP -> IP path, port preserved.
+	realIP := net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 0, 2, 9}), 443))
+	got := s.PathAddr(eid, realIP)
+	if ap, ok := got.IP(); !ok {
+		t.Errorf("PathAddr(real IP) kind = %v, want IP", got.Kind())
+	} else if ap.Port() != 443 {
+		t.Errorf("PathAddr(real IP) port = %d, want 443", ap.Port())
+	}
+
+	// Registered relay mapped ULA -> RelayAddr with the original (url, eid).
+	relayMapped := s.RelayMappedAddrFor(u, eid)
+	gotRelay := s.PathAddr(eid, mappedUDPAddr(relayMapped.Addr()))
+	if gu, ge, ok := gotRelay.Relay(); !ok {
+		t.Errorf("PathAddr(relay mapped) kind = %v, want relay", gotRelay.Kind())
+	} else if !gu.Equal(u) || !ge.Equal(eid) {
+		t.Errorf("PathAddr(relay mapped) = (%s, %s), want (%s, %s)", gu, ge, u, eid)
+	}
+
+	// Unknown relay mapped ULA (never registered) -> fallback IP path.
+	unknown := NewRelayMappedAddr()
+	gotFallback := s.PathAddr(eid, mappedUDPAddr(unknown.Addr()))
+	if _, ok := gotFallback.IP(); !ok {
+		t.Errorf("PathAddr(unknown mapped) kind = %v, want IP fallback", gotFallback.Kind())
+	}
+}
+
+// TestIpTransportLocalAddr checks LocalAddr reflects the bound UDP socket
+// (ip.go:33).
+func TestIpTransportLocalAddr(t *testing.T) {
+	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+
+	ch := make(chan recvBatch, 1)
+	tr := NewIpTransport(udp, ch)
+	if tr.LocalAddr().String() != udp.LocalAddr().String() {
+		t.Errorf("LocalAddr() = %s, want %s", tr.LocalAddr(), udp.LocalAddr())
+	}
+}
+
+// TestRelayTransportSetHomeAndStatus checks the RelayTransport delegates
+// SetHomeRelay and HomeRelayStatus to its actor: setting the home relay drives
+// the watcher to a connected status for that URL (relay.go:115,119).
+func TestRelayTransportSetHomeAndStatus(t *testing.T) {
+	client := newFakeRelayClient()
+	a, _ := startActorWith(t, client)
+	sock := NewSocket()
+	recvCh := make(chan recvBatch, 8)
+	rt := NewRelayTransport(sock, a, recvCh)
+
+	w := rt.HomeRelayStatus()
+	url := testURL(t)
+	rt.SetHomeRelay(url)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		st, err := w.Updated(ctx)
+		if err != nil {
+			t.Fatalf("watcher: %v", err)
+		}
+		if st != nil && st.URL.Equal(url) && st.IsConnected() {
+			return
+		}
+	}
+}
+
+// TestRelayTransportServeForwardsRecv drives the full Serve/forwardRecv/deliver
+// path: a relay-to-client datagram fed through the fake client surfaces on the
+// transport's recv channel as a recvBatch tagged with the relay Addr, and a
+// GRO-batched datagram is split into one recvBatch per segment
+// (relay.go:35,46,62).
+func TestRelayTransportServeForwardsRecv(t *testing.T) {
+	client := newFakeRelayClient()
+	// Build the actor but do not run it here: RelayTransport.Serve runs it
+	// exactly once. (startActorWith would run a second Run, double-closing recvCh.)
+	sk, _ := base.GenerateSecretKey()
+	a := NewRelayActor(RelayActorConfig{
+		SecretKey: sk,
+		dialer:    func(context.Context, base.RelayUrl, relayclient.Options) (relayClient, error) { return client, nil },
+	})
+	sock := NewSocket()
+	recvCh := make(chan recvBatch, 16)
+	rt := NewRelayTransport(sock, a, recvCh)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go rt.Serve(ctx)
+	t.Cleanup(cancel)
+
+	url := testURL(t)
+	src, _ := base.GenerateSecretKey()
+	a.SetHomeRelay(url)
+
+	// Kick the active relay alive so it begins draining recv frames.
+	dst, _ := base.GenerateSecretKey()
+	a.Send(RelaySendItem{RemoteEndpoint: dst.Public(), URL: url, Datagrams: relayproto.DatagramsFromBytes([]byte("x"))})
+	waitDatagramSend(t, client)
+
+	// A GRO batch with segment size 2 over 6 bytes -> three recvBatches.
+	client.recv <- relayproto.RelayToClientMsg{
+		Type:             relayproto.FrameRelayToClientDatagramBat,
+		RemoteEndpointId: src.Public(),
+		Datagrams:        relayproto.Datagrams{SegmentSize: 2, Contents: []byte("aabbcc")},
+	}
+
+	want := []string{"aa", "bb", "cc"}
+	deadline := time.After(5 * time.Second)
+	for i, w := range want {
+		select {
+		case b := <-recvCh:
+			if string(b.data) != w {
+				t.Errorf("segment %d = %q, want %q", i, b.data, w)
+			}
+			// Each batch must be tagged with the relay Addr it arrived on.
+			gu, ge, ok := b.info.Remote.Relay()
+			if !ok {
+				t.Errorf("segment %d Remote kind = %v, want relay", i, b.info.Remote.Kind())
+			} else if !gu.Equal(url) || !ge.Equal(src.Public()) {
+				t.Errorf("segment %d Remote = (%s, %s), want (%s, %s)", i, gu, ge, url, src.Public())
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for segment %d", i)
+		}
+	}
+}
+
+// TestRelayTransportDeliverSegments unit-tests deliver directly: an 8-byte
+// datagram with segment size 3 yields three recvBatches of 3, 3, 2 bytes, and a
+// cancelled context stops delivery early (relay.go:62).
+func TestRelayTransportDeliverSegments(t *testing.T) {
+	sock := NewSocket()
+	recvCh := make(chan recvBatch, 8)
+	rt := NewRelayTransport(sock, NewRelayActor(RelayActorConfig{}), recvCh)
+
+	url := testURL(t)
+	src, _ := base.GenerateSecretKey()
+	dm := RelayRecvDatagram{
+		URL:       url,
+		Src:       src.Public(),
+		Datagrams: relayproto.Datagrams{SegmentSize: 3, Contents: []byte("aaabbbcc")},
+	}
+
+	rt.deliver(context.Background(), dm)
+	wantLens := []int{3, 3, 2}
+	for i, wl := range wantLens {
+		select {
+		case b := <-recvCh:
+			if len(b.data) != wl {
+				t.Errorf("segment %d len = %d, want %d", i, len(b.data), wl)
+			}
+		default:
+			t.Fatalf("missing segment %d", i)
+		}
+	}
+
+	// A cancelled context makes deliver return before enqueuing into a full
+	// channel; with no reader, only the channel's free slots fill, then it stops.
+	full := make(chan recvBatch) // unbuffered, no reader -> blocks immediately
+	rt2 := NewRelayTransport(sock, NewRelayActor(RelayActorConfig{}), full)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		rt2.deliver(ctx, dm)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("deliver did not return on cancelled context")
+	}
+}
+
+// TestDefaultRelayDialer checks the default dialer attempts a real relayclient
+// connection. With no usable relay reachable the dial fails (or the supplied
+// already-cancelled context aborts it); either way it must return promptly
+// without panicking, exercising the relayclient.Connect indirection
+// (relay_actor.go:143).
+func TestDefaultRelayDialer(t *testing.T) {
+	url := testURL(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // abort before any network work
+
+	sk, _ := base.GenerateSecretKey()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c, err := defaultRelayDialer(ctx, url, relayclient.Options{SecretKey: sk})
+		if err == nil && c != nil {
+			c.Close()
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("defaultRelayDialer did not return on a cancelled context")
+	}
+}
+
+// TestMagicConnRelayAccessor pins the Relay accessor (nil without a relay actor,
+// non-nil with one) and the SetDeadline/SetWriteDeadline behavior. SyscallConn,
+// SetReadBuffer and SetWriteBuffer delegate to the underlying live UDP socket and
+// so succeed here; this test pins the accessor and deadline surface that has no
+// UDP delegation failure mode (transport.go:83,198,213).
+func TestMagicConnRelayAccessor(t *testing.T) {
+	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sock := NewSocket()
+
+	// No relay actor: Relay() is nil.
+	m := NewMagicConn(sock, udp)
+	if m.Relay() != nil {
+		t.Error("MagicConn without relay actor: Relay() != nil")
+	}
+
+	// With a relay actor: Relay() is non-nil.
+	udp2, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp2.Close()
+	a := NewRelayActor(RelayActorConfig{})
+	m2 := NewMagicConnWithRelay(NewSocket(), udp2, a)
+	if m2.Relay() == nil {
+		t.Error("MagicConn with relay actor: Relay() == nil")
+	}
+
+	// SetDeadline(future) then SetDeadline(zero) clears: a read after the future
+	// deadline expires returns a timeout, but a cleared deadline does not.
+	m.SetDeadline(time.Now().Add(-time.Second))
+	if _, _, err := m.ReadFrom(make([]byte, 8)); err == nil {
+		t.Error("ReadFrom after past SetDeadline returned nil error, want timeout")
+	} else if ne, ok := err.(net.Error); !ok || !ne.Timeout() {
+		t.Errorf("ReadFrom err = %v, want timeout net.Error", err)
+	}
+	// Clear the deadline; SetWriteDeadline is accepted (no enforcement on WriteTo).
+	if err := m.SetDeadline(time.Time{}); err != nil {
+		t.Errorf("SetDeadline(zero) = %v, want nil", err)
+	}
+	if err := m.SetWriteDeadline(time.Now().Add(time.Hour)); err != nil {
+		t.Errorf("SetWriteDeadline = %v, want nil", err)
+	}
+	// WriteTo still succeeds (deadline not enforced on the blackhole path).
+	if n, err := m.WriteTo([]byte("hi"), net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 9))); err != nil || n != 2 {
+		t.Errorf("WriteTo after SetWriteDeadline = (%d, %v), want (2, nil)", n, err)
+	}
+
+	m.Close()
+}
