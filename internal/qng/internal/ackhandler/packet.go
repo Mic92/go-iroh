@@ -25,6 +25,13 @@ type packet struct {
 
 	includedInBytesInFlight bool
 	isPathProbePacket       bool
+
+	// pathID is the application-data PathID this packet was sent on (multipath,
+	// draft-ietf-quic-multipath). It is PathIDZero for every Initial/Handshake/
+	// 0-RTT packet and for every single-path 1-RTT packet, so the per-path
+	// bytes-in-flight accounting in removeFromBytesInFlight resolves to the
+	// PathIDZero counter exactly as before unless a non-zero path is opened.
+	pathID protocol.PathID
 }
 
 func (p *packet) Outstanding() bool {
@@ -48,6 +55,7 @@ func getPacket() *packet {
 	p.IsPathMTUProbePacket = false
 	p.includedInBytesInFlight = false
 	p.isPathProbePacket = false
+	p.pathID = protocol.PathIDZero
 	return p
 }
 

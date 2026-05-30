@@ -162,6 +162,42 @@ type Conn struct {
 	// connIDManager.Get.
 	perPathDestConnIDs map[protocol.PathID]protocol.ConnectionID
 
+	// pathAcksReceived counts inbound PATH_ACK / PATH_ACK_ECN frames (multipath,
+	// per non-zero PathID). It is observable from any goroutine (atomic) so a
+	// test can confirm a second path's packets were acknowledged with PATH_ACK
+	// frames, driving that path's bytes-in-flight down. It is never touched on a
+	// single-path connection.
+	pathAcksReceived atomic.Uint64
+
+	// lastPathAckID records the PathID carried by the most recently received
+	// PATH_ACK / PATH_ACK_ECN frame (stored as id+1 so the zero value means "no
+	// PATH_ACK seen", since PathIDZero is a legitimate id). It is observable from
+	// any goroutine (atomic) so a test can confirm an acknowledgement arrived for
+	// the specific non-zero path it expected, not merely "some path".
+	lastPathAckID atomic.Uint64
+
+	// multipathOut is the send-side multipath orchestration state (5f): the
+	// per-PathID validation/scheduling owned exclusively by the run goroutine.
+	// It is nil until the first Conn.OpenPath. All access happens in the run
+	// loop, so it needs no lock; OpenPath hands work to the run loop over
+	// openPathQueue. See multipath_outgoing.go.
+	multipathOut *multipathOutgoing
+	// openPathQueue carries OpenPath requests from application goroutines into
+	// the run goroutine, the only safe place to touch sentPacketHandler /
+	// receivedPacketHandler / connIDGenerator (none are mutex-guarded). Buffered
+	// so OpenPath never blocks the caller before scheduleSending wakes the loop.
+	openPathQueue chan *openPathRequest
+	// pathDatagramQueue carries per-path DATAGRAM sends (MultipathPath.SendDatagram)
+	// into the run goroutine, where they are appended to the target path's
+	// sendData and packed by sendOnPath over that path specifically.
+	pathDatagramQueue chan pathDatagram
+	// pathStatsQueue carries live per-path recovery-stat queries from a test
+	// goroutine into the run goroutine, the only goroutine that may read the
+	// (lock-free) sentPacketHandler. It exists purely so the multipath e2e test
+	// can confirm path-1 packets really flowed in path 1's own number space and
+	// controller. It is never used on a production connection.
+	pathStatsQueue chan *pathStatsRequest
+
 	streamsMap      *streamsMap
 	connIDManager   *connIDManager
 	connIDGenerator *connIDGenerator
@@ -387,7 +423,7 @@ var newConnection = func(
 		s.version,
 	)
 	s.cryptoStreamHandler = cs
-	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective)
+	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.destConnIDForPath, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective)
 	s.unpacker = newPacketUnpacker(cs, s.srcConnIDLen)
 	s.cryptoStreamManager = newCryptoStreamManager(s.initialStream, s.handshakeStream, s.oneRTTStream)
 	return &wrappedConn{Conn: s}
@@ -514,7 +550,7 @@ var newClientConnection = func(
 	s.cryptoStreamHandler = cs
 	s.cryptoStreamManager = newCryptoStreamManager(s.initialStream, s.handshakeStream, oneRTTStream)
 	s.unpacker = newPacketUnpacker(cs, s.srcConnIDLen)
-	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective)
+	s.packer = newPacketPacker(srcConnID, s.connIDManager.Get, s.destConnIDForPath, s.initialStream, s.handshakeStream, s.sentPacketHandler, s.retransmissionQueue, cs, s.framer, &s.receivedPacketHandler, s.datagramQueue, s.perspective)
 	if len(tlsConf.ServerName) > 0 {
 		s.tokenStoreKey = tlsConf.ServerName
 	} else {
@@ -533,6 +569,9 @@ func (c *Conn) preSetup() {
 	c.largestRcvdAppData = protocol.InvalidPacketNumber
 	c.multipathManager = newMultipathManager()
 	c.perPathDestConnIDs = make(map[protocol.PathID]protocol.ConnectionID)
+	c.openPathQueue = make(chan *openPathRequest, 4)
+	c.pathDatagramQueue = make(chan pathDatagram, maxDatagramSendQueueLen)
+	c.pathStatsQueue = make(chan *pathStatsRequest, 4)
 	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient)
 	c.handshakeStream = newCryptoStream()
 	c.sendQueue = newSendQueue(c.conn)
@@ -750,6 +789,21 @@ runLoop:
 
 		c.blocked = blockModeNone // sending might set it back to true if we're congestion limited
 		if err := c.triggerSending(now); err != nil {
+			c.setCloseError(&closeError{err: err})
+			break runLoop
+		}
+		// Multipath (draft-ietf-quic-multipath) send scheduling (5f). Provision
+		// any path the application asked to open, then drive PATH_CHALLENGE
+		// validation and per-path 1-RTT sends for every open non-zero path. This
+		// runs in the run goroutine, after the ordinary path-0 send, so it never
+		// races the sentPacketHandler / packer. It is a no-op until OpenPath.
+		if err := c.processOpenPathRequests(); err != nil {
+			c.setCloseError(&closeError{err: err})
+			break runLoop
+		}
+		c.processPathStatsRequests()
+		c.drainPathDatagrams()
+		if err := c.driveMultipath(now); err != nil {
 			c.setCloseError(&closeError{err: err})
 			break runLoop
 		}
@@ -1268,6 +1322,11 @@ func (c *Conn) handleShortHeaderPacket(
 		})
 		return false, nil
 	}
+	// Resolve which multipath PathID this 1-RTT packet arrived on, from its
+	// destination connection ID. With multipath off this is always PathIDZero,
+	// so duplicate detection and received-packet tracking are byte-identical to
+	// single-path.
+	pid := c.pathForReceivedConnID(destConnID)
 	pn, pnLen, keyPhase, data, err := c.unpacker.UnpackShortHeader(p.rcvTime, p.data)
 	if err != nil {
 		// Stateless reset packets (see RFC 9000, section 10.3):
@@ -1291,7 +1350,7 @@ func (c *Conn) handleShortHeaderPacket(
 		wire.LogShortHeader(c.logger, destConnID, pn, pnLen, keyPhase)
 	}
 
-	if c.receivedPacketHandler.IsPotentiallyDuplicate(pn, protocol.Encryption1RTT) {
+	if c.isPotentiallyDuplicate1RTT(pn, pid) {
 		c.logger.Debugf("Dropping (potentially) duplicate packet.")
 		if c.qlogger != nil {
 			c.qlogger.RecordEvent(qlog.PacketDropped{
@@ -1829,15 +1888,60 @@ func (c *Conn) handleUnpackedShortHeaderPacket(
 	c.firstAckElicitingPacketAfterIdleSentTime = 0
 	c.keepAlivePingSent = false
 
+	// Resolve which multipath PathID this packet arrived on from its destination
+	// connection ID. With multipath off this is always PathIDZero, so the receive
+	// bookkeeping below is byte-identical to single-path.
+	pid := c.pathForReceivedConnID(destConnID)
+	if pid != protocol.PathIDZero {
+		// Ensure the path is provisioned before we account a received packet on
+		// it. It normally already is (we joined when the peer issued its path CID),
+		// but guard against a packet that races the join.
+		if !c.maybeJoinPath(pid) {
+			pid = protocol.PathIDZero
+		}
+	}
+
 	isAckEliciting, isNonProbing, pathChallenge, err := c.handleFrames(data, destConnID, protocol.Encryption1RTT, log, rcvTime)
 	if err != nil {
 		return false, nil, err
 	}
 	c.sentPacketHandler.ReceivedPacket(protocol.Encryption1RTT, rcvTime)
-	if err := c.receivedPacketHandler.ReceivedPacket(pn, ecn, protocol.Encryption1RTT, rcvTime, isAckEliciting); err != nil {
-		return false, nil, err
+	if pid == protocol.PathIDZero {
+		if err := c.receivedPacketHandler.ReceivedPacket(pn, ecn, protocol.Encryption1RTT, rcvTime, isAckEliciting); err != nil {
+			return false, nil, err
+		}
+	} else {
+		// Track the packet in pid's own received-packet space so it is
+		// acknowledged as a PATH_ACK{pid} (5e), not folded into path 0's ACK.
+		if err := c.receivedPacketHandler.ReceivedPacketForPath(pn, ecn, pid, rcvTime, isAckEliciting); err != nil {
+			return false, nil, err
+		}
+		// A PATH_CHALLENGE that arrived on a non-zero path validates that path for
+		// the peer; respond with a PATH_RESPONSE. We send it on the same non-zero
+		// path so the response rides pid's connection ID. RFC 9000 §8.2 allows the
+		// response on any path, but keeping it on pid keeps the two paths'
+		// signaling self-contained (paths.rs:505-506). The RFC 9000 single-path
+		// migration responder (pathManager) is bypassed for non-zero paths.
+		if pathChallenge != nil {
+			c.queueMultipathPathResponse(pid, pathChallenge.Data)
+			// consume it so the single-path migration logic in
+			// handleShortHeaderPacket does not also act on it.
+			pathChallenge = nil
+		}
+		c.scheduleSending()
 	}
 	return isNonProbing, pathChallenge, nil
+}
+
+// queueMultipathPathResponse records a PATH_RESPONSE to send on a non-zero
+// multipath path. It is driven out by driveMultipath (sendOnPath does not carry
+// it; PATH_RESPONSE must echo the challenge promptly, so it goes through a
+// dedicated per-path response queue). Run goroutine only.
+func (c *Conn) queueMultipathPathResponse(pid protocol.PathID, data [8]byte) {
+	if c.multipathOut == nil {
+		c.multipathOut = newMultipathOutgoing()
+	}
+	c.multipathOut.queuePathResponse(pid, data)
 }
 
 // handleFrames parses the frames, one after the other, and handles them.
@@ -2060,8 +2164,59 @@ func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) erro
 			ErrorMessage: "received a PATH_NEW_CONNECTION_ID frame for PathID 0",
 		}
 	}
-	c.perPathDestConnIDs[*frame.PathID] = frame.ConnectionID
+	pid := *frame.PathID
+	c.perPathDestConnIDs[pid] = frame.ConnectionID
+	// The peer issued a connection ID for path pid, i.e. it opened the path from
+	// its side. If pid is within our own gate, lazily join the path: provision
+	// our per-path send/recv state and reciprocate with our own
+	// PATH_NEW_CONNECTION_ID so the peer can address pid's packets to us. This is
+	// the symmetric path-open for the side that did not call OpenPath (typically
+	// the server). If the gate is not satisfied (e.g. the peer has not raised our
+	// max path id), we only record the DCID, exactly as Stage 4c/5c did — the
+	// join happens later, when a packet actually arrives on the path.
+	c.maybeJoinPath(pid)
 	return nil
+}
+
+// maybeJoinPath provisions the local send/recv recovery state for a non-zero
+// multipath path and issues one of our connection IDs for it (if we have not
+// already), so the peer can address the path to us. It is idempotent and a
+// no-op unless the path is within our gate (canOpenPath). It runs in the run
+// goroutine. It is the join point for the peer that did not initiate the path
+// via OpenPath. It reports whether the path is now provisioned.
+func (c *Conn) maybeJoinPath(pid protocol.PathID) bool {
+	if pid == protocol.PathIDZero {
+		return false
+	}
+	if c.multipathOut == nil {
+		c.multipathOut = newMultipathOutgoing()
+	}
+	if _, ok := c.multipathOut.paths[pid]; ok {
+		return true // already provisioned (we initiated, or a duplicate frame)
+	}
+	if !c.canOpenPath(pid) {
+		return false
+	}
+	if err := c.sentPacketHandler.AddPath(pid); err != nil {
+		return false
+	}
+	if err := c.receivedPacketHandler.AddPath(pid, c.logger); err != nil {
+		return false
+	}
+	if _, err := c.issuePathConnID(pid); err != nil {
+		return false
+	}
+	// A path joined by the peer is open from our perspective: we answer its
+	// PATH_CHALLENGEs and may carry data + PATH_ACKs on it. Only the initiator
+	// runs the local PATH_CHALLENGE validation, so this side is marked validated.
+	st := &pathOpenState{id: pid, validated: true, validatedChan: make(chan struct{})}
+	close(st.validatedChan)
+	c.multipathOut.paths[pid] = st
+	if c.multipathOut.nextPathID <= pid {
+		c.multipathOut.nextPathID = pid + 1
+	}
+	c.scheduleSending()
+	return true
 }
 
 // destConnIDForPath returns the destination connection ID to use when sending a
@@ -2076,6 +2231,36 @@ func (c *Conn) destConnIDForPath(pid protocol.PathID) (protocol.ConnectionID, bo
 	}
 	connID, ok := c.perPathDestConnIDs[pid]
 	return connID, ok
+}
+
+// isPotentiallyDuplicate1RTT reports whether a 1-RTT packet number pn on path
+// pid was already received. Duplicate detection is per-path: each PathID has its
+// own packet-number space, so path 1's pn=0 is NOT a duplicate of path 0's pn=0
+// (Stage 4 spec risk #1). For PathIDZero it is identical to the former
+// connection-level IsPotentiallyDuplicate(Encryption1RTT).
+func (c *Conn) isPotentiallyDuplicate1RTT(pn protocol.PacketNumber, pid protocol.PathID) bool {
+	if pid == protocol.PathIDZero {
+		return c.receivedPacketHandler.IsPotentiallyDuplicate(pn, protocol.Encryption1RTT)
+	}
+	return c.receivedPacketHandler.IsPotentiallyDuplicateForPath(pn, pid)
+}
+
+// pathForReceivedConnID resolves the multipath PathID an inbound 1-RTT packet
+// belongs to from its destination connection ID (one of OUR issued source CIDs).
+// PathIDZero's CIDs flow through the connection-level connIDGenerator;
+// non-zero-path CIDs are issued by issuePathConnID. With multipath off, or for
+// any CID we did not issue for a non-zero path, this returns PathIDZero, so the
+// receive routing is byte-identical to single-path. It runs in the run
+// goroutine (called from packet handling), so touching connIDGenerator is safe.
+func (c *Conn) pathForReceivedConnID(connID protocol.ConnectionID) protocol.PathID {
+	if !c.multipathNegotiated() {
+		return protocol.PathIDZero
+	}
+	pid, ok := c.connIDGenerator.pathForLocalConnID(connID)
+	if !ok {
+		return protocol.PathIDZero
+	}
+	return pid
 }
 
 // issuePathConnID issues one of our connection IDs for the QUIC multipath path
@@ -2110,6 +2295,8 @@ func (c *Conn) handlePathAckFrame(frame *wire.PathAckFrame, rcvTime monotime.Tim
 	if err := c.rejectIfMultipathOff("PATH_ACK"); err != nil {
 		return err
 	}
+	c.pathAcksReceived.Add(1)
+	c.lastPathAckID.Store(uint64(frame.PathID) + 1)
 	return c.handleAckFrameForPath(&frame.Ack, frame.PathID, rcvTime)
 }
 
@@ -2262,6 +2449,13 @@ func (c *Conn) handlePathChallengeFrame(f *wire.PathChallengeFrame) {
 }
 
 func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame) error {
+	// A PATH_RESPONSE might validate an outgoing multipath path (5f) rather than
+	// an RFC 9000 single-path migration. Check multipath first; if it matched, we
+	// are done. This keeps the two validators (draft-multipath vs RFC 9000
+	// migration) cleanly separated.
+	if c.handleMultipathPathResponse(f) {
+		return nil
+	}
 	switch c.perspective {
 	case protocol.PerspectiveClient:
 		return c.handlePathResponseFrameClient(f)
@@ -3036,6 +3230,23 @@ func (c *Conn) registerPackedShortHeaderPacket(p shortHeaderPacket, ecn protocol
 	largestAcked := protocol.InvalidPacketNumber
 	if p.Ack != nil {
 		largestAcked = p.Ack.LargestAcked()
+	}
+	// A packet packed for a non-zero multipath path is recorded against that
+	// path's own send state (its number space + congestion controller). For
+	// PathIDZero this is identical to the SentPacket call above.
+	if p.PathID != protocol.PathIDZero {
+		c.sentPacketHandler.SentPacketForPath(
+			now,
+			p.PacketNumber,
+			largestAcked,
+			p.PathID,
+			p.StreamFrames,
+			p.Frames,
+			ecn,
+			p.Length,
+			p.IsPathMTUProbePacket,
+		)
+		return
 	}
 	c.sentPacketHandler.SentPacket(
 		now,

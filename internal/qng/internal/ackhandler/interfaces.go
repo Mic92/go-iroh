@@ -10,6 +10,11 @@ import (
 type SentPacketHandler interface {
 	// SentPacket may modify the packet
 	SentPacket(t monotime.Time, pn, largestAcked protocol.PacketNumber, streamFrames []StreamFrame, frames []Frame, encLevel protocol.EncryptionLevel, ecn protocol.ECN, size protocol.ByteCount, isPathMTUProbePacket, isPathProbePacket bool)
+	// SentPacketForPath records a 1-RTT packet sent on the application-data
+	// path pid (multipath). The bytes-in-flight, packet-number bookkeeping, and
+	// congestion accounting land on pid's own appDataPath. For PathIDZero it is
+	// identical to SentPacket with Encryption1RTT.
+	SentPacketForPath(t monotime.Time, pn, largestAcked protocol.PacketNumber, pid protocol.PathID, streamFrames []StreamFrame, frames []Frame, ecn protocol.ECN, size protocol.ByteCount, isPathMTUProbePacket bool)
 	// ReceivedAck processes an ACK frame.
 	// It does not store a copy of the frame.
 	ReceivedAck(f *wire.AckFrame, encLevel protocol.EncryptionLevel, rcvTime monotime.Time) (bool /* 1-RTT packet acked */, error)
@@ -30,6 +35,10 @@ type SentPacketHandler interface {
 
 	// The SendMode determines if and what kind of packets can be sent.
 	SendMode(now monotime.Time) SendMode
+	// SendModeForPath is SendMode for a send targeting application-data path
+	// pid: the congestion/pacing checks use pid's own controller. For
+	// PathIDZero it is identical to SendMode.
+	SendModeForPath(now monotime.Time, pid protocol.PathID) SendMode
 	// TimeUntilSend is the time when the next packet should be sent.
 	// It is used for pacing packets.
 	TimeUntilSend() monotime.Time
@@ -41,9 +50,41 @@ type SentPacketHandler interface {
 	ECNMode(isShortHeaderPacket bool) protocol.ECN // isShortHeaderPacket should only be true for non-coalesced 1-RTT packets
 	PeekPacketNumber(protocol.EncryptionLevel) (protocol.PacketNumber, protocol.PacketNumberLen)
 	PopPacketNumber(protocol.EncryptionLevel) protocol.PacketNumber
+	// PeekPacketNumberForPath / PopPacketNumberForPath operate on the
+	// application-data packet-number space of path pid. For PathIDZero they are
+	// identical to Peek/PopPacketNumber(Encryption1RTT).
+	PeekPacketNumberForPath(pid protocol.PathID) (protocol.PacketNumber, protocol.PacketNumberLen)
+	PopPacketNumberForPath(pid protocol.PathID) protocol.PacketNumber
 
 	GetLossDetectionTimeout() monotime.Time
 	OnLossDetectionTimeout(now monotime.Time) error
 
 	MigratedPath(now monotime.Time, initialMaxPacketSize protocol.ByteCount)
+
+	// PathDebugStats reports the live application-data recovery state of path
+	// pid. It exists so the multipath end-to-end test can prove, on a real
+	// connection, that a non-zero path genuinely carried packets (LargestSent)
+	// in its own number space and that the path has its own congestion
+	// controller + RTT estimator distinct from path 0 and the connection
+	// (Stage 4 spec risk #4). It must be called from the run goroutine.
+	PathDebugStats(pid protocol.PathID) (PathDebugStats, bool)
+}
+
+// PathDebugStats is the live per-path recovery snapshot returned by
+// SentPacketHandler.PathDebugStats. It is test-support state, not part of the
+// wire protocol.
+type PathDebugStats struct {
+	// LargestSent is the largest packet number sent in pid's own
+	// application-data number space (InvalidPacketNumber if none yet). A value
+	// >= 0 proves a packet was packed and sent for pid specifically.
+	LargestSent protocol.PacketNumber
+	// LargestAcked is the largest packet number acknowledged in pid's space.
+	LargestAcked protocol.PacketNumber
+	// BytesInFlight is pid's current application-data bytes in flight.
+	BytesInFlight protocol.ByteCount
+	// DistinctController is true when pid's congestion controller and RTT
+	// estimator are both distinct from path 0's and from the connection-level
+	// objects (the Stage 4 risk-#4 gate). It is always false for PathIDZero,
+	// which aliases the connection objects by design.
+	DistinctController bool
 }

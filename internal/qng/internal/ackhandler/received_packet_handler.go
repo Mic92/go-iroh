@@ -36,9 +36,81 @@ func NewReceivedPacketHandler(logger utils.Logger) *ReceivedPacketHandler {
 }
 
 // getAppDataPath returns the per-path application-data tracker for pid. The map
-// always contains the PathIDZero entry.
+// always contains the PathIDZero entry; an unknown pid returns nil so callers
+// can reject path-qualified work for paths that have not been opened.
 func (h *ReceivedPacketHandler) getAppDataPath(pid protocol.PathID) *appDataReceivedPacketTracker {
 	return h.appDataPaths[pid]
+}
+
+// AddPath provisions a received-packet tracker for the genuinely-new
+// application-data path pid (multipath). Each path acknowledges the packets it
+// receives in its own PATH_ACK number space, so it needs its own tracker. It
+// mirrors sentPacketHandler.AddPath: pid == PathIDZero or an already-present pid
+// is a BUG, and it is only ever called once multipath is negotiated.
+func (h *ReceivedPacketHandler) AddPath(pid protocol.PathID, logger utils.Logger) error {
+	if pid == protocol.PathIDZero {
+		return fmt.Errorf("cannot add received path with reserved id %d", protocol.PathIDZero)
+	}
+	if _, ok := h.appDataPaths[pid]; ok {
+		return fmt.Errorf("received path %d already exists", pid)
+	}
+	h.appDataPaths[pid] = newAppDataReceivedPacketTracker(logger)
+	return nil
+}
+
+// ReceivedPacketForPath records a 1-RTT packet received on application-data path
+// pid (multipath), so its acknowledgement is emitted as a PATH_ACK{pid} from
+// pid's own tracker rather than the connection-level (PathIDZero) ACK. An
+// unknown pid is a BUG (open the path first). For PathIDZero it is identical to
+// ReceivedPacket with Encryption1RTT, including the 0-RTT/1-RTT boundary check
+// (which is connection-global, Stage 4 spec risk #7).
+func (h *ReceivedPacketHandler) ReceivedPacketForPath(
+	pn protocol.PacketNumber,
+	ecn protocol.ECN,
+	pid protocol.PathID,
+	rcvTime monotime.Time,
+	ackEliciting bool,
+) error {
+	if h.lowest1RTTPacket == protocol.InvalidPacketNumber || pn < h.lowest1RTTPacket {
+		h.lowest1RTTPacket = pn
+	}
+	path := h.getAppDataPath(pid)
+	if path == nil {
+		panic(fmt.Sprintf("ReceivedPacketForPath: unknown path %d", pid))
+	}
+	return path.ReceivedPacket(pn, ecn, rcvTime, ackEliciting)
+}
+
+// GetAckFrameForPath returns the ACK frame for path pid's received packets, to
+// be carried in a PATH_ACK{pid} frame. For PathIDZero it is identical to
+// GetAckFrame(Encryption1RTT). An unknown pid returns nil.
+func (h *ReceivedPacketHandler) GetAckFrameForPath(pid protocol.PathID, now monotime.Time, onlyIfQueued bool) *wire.AckFrame {
+	path := h.getAppDataPath(pid)
+	if path == nil {
+		return nil
+	}
+	return path.GetAckFrame(now, onlyIfQueued)
+}
+
+// GetAlarmTimeoutForPath returns the ACK alarm timeout for path pid's tracker.
+func (h *ReceivedPacketHandler) GetAlarmTimeoutForPath(pid protocol.PathID) monotime.Time {
+	path := h.getAppDataPath(pid)
+	if path == nil {
+		return 0
+	}
+	return path.GetAlarmTimeout()
+}
+
+// IsPotentiallyDuplicateForPath reports whether the 1-RTT packet number pn was
+// already received on path pid. Each non-zero path has its own received-packet
+// space, so this is checked against pid's tracker, NOT path 0's — path 1's pn=0
+// is not a duplicate of path 0's pn=0. An unknown pid returns false.
+func (h *ReceivedPacketHandler) IsPotentiallyDuplicateForPath(pn protocol.PacketNumber, pid protocol.PathID) bool {
+	path := h.getAppDataPath(pid)
+	if path == nil {
+		return false
+	}
+	return path.IsPotentiallyDuplicate(pn)
 }
 
 func (h *ReceivedPacketHandler) ReceivedPacket(

@@ -397,7 +397,7 @@ func TestSentPacketHandlerLossTimeAndSpaceSinglePath(t *testing.T) {
 	now := monotime.Now()
 
 	// No outstanding packets: both helpers return zero/empty.
-	if lt, _ := h.getLossTimeAndSpace(); !lt.IsZero() {
+	if lt, _, _ := h.getLossTimeAndSpace(); !lt.IsZero() {
 		t.Errorf("getLossTimeAndSpace with nothing sent = %v, want zero", lt)
 	}
 	if pt, _ := h.getPTOTimeAndSpace(now); !pt.IsZero() {
@@ -431,12 +431,16 @@ func TestSentPacketHandlerLossTimeAndSpaceSinglePath(t *testing.T) {
 	if _, err := h.ReceivedAck(ackFrameForPN(last), protocol.Encryption1RTT, now); err != nil {
 		t.Fatalf("ReceivedAck: %v", err)
 	}
-	lossTime, lossEncLevel := h.getLossTimeAndSpace()
+	lossTime, lossEncLevel, lossPathID := h.getLossTimeAndSpace()
 	if lossTime.IsZero() {
 		t.Fatalf("expected a non-zero loss time after partial ack")
 	}
 	if lossEncLevel != protocol.Encryption1RTT {
 		t.Errorf("loss enc level = %v, want %v", lossEncLevel, protocol.Encryption1RTT)
+	}
+	// Single path: the earliest loss time must be attributed to PathIDZero.
+	if lossPathID != protocol.PathIDZero {
+		t.Errorf("loss path id = %d, want PathIDZero", lossPathID)
 	}
 	appDataLossTime := h.getAppDataPath(protocol.PathIDZero).space.lossTime
 	if !lossTime.Equal(appDataLossTime) {

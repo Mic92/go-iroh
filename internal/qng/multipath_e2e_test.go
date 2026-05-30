@@ -17,56 +17,35 @@ import (
 // UDP, built on the RFC 7250 raw-public-key harness in rawkey_quic_test.go. It
 // is the only correctness signal available without a Rust peer.
 //
-// HONESTY NOTE (read before trusting the assertions):
-//
-// The send side of QUIC multipath (draft-ietf-quic-multipath) is only partially
-// landed. What exists today:
-//   - 5a sentPacketHandler.AddPath(pid): provisions a genuinely-new path with
-//     its OWN congestion controller + RTT estimator (NOT the connection alias);
+// As of Stage 5d/5e/5f the full QUIC multipath (draft-ietf-quic-multipath) data
+// plane is landed, and TestMultipathTwoPathE2E drives REAL application data over
+// a second PathID. The send side now has:
+//   - 5a sentPacketHandler.AddPath(pid): a genuinely-new path with its OWN
+//     congestion controller + RTT estimator (NOT the connection alias).
 //   - 5b queueMaxPathID / canOpenPath / multipathManager.peerMax: MAX_PATH_ID
-//     emission and the path-open gate;
+//     emission and the path-open gate.
 //   - 5c connIDGenerator.issuePathConnID / handleNewConnectionIDFrame /
 //     destConnIDForPath / perPathDestConnIDs: per-path CID issuance both ways.
-//
-// What does NOT exist yet, and therefore what this test CANNOT prove:
-//   - 5d: the packet packer cannot target a non-zero PathID. appendPacket
-//     (packet_packer.go:484-493) always uses p.getDestConnID() (the PathIDZero
-//     DCID) and the PathIDZero packet-number generator. There is no per-path
-//     DCID/PN selection.
-//   - 5e: nothing emits a PATH_ACK{PathID:1}. GetAckFrame returns only the
-//     PathIDZero ack, and SendMode (sent_packet_handler.go:1206-1255) is
-//     connection-level (it sums all paths' history but congestion-checks the
-//     single connection controller on totalBytesInFlight). There is no per-path
-//     SendMode.
-//   - 5f: there is no Conn.OpenPath. (Conn.AddPath(*Transport) at
-//     connection.go:3351 is RFC 9000 single-path MIGRATION — the path_manager.go
-//     int64 pathID concept — NOT draft-multipath. It is deliberately separate.)
-//     There is no per-path PATH_CHALLENGE qualified to a non-zero path's DCID and
-//     no send scheduler that drives 1-RTT packets over a second path.
-//
-// Consequently a REAL second path cannot be opened end-to-end and REAL two-path
-// data flow is NOT achievable on the current code. The deepest capstone
-// assertions (data demonstrably carried over path 1, peer returns
-// PATH_ACK{PathID:1}, path-1 bytesInFlight driven down) are t.Skip()ed below
-// with the precise missing sub-increment named.
-//
-// There is also no thread-safe way to open a path from outside the connection's
-// run goroutine yet. The sentPacketHandler has no mutex; the run loop reads
-// appDataPaths on every packed 1-RTT packet, so calling AddPath from any other
-// goroutine races it (confirmed with -race). Driving a path-open from the
-// application therefore requires a run-loop-scheduling seam, which is part of
-// the missing 5f (Conn.OpenPath). This test consequently does NOT call AddPath
-// on a live connection.
+//   - 5d packer per-path DCID + PN: AppendPacketForPath / PackPathFramesPacket
+//     target a non-zero PathID with its DCID (destConnIDForPath) and its own
+//     packet-number space (Peek/PopPacketNumberForPath). PathIDZero stays
+//     byte-identical (appendPacket is unchanged for path 0).
+//   - 5e PATH_ACK + per-path SendMode + receive routing: a packet received on a
+//     non-zero path's DCID is tracked in that path's received space and acked as
+//     a PATH_ACK{pid} (received_packet_handler.go ReceivedPacketForPath /
+//     GetAckFrameForPath); congestion/loss/SendMode are per-path
+//     (SendModeForPath, the per-path controller in receivedAck/detectLostPackets).
+//   - 5f Conn.OpenPath: a thread-safe path-open scheduled onto the run goroutine
+//     (multipath_outgoing.go), a PATH_CHALLENGE qualified to the new path's DCID,
+//     validation by the matching PATH_RESPONSE, and per-path send scheduling
+//     (driveMultipath / sendOnPath) in the run loop. It is deliberately separate
+//     from Conn.AddPath(*Transport), which is RFC 9000 single-path MIGRATION
+//     (the path_manager.go int64 pathID concept).
 //
 // The distinct-controller / distinct-rttStats gate (Stage 4 spec risk #4) is
-// proven where the concrete sentPacketHandler fields are reachable and access is
-// single-threaded: the ackhandler unit test
-// TestSentPacketHandlerAddPathDistinctController. It is not reachable from
-// package quic (appDataPaths is unexported in a different package), so this e2e
-// file asserts the live, race-free, achievable surface — multipath negotiation
-// over real UDP on both ends, and a clean stream round-trip with multipath on
-// and off — and defers the path-open, pointer-distinctness, and data-flow
-// assertions to the named unit tests / the missing sub-increments.
+// also proven where the concrete sentPacketHandler fields are reachable and
+// access is single-threaded: the ackhandler unit test
+// TestSentPacketHandlerAddPathDistinctController.
 
 // multipathTLSConfigs builds a server/client RFC 7250 raw-public-key TLS config
 // pair, mirroring rawkey_quic_test.go. The returned channels receive the peer
@@ -138,6 +117,15 @@ func multipathTLSConfigs(t *testing.T) (serverTLS, clientTLS *tls.Config, server
 // (client and the accepted server conn) so the caller can inspect post-handshake
 // multipath state. The ping/pong proves the connection is fully usable with the
 // given multipath setting; data here flows over path 0.
+//
+// Both endpoints use explicit Transports with a non-zero ConnectionIDLength.
+// QUIC multipath (draft-ietf-quic-multipath) addresses each path by its own
+// connection ID, so the connection MUST use non-zero connection IDs: with the
+// zero-length connection IDs the package-level Dial helper uses for single-use
+// dialers, issuePathConnID has no CID to issue and a second path can never be
+// addressed. (This is a real constraint on running multipath over the
+// zero-length-CID iroh production socket; it is satisfied here by the transport
+// configuration.)
 func twoEndpoints(t *testing.T, serverCfg, clientCfg *Config) (clientConn, serverConn *Conn, cleanup func()) {
 	t.Helper()
 	serverTLS, clientTLS, serverPub, clientPub, gotServerKey, gotClientKey := multipathTLSConfigs(t)
@@ -146,7 +134,8 @@ func twoEndpoints(t *testing.T, serverCfg, clientCfg *Config) (clientConn, serve
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := Listen(serverUDP, serverTLS, serverCfg)
+	serverTr := &Transport{Conn: serverUDP, ConnectionIDLength: 8}
+	ln, err := serverTr.Listen(serverTLS, serverCfg)
 	if err != nil {
 		serverUDP.Close()
 		t.Fatal(err)
@@ -196,7 +185,8 @@ func twoEndpoints(t *testing.T, serverCfg, clientCfg *Config) (clientConn, serve
 		t.Fatal(err)
 	}
 
-	clientConn, err = Dial(ctx, clientUDP, ln.Addr(), clientTLS, clientCfg)
+	clientTr := &Transport{Conn: clientUDP, ConnectionIDLength: 8}
+	clientConn, err = clientTr.Dial(ctx, ln.Addr(), clientTLS, clientCfg)
 	if err != nil {
 		cancel()
 		clientUDP.Close()
@@ -253,6 +243,8 @@ func twoEndpoints(t *testing.T, serverCfg, clientCfg *Config) (clientConn, serve
 			serverConn.CloseWithError(0, "")
 		}
 		ln.Close()
+		clientTr.Close()
+		serverTr.Close()
 		clientUDP.Close()
 		serverUDP.Close()
 	}
@@ -260,25 +252,30 @@ func twoEndpoints(t *testing.T, serverCfg, clientCfg *Config) (clientConn, serve
 }
 
 // TestMultipathTwoPathE2E is the capstone. Both endpoints set
-// Config.InitialMaxPathID, so multipath is negotiated. It establishes a real
-// connection over loopback UDP, confirms negotiation on BOTH ends, then probes
-// how far the send side can take a second path. Real two-path data flow is not
-// yet reachable (see the file header and the skips below); the test proves
-// everything achievable and skips the rest with precise reasons.
+// Config.InitialMaxPathID (so multipath is negotiated) and EnableDatagrams (so a
+// DATAGRAM can carry the application payload). It establishes a real connection
+// over loopback UDP, confirms negotiation on BOTH ends, opens a SECOND path
+// (PathID 1) with a real PATH_CHALLENGE/PATH_RESPONSE validation, and then
+// drives REAL application data over PathID 1 in BOTH directions, asserting:
+//   - the client's OpenPath validates path 1 (a PATH_RESPONSE to the client's
+//     PATH_CHALLENGE arrived, 5f);
+//   - a datagram the client sends over path 1 (packed with path 1's DCID + path
+//     1's own packet number, 5d) is delivered to the server;
+//   - the server returns it over path 1, and the client receives it;
+//   - PATH_ACK{PathID:1} frames flowed back to each sender (5e), proving the
+//     second path's packets were acknowledged in their own number space.
+//
+// This is the user-set acceptance bar: real application data flowing over PathID
+// 1 while it is the active/validated path, not a t.Skip.
 func TestMultipathTwoPathE2E(t *testing.T) {
 	maxPath := uint32(4)
-	serverCfg := &Config{InitialMaxPathID: &maxPath}
-	clientCfg := &Config{InitialMaxPathID: &maxPath}
+	serverCfg := &Config{InitialMaxPathID: &maxPath, EnableDatagrams: true}
+	clientCfg := &Config{InitialMaxPathID: &maxPath, EnableDatagrams: true}
 
 	clientConn, serverConn, cleanup := twoEndpoints(t, serverCfg, clientCfg)
 	defer cleanup()
 
-	// (1) multipathNegotiated() must be true on BOTH ends — the only switch that
-	// turns multipath on (connection.go multipathNegotiated()), proven live after
-	// a real transport-parameter exchange. multipathNegotiated reads only
-	// config (immutable) and peerParams (set during the handshake and stable once
-	// the stream round-trip above proved the handshake complete), so it is safe
-	// to read from the test goroutine concurrently with the run loop.
+	// (1) multipathNegotiated() must be true on BOTH ends.
 	if !clientConn.multipathNegotiated() {
 		t.Fatalf("client multipathNegotiated() = false, want true (both set InitialMaxPathID)")
 	}
@@ -286,41 +283,108 @@ func TestMultipathTwoPathE2E(t *testing.T) {
 		t.Fatalf("server multipathNegotiated() = false, want true")
 	}
 
-	// (2) Provisioning a genuinely-new path, and (3) real two-path DATA FLOW —
-	// NEITHER is reachable yet, for two distinct reasons.
-	//
-	// (a) No thread-safe seam to open a path. The only path-open primitive that
-	// exists is sentPacketHandler.AddPath (5a), but the sentPacketHandler is
-	// owned exclusively by the connection's run goroutine (it has no mutex; the
-	// packer reads appDataPaths via getAppDataPath/getPacketNumberSpace every
-	// time it packs a 1-RTT packet). Calling AddPath from the test goroutine
-	// races the run loop on the appDataPaths map — verified: doing so trips the
-	// race detector at sent_packet_handler.go addPath vs getAppDataPath. A real
-	// path-open MUST be scheduled onto the run goroutine; that scheduling seam is
-	// precisely part of the missing 5f (Conn.OpenPath). So even AddPath cannot be
-	// safely driven end-to-end today, and this test does not call it (the
-	// AddPath guards + the distinct-controller/rttStats gate, Stage 4 spec
-	// risk #4, are proven single-threaded in the ackhandler unit test
-	// TestSentPacketHandlerAddPathDistinctController).
-	//
-	// (b) Even with a safe seam, no application bytes can ride a non-zero path.
-	// The send side still needs:
-	//   5d  packer per-path DCID + PN selection (appendPacket is PathIDZero-only:
-	//       packet_packer.go:484-493 uses getDestConnID() and the PathIDZero PN),
-	//   5e  PATH_ACK{PathID:1} emission + per-path SendMode driving path-1
-	//       bytesInFlight down (GetAckFrame returns only path 0's ack; SendMode at
-	//       sent_packet_handler.go:1206-1255 is connection-level),
-	//   5f  Conn.OpenPath orchestration: per-path PATH_CHALLENGE qualified to
-	//       path-1's DCID, path validation (open_status, paths.rs:263-273), and a
-	//       scheduler that routes 1-RTT packets over the validated second path.
-	//
-	// Until both (a) and (b) land, asserting bytes flowed over path 1 (history
-	// shows path-1 PNs from path 1's independent generator; peer returns
-	// PATH_ACK{PathID:1}) cannot pass, so it is skipped rather than faked.
-	t.Skip("real two-path data flow not reachable: no thread-safe path-open seam " +
-		"(AddPath races the run loop; needs 5f Conn.OpenPath scheduling), and the " +
-		"send side lacks 5d (packer per-path DCID/PN), 5e (PATH_ACK{PathID:1} + " +
-		"per-path SendMode), 5f (per-path PATH_CHALLENGE/validation/scheduling)")
+	// (2) Open a second path from the client. OpenPath schedules the path-open
+	// onto the run goroutine (the thread-safe seam, 5f), issues a path-1
+	// connection ID, awaits the peer's, sends a PATH_CHALLENGE on path 1, and
+	// validates it with the returned PATH_RESPONSE.
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	path, err := clientConn.OpenPath(nil)
+	if err != nil {
+		t.Fatalf("OpenPath: %v", err)
+	}
+	if path.PathID() != 1 {
+		t.Fatalf("OpenPath returned PathID %d, want 1", path.PathID())
+	}
+	if err := path.Validated(ctx); err != nil {
+		t.Fatalf("path 1 never validated: %v", err)
+	}
+
+	// (3) Real application data over PathID 1: client -> server. The datagram is
+	// packed into a 1-RTT packet addressed to the server's path-1 connection ID
+	// and drawn from path 1's own packet-number space (5d). The server delivers
+	// it to ReceiveDatagram (path 0 never carried it: the per-path send queue is
+	// only drained by sendOnPath over path 1).
+	const clientMsg = "hello-over-path-1"
+	if err := path.SendDatagram([]byte(clientMsg)); err != nil {
+		t.Fatalf("SendDatagram over path 1: %v", err)
+	}
+	got, err := serverConn.ReceiveDatagram(ctx)
+	if err != nil {
+		t.Fatalf("server ReceiveDatagram: %v", err)
+	}
+	if string(got) != clientMsg {
+		t.Fatalf("server received %q over path 1, want %q", got, clientMsg)
+	}
+
+	// (4) Round-trip: server -> client over PathID 1. The server joined path 1
+	// lazily (it never called OpenPath); it sends the reply over path 1 with
+	// SendDatagramOnPath, the thread-safe per-path send entry point.
+	const serverMsg = "reply-over-path-1"
+	if err := serverConn.SendDatagramOnPath(1, []byte(serverMsg)); err != nil {
+		t.Fatalf("server SendDatagramOnPath(1): %v", err)
+	}
+	gotReply, err := clientConn.ReceiveDatagram(ctx)
+	if err != nil {
+		t.Fatalf("client ReceiveDatagram: %v", err)
+	}
+	if string(gotReply) != serverMsg {
+		t.Fatalf("client received %q over path 1, want %q", gotReply, serverMsg)
+	}
+
+	// (5) PATH_ACK{PathID:1} must have flowed back to each sender (5e), proving
+	// the second path's packets were acknowledged in path 1's own number space
+	// (not folded into path 0's ACK). The ACK rides a subsequent packet, so poll
+	// briefly. We assert not just that *a* PATH_ACK arrived, but that its PathID
+	// was exactly 1 — the path we drove data over — so the acknowledgement is
+	// unambiguously attributed to path 1's number space.
+	waitForPathAck := func(c *Conn, who string) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if c.PathAcksReceived() > 0 {
+				if id, ok := c.LastPathAckID(); !ok || id != 1 {
+					t.Fatalf("%s received a PATH_ACK for path %d (ok=%v), want path 1", who, id, ok)
+				}
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("%s never received a PATH_ACK for path 1", who)
+	}
+	waitForPathAck(clientConn, "client")
+	waitForPathAck(serverConn, "server")
+
+	// (6) Direct proof the data really traversed PathID 1, captured from the live
+	// connection's run goroutine (the only race-free reader of the lock-free
+	// sentPacketHandler). For each endpoint, path 1's OWN packet-number space must
+	// show packets sent (LargestSent >= 0) and acknowledged (LargestAcked >= 0):
+	// nothing here is folded into path 0. The bytes a datagram put in flight on
+	// path 1's controller were therefore driven down by the peer's PATH_ACK{1}.
+	// Crucially the LIVE path-1 recovery state must satisfy the Stage 4 risk-#4
+	// distinct-controller gate: path 1 has its own congestion controller AND RTT
+	// estimator, distinct from both path 0 and the connection-level objects (the
+	// connection rttStats drives idle/keepalive/CID timers and must never track a
+	// non-zero path's RTT).
+	for _, ep := range []struct {
+		name string
+		conn *Conn
+	}{{"client", clientConn}, {"server", serverConn}} {
+		stats, ok := ep.conn.PathStats(1)
+		if !ok {
+			t.Fatalf("%s: PathStats(1) not found; path 1 should be open", ep.name)
+		}
+		if stats.LargestSent < 0 {
+			t.Errorf("%s: path 1 LargestSent = %d, want >= 0 (no packet ever sent in path 1's own number space)", ep.name, stats.LargestSent)
+		}
+		if stats.LargestAcked < 0 {
+			t.Errorf("%s: path 1 LargestAcked = %d, want >= 0 (path 1's packets never acknowledged in its own space)", ep.name, stats.LargestAcked)
+		}
+		if !stats.DistinctController {
+			t.Errorf("%s: path 1 lacks a distinct congestion controller + RTT estimator (Stage 4 risk #4) on the live connection", ep.name)
+		}
+	}
 }
 
 // TestMultipathTwoPathE2EControlSinglePath is the standing-invariant control: an

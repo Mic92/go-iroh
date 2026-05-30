@@ -207,6 +207,31 @@ func (m *connIDGenerator) issuePathConnID(pid protocol.PathID) (protocol.Connect
 	return connID, nil
 }
 
+// pathForLocalConnID reports which multipath PathID one of our issued source
+// connection IDs belongs to. The PathIDZero (connection-level) CIDs live in
+// activeSrcConnIDs; non-zero path CIDs live in pathSrcConnIDs (issuePathConnID).
+// The receive side uses this to attribute an inbound 1-RTT packet (addressed to
+// one of our CIDs) to the path it belongs to, so the packet is acked as a
+// PATH_ACK{pid}. ok is false for a CID we never issued.
+func (m *connIDGenerator) pathForLocalConnID(connID protocol.ConnectionID) (protocol.PathID, bool) {
+	for _, id := range m.activeSrcConnIDs {
+		if id == connID {
+			return protocol.PathIDZero, true
+		}
+	}
+	if m.initialClientDestConnID != nil && *m.initialClientDestConnID == connID {
+		return protocol.PathIDZero, true
+	}
+	for pid, ids := range m.pathSrcConnIDs {
+		for _, id := range ids {
+			if id == connID {
+				return pid, true
+			}
+		}
+	}
+	return protocol.PathIDZero, false
+}
+
 func (m *connIDGenerator) SetHandshakeComplete(connIDExpiry monotime.Time) {
 	if m.initialClientDestConnID != nil {
 		m.queueConnIDForRetiring(*m.initialClientDestConnID, connIDExpiry)
