@@ -19,9 +19,12 @@ import (
 // controller and a real RTTStats, then assert observable recovery state through
 // the concrete *sentPacketHandler.
 //
-// After the refactor, the field reads below (h.appDataPackets, h.bytesInFlight,
-// h.ptoCount, h.alarm, ...) become reads through the single PathIDZero entry of
-// the map; the asserted values must be identical.
+// Stage 4a moved the packet-number bookkeeping into the single PathIDZero map
+// entry; Stage 4b additionally moved the appData bytes-in-flight, PTO count,
+// congestion controller, RTT estimator and ECN tracker there. The field reads
+// below therefore go through getAppDataPath(protocol.PathIDZero) for the
+// app-data recovery state (bytesInFlight, ptoCount); the asserted values are
+// identical to the pre-refactor flat-field handler.
 
 const oracleInitialMaxDatagramSize = protocol.ByteCount(1252)
 
@@ -157,7 +160,7 @@ func TestSentPacketHandlerAckBookkeeping(t *testing.T) {
 			for i := range sent {
 				sent[i] = sendAppDataPacket(h, now, packetSize)
 			}
-			if got := h.bytesInFlight; got != protocol.ByteCount(tt.numSent)*packetSize {
+			if got := h.getAppDataPath(protocol.PathIDZero).bytesInFlight; got != protocol.ByteCount(tt.numSent)*packetSize {
 				t.Fatalf("bytesInFlight before ack = %d, want %d", got, protocol.ByteCount(tt.numSent)*packetSize)
 			}
 
@@ -170,8 +173,8 @@ func TestSentPacketHandlerAckBookkeeping(t *testing.T) {
 			if acked1RTT != tt.wantAcked1RTT {
 				t.Errorf("acked1RTT = %v, want %v", acked1RTT, tt.wantAcked1RTT)
 			}
-			if h.bytesInFlight != tt.wantBytesInFlight {
-				t.Errorf("bytesInFlight = %d, want %d", h.bytesInFlight, tt.wantBytesInFlight)
+			if got := h.getAppDataPath(protocol.PathIDZero).bytesInFlight; got != tt.wantBytesInFlight {
+				t.Errorf("bytesInFlight = %d, want %d", got, tt.wantBytesInFlight)
 			}
 			if got := h.getAppDataPath(protocol.PathIDZero).space.largestAcked; got != wantLargestAcked {
 				t.Errorf("largestAcked = %d, want %d", got, wantLargestAcked)
@@ -199,7 +202,7 @@ func TestSentPacketHandlerPTOCountReset(t *testing.T) {
 	if err := h.OnLossDetectionTimeout(now.Add(time.Second)); err != nil {
 		t.Fatalf("OnLossDetectionTimeout: %v", err)
 	}
-	if h.ptoCount == 0 {
+	if h.getAppDataPath(protocol.PathIDZero).ptoCount == 0 {
 		t.Fatalf("expected ptoCount > 0 after PTO, got 0")
 	}
 
@@ -208,8 +211,8 @@ func TestSentPacketHandlerPTOCountReset(t *testing.T) {
 	if _, err := h.ReceivedAck(ackFrameForPN(pn), protocol.Encryption1RTT, now.Add(2*time.Second)); err != nil {
 		t.Fatalf("ReceivedAck: %v", err)
 	}
-	if h.ptoCount != 0 {
-		t.Errorf("ptoCount after ack = %d, want 0", h.ptoCount)
+	if got := h.getAppDataPath(protocol.PathIDZero).ptoCount; got != 0 {
+		t.Errorf("ptoCount after ack = %d, want 0", got)
 	}
 }
 
@@ -284,8 +287,8 @@ func TestSentPacketHandlerReorderingLoss(t *testing.T) {
 	if got := outstandingPNs(h); !equalPNs(got, wantOutstanding) {
 		t.Errorf("outstanding after reordering loss = %v, want %v", got, wantOutstanding)
 	}
-	if want := protocol.ByteCount(len(wantOutstanding)) * packetSize; h.bytesInFlight != want {
-		t.Errorf("bytesInFlight = %d, want %d", h.bytesInFlight, want)
+	if got, want := h.getAppDataPath(protocol.PathIDZero).bytesInFlight, protocol.ByteCount(len(wantOutstanding))*packetSize; got != want {
+		t.Errorf("bytesInFlight = %d, want %d", got, want)
 	}
 	if appData.largestAcked != largest {
 		t.Errorf("largestAcked = %d, want %d", appData.largestAcked, largest)

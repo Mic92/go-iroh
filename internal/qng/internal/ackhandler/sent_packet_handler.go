@@ -68,17 +68,42 @@ type alarmTimer struct {
 // packet number space. It mirrors the recovery-relevant subset of
 // reference/paths.rs PathData that draft-multipath splits per PathID.
 //
-// Stage 4a moves ONLY the packet-number bookkeeping here (the space and its
-// spurious-loss history). Congestion, RTT estimation, bytes-in-flight and the
-// PTO count stay handler-level and shared, because they are also exercised by
-// the Initial and Handshake spaces during the handshake; splitting them per
-// appData path would corrupt amplification accounting (see Stage 4 spec risk
-// #2). They become per-path in Stage 4b.
+// Stage 4b moves the appData recovery state here: the congestion controller
+// (paths.rs:167), the RTT estimator (paths.rs:163), bytes-in-flight
+// (paths.rs:214 InFlight.bytes), the PTO accounting (paths.rs:236), and the
+// ECN tracker (paths.rs:165), in addition to the Stage 4a packet-number
+// bookkeeping (the space and its spurious-loss history).
+//
+// Initial and Handshake recovery stays handler-level (h.bytesInFlight): those
+// spaces are not path-scoped and their bytes-in-flight feeds amplification
+// accounting during the handshake (Stage 4 spec risk #2).
+//
+// For PathIDZero — the only path until Stage 5 — congestion and rttStats are
+// the SAME objects the handler was constructed with (the connection's
+// rttStats and the single cubic sender). Aliasing them keeps single-path
+// behavior byte-identical: 1-RTT RTT samples still update the connection-level
+// rttStats (used for idle/keepalive/connID timers, Stage 4 spec risk #4) and
+// the one shared controller still sees the total bytes-in-flight. A genuinely
+// new path (Stage 5) gets its own controller and rttStats.
 type appDataPath struct {
 	space       *packetNumberSpace
 	lostPackets lostPacketTracker // spurious-loss history, only for application data
 	// send time of the largest acknowledged packet
 	largestAckedTime monotime.Time
+
+	rttStats      *utils.RTTStats
+	congestion    congestion.SendAlgorithmWithDebugInfos
+	bytesInFlight protocol.ByteCount
+
+	// PTO accounting for the application-data space. During the handshake the
+	// Initial/Handshake spaces share this single PathIDZero counter, mirroring
+	// the reference's PathId::ZERO sharing (paths.rs:154-157), so single-path
+	// behavior is identical to the former handler-level ptoCount.
+	ptoCount        uint32
+	ptoMode         SendMode
+	numProbesToSend int
+
+	ecnTracker ecnHandler
 }
 
 type sentPacketHandler struct {
@@ -105,24 +130,25 @@ type sentPacketHandler struct {
 
 	ackedPackets []packetWithPacketNumber // to avoid allocations in detectAndRemoveAckedPackets
 
+	// bytesInFlight holds the Initial and Handshake bytes in flight. The
+	// application-data bytes in flight live per-path on appDataPaths
+	// (paths.rs:214). Keeping the handshake portion handler-level preserves
+	// amplification accounting during the handshake (Stage 4 spec risk #2).
 	bytesInFlight protocol.ByteCount
 
+	// congestion and rttStats are the handshake (Initial/Handshake) recovery
+	// state. There is a single congestion controller and a single rttStats;
+	// the PathIDZero appData path aliases both, so single-path behavior is
+	// byte-identical (Stage 4 spec risk #4: rttStats is the connection's, not
+	// repointed).
 	congestion congestion.SendAlgorithmWithDebugInfos
 	rttStats   *utils.RTTStats
 	connStats  *utils.ConnectionStats
 
-	// The number of times a PTO has been sent without receiving an ack.
-	ptoCount uint32
-	ptoMode  SendMode
-	// The number of PTO probe packets that should be sent.
-	// Only applies to the application-data packet number space.
-	numProbesToSend int
-
 	// The alarm timeout
 	alarm alarmTimer
 
-	enableECN  bool
-	ecnTracker ecnHandler
+	enableECN bool
 
 	perspective protocol.Perspective
 
@@ -156,16 +182,22 @@ func NewSentPacketHandler(
 		qlogger,
 	)
 
+	path0 := &appDataPath{
+		space:       newPacketNumberSpace(0, true),
+		lostPackets: *newLostPacketTracker(64),
+		// PathIDZero shares the connection's rttStats and the single cubic
+		// sender, so 1-RTT RTT samples still update the connection-level
+		// rttStats and the one controller sees the total bytes in flight.
+		rttStats:   rttStats,
+		congestion: congestion,
+	}
 	h := &sentPacketHandler{
 		peerCompletedAddressValidation: pers == protocol.PerspectiveServer,
 		peerAddressValidated:           pers == protocol.PerspectiveClient || clientAddressValidated,
 		initialPackets:                 newPacketNumberSpace(initialPN, false),
 		handshakePackets:               newPacketNumberSpace(0, false),
 		appDataPaths: map[protocol.PathID]*appDataPath{
-			protocol.PathIDZero: {
-				space:       newPacketNumberSpace(0, true),
-				lostPackets: *newLostPacketTracker(64),
-			},
+			protocol.PathIDZero: path0,
 		},
 		rttStats:           rttStats,
 		connStats:          connStats,
@@ -177,17 +209,43 @@ func NewSentPacketHandler(
 	}
 	if enableECN {
 		h.enableECN = true
-		h.ecnTracker = newECNTracker(logger, qlogger)
+		path0.ecnTracker = newECNTracker(logger, qlogger)
 	}
 	return h
 }
 
+// bytesInFlightFor returns a pointer to the bytes-in-flight counter for
+// encLevel: the handler-level counter for Initial/Handshake, the per-path
+// counter for application data (0-RTT/1-RTT). The single shared congestion
+// controller is fed the total via totalBytesInFlight.
+func (h *sentPacketHandler) bytesInFlightFor(encLevel protocol.EncryptionLevel) *protocol.ByteCount {
+	switch encLevel {
+	case protocol.Encryption0RTT, protocol.Encryption1RTT:
+		return &h.getAppDataPath(protocol.PathIDZero).bytesInFlight
+	default:
+		return &h.bytesInFlight
+	}
+}
+
+// totalBytesInFlight is the sum of the Initial/Handshake bytes in flight and
+// the application-data bytes in flight across all paths. The single congestion
+// controller operates on this total, so with one path it equals the former
+// flat h.bytesInFlight.
+func (h *sentPacketHandler) totalBytesInFlight() protocol.ByteCount {
+	total := h.bytesInFlight
+	for _, p := range h.appDataPaths {
+		total += p.bytesInFlight
+	}
+	return total
+}
+
 func (h *sentPacketHandler) removeFromBytesInFlight(p *packet) {
 	if p.includedInBytesInFlight {
-		if p.Length > h.bytesInFlight {
+		inFlight := h.bytesInFlightFor(p.EncryptionLevel)
+		if p.Length > *inFlight {
 			panic("negative bytes_in_flight")
 		}
-		h.bytesInFlight -= p.Length
+		*inFlight -= p.Length
 		p.includedInBytesInFlight = false
 	}
 }
@@ -235,12 +293,13 @@ func (h *sentPacketHandler) DropPackets(encLevel protocol.EncryptionLevel, now m
 	default:
 		panic(fmt.Sprintf("Cannot drop keys for encryption level %s", encLevel))
 	}
-	if h.qlogger != nil && h.ptoCount != 0 {
+	appData := h.getAppDataPath(protocol.PathIDZero)
+	if h.qlogger != nil && appData.ptoCount != 0 {
 		h.qlogger.RecordEvent(qlog.PTOCountUpdated{PTOCount: 0})
 	}
-	h.ptoCount = 0
-	h.numProbesToSend = 0
-	h.ptoMode = SendNone
+	appData.ptoCount = 0
+	appData.numProbesToSend = 0
+	appData.ptoMode = SendNone
 	h.setLossDetectionTimer(now)
 }
 
@@ -315,18 +374,19 @@ func (h *sentPacketHandler) SentPacket(
 		h.setLossDetectionTimer(t)
 		return
 	}
+	appData := h.getAppDataPath(protocol.PathIDZero)
 	if isAckEliciting {
 		pnSpace.lastAckElicitingPacketTime = t
-		h.bytesInFlight += size
+		*h.bytesInFlightFor(encLevel) += size
 		p.includedInBytesInFlight = true
-		if h.numProbesToSend > 0 {
-			h.numProbesToSend--
+		if appData.numProbesToSend > 0 {
+			appData.numProbesToSend--
 		}
 	}
-	h.congestion.OnPacketSent(t, h.bytesInFlight, pn, size, isAckEliciting)
+	h.congestion.OnPacketSent(t, h.totalBytesInFlight(), pn, size, isAckEliciting)
 
-	if encLevel == protocol.Encryption1RTT && h.ecnTracker != nil {
-		h.ecnTracker.SentPacket(pn, ecn)
+	if encLevel == protocol.Encryption1RTT && appData.ecnTracker != nil {
+		appData.ecnTracker.SentPacket(pn, ecn)
 	}
 
 	pnSpace.history.SentPacket(pn, p)
@@ -372,8 +432,9 @@ func (h *sentPacketHandler) qlogMetricsUpdated() {
 		h.lastMetrics.CongestionWindow = metricsUpdatedEvent.CongestionWindow
 		updated = true
 	}
-	if h.lastMetrics.BytesInFlight != int(h.bytesInFlight) {
-		metricsUpdatedEvent.BytesInFlight = int(h.bytesInFlight)
+	bytesInFlight := h.totalBytesInFlight()
+	if h.lastMetrics.BytesInFlight != int(bytesInFlight) {
+		metricsUpdatedEvent.BytesInFlight = int(bytesInFlight)
 		h.lastMetrics.BytesInFlight = metricsUpdatedEvent.BytesInFlight
 		updated = true
 	}
@@ -428,7 +489,9 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 		h.setLossDetectionTimer(rcvTime)
 	}
 
-	priorInFlight := h.bytesInFlight
+	// priorInFlight is the total bytes in flight across all spaces; the single
+	// shared congestion controller operates on the total.
+	priorInFlight := h.totalBytesInFlight()
 	ackedPackets, hasAckEliciting, err := h.detectAndRemoveAckedPackets(ack, encLevel)
 	if err != nil || len(ackedPackets) == 0 {
 		return false, err
@@ -460,8 +523,8 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 	}
 
 	// Only inform the ECN tracker about new 1-RTT ACKs if the ACK increases the largest acked.
-	if encLevel == protocol.Encryption1RTT && h.ecnTracker != nil && largestAcked > pnSpace.largestAcked {
-		congested := h.ecnTracker.HandleNewlyAcked(ackedPackets, int64(ack.ECT0), int64(ack.ECT1), int64(ack.ECNCE))
+	if encLevel == protocol.Encryption1RTT && h.getAppDataPath(protocol.PathIDZero).ecnTracker != nil && largestAcked > pnSpace.largestAcked {
+		congested := h.getAppDataPath(protocol.PathIDZero).ecnTracker.HandleNewlyAcked(ackedPackets, int64(ack.ECT0), int64(ack.ECT1), int64(ack.ECNCE))
 		if congested {
 			h.congestion.OnCongestionEvent(largestAcked, 0, priorInFlight)
 		}
@@ -504,13 +567,14 @@ func (h *sentPacketHandler) ReceivedAck(ack *wire.AckFrame, encLevel protocol.En
 	h.ackedPackets = h.ackedPackets[:0]
 
 	// Reset the pto_count unless the client is unsure if the server has validated the client's address.
+	appData := h.getAppDataPath(protocol.PathIDZero)
 	if h.peerCompletedAddressValidation {
-		if h.qlogger != nil && h.ptoCount != 0 {
+		if h.qlogger != nil && appData.ptoCount != 0 {
 			h.qlogger.RecordEvent(qlog.PTOCountUpdated{PTOCount: 0})
 		}
-		h.ptoCount = 0
+		appData.ptoCount = 0
 	}
-	h.numProbesToSend = 0
+	appData.numProbesToSend = 0
 
 	if h.qlogger != nil {
 		h.qlogMetricsUpdated()
@@ -678,7 +742,10 @@ func (h *sentPacketHandler) getLossTimeAndSpace() (monotime.Time, protocol.Encry
 }
 
 func (h *sentPacketHandler) getScaledPTO(includeMaxAckDelay bool) time.Duration {
-	pto := h.rttStats.PTO(includeMaxAckDelay) << h.ptoCount
+	// The PTO count lives on the PathIDZero appData path; during the handshake
+	// the Initial/Handshake spaces share it (paths.rs:154-157), so for a single
+	// path this is identical to the former handler-level ptoCount.
+	pto := h.rttStats.PTO(includeMaxAckDelay) << h.getAppDataPath(protocol.PathIDZero).ptoCount
 	if pto > maxPTODuration || pto <= 0 {
 		return maxPTODuration
 	}
@@ -848,7 +915,9 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 	// Packets sent before this time are deemed lost.
 	lostSendTime := now.Add(-lossDelay)
 
-	priorInFlight := h.bytesInFlight
+	// priorInFlight is the total across all spaces; the single shared
+	// congestion controller operates on the total.
+	priorInFlight := h.totalBytesInFlight()
 	for pn, p := range pnSpace.history.Packets() {
 		if pn > pnSpace.largestAcked {
 			break
@@ -907,8 +976,8 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 				if !p.IsPathMTUProbePacket {
 					h.congestion.OnCongestionEvent(pn, p.Length, priorInFlight)
 				}
-				if encLevel == protocol.Encryption1RTT && h.ecnTracker != nil {
-					h.ecnTracker.LostPacket(pn)
+				if encLevel == protocol.Encryption1RTT && h.getAppDataPath(protocol.PathIDZero).ecnTracker != nil {
+					h.getAppDataPath(protocol.PathIDZero).ecnTracker.LostPacket(pn)
 				}
 			}
 		}
@@ -944,13 +1013,18 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 	// However, there's no way to reset the timer in the connection.
 	// When OnLossDetectionTimeout is called, we therefore need to make sure that there are
 	// actually packets outstanding.
-	if h.bytesInFlight == 0 && !h.peerCompletedAddressValidation {
-		h.ptoCount++
-		h.numProbesToSend++
+	// The PTO send-state (count/mode/probes) lives on the PathIDZero appData
+	// path; during the handshake the Initial/Handshake spaces share it
+	// (paths.rs:154-157), so this is identical to the former handler-level
+	// state for a single path.
+	appData := h.getAppDataPath(protocol.PathIDZero)
+	if h.totalBytesInFlight() == 0 && !h.peerCompletedAddressValidation {
+		appData.ptoCount++
+		appData.numProbesToSend++
 		if h.initialPackets != nil {
-			h.ptoMode = SendPTOInitial
+			appData.ptoMode = SendPTOInitial
 		} else if h.handshakePackets != nil {
-			h.ptoMode = SendPTOHandshake
+			appData.ptoMode = SendPTOHandshake
 		} else {
 			return errors.New("sentPacketHandler BUG: PTO fired, but bytes_in_flight is 0 and Initial and Handshake already dropped")
 		}
@@ -965,9 +1039,9 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 	if !ps.history.HasOutstandingPackets() && !ps.history.HasOutstandingPathProbes() && !h.peerCompletedAddressValidation {
 		return nil
 	}
-	h.ptoCount++
+	appData.ptoCount++
 	if h.logger.Debug() {
-		h.logger.Debugf("Loss detection alarm for %s fired in PTO mode. PTO count: %d", encLevel, h.ptoCount)
+		h.logger.Debugf("Loss detection alarm for %s fired in PTO mode. PTO count: %d", encLevel, appData.ptoCount)
 	}
 	if h.qlogger != nil {
 		h.qlogger.RecordEvent(qlog.LossTimerUpdated{
@@ -975,20 +1049,20 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 			TimerType: qlog.TimerTypePTO,
 			EncLevel:  encLevel,
 		})
-		h.qlogger.RecordEvent(qlog.PTOCountUpdated{PTOCount: h.ptoCount})
+		h.qlogger.RecordEvent(qlog.PTOCountUpdated{PTOCount: appData.ptoCount})
 	}
-	h.numProbesToSend += 2
+	appData.numProbesToSend += 2
 	//nolint:exhaustive // We never arm a PTO timer for 0-RTT packets.
 	switch encLevel {
 	case protocol.EncryptionInitial:
-		h.ptoMode = SendPTOInitial
+		appData.ptoMode = SendPTOInitial
 	case protocol.EncryptionHandshake:
-		h.ptoMode = SendPTOHandshake
+		appData.ptoMode = SendPTOHandshake
 	case protocol.Encryption1RTT:
 		// skip a packet number in order to elicit an immediate ACK
 		pn := h.PopPacketNumber(protocol.Encryption1RTT)
 		h.getPacketNumberSpace(protocol.Encryption1RTT).history.SkippedPacket(pn)
-		h.ptoMode = SendPTOAppData
+		appData.ptoMode = SendPTOAppData
 	default:
 		return fmt.Errorf("PTO timer in unexpected encryption level: %s", encLevel)
 	}
@@ -1006,7 +1080,7 @@ func (h *sentPacketHandler) ECNMode(isShortHeaderPacket bool) protocol.ECN {
 	if !isShortHeaderPacket {
 		return protocol.ECNNon
 	}
-	return h.ecnTracker.Mode()
+	return h.getAppDataPath(protocol.PathIDZero).ecnTracker.Mode()
 }
 
 func (h *sentPacketHandler) PeekPacketNumber(encLevel protocol.EncryptionLevel) (protocol.PacketNumber, protocol.PacketNumberLen) {
@@ -1055,13 +1129,16 @@ func (h *sentPacketHandler) SendMode(now monotime.Time) SendMode {
 		}
 		return SendNone
 	}
-	if h.numProbesToSend > 0 {
-		return h.ptoMode
+	appData := h.getAppDataPath(protocol.PathIDZero)
+	if appData.numProbesToSend > 0 {
+		return appData.ptoMode
 	}
-	// Only send ACKs if we're congestion limited.
-	if !h.congestion.CanSend(h.bytesInFlight) {
+	// Only send ACKs if we're congestion limited. The single shared controller
+	// operates on the total bytes in flight.
+	bytesInFlight := h.totalBytesInFlight()
+	if !h.congestion.CanSend(bytesInFlight) {
 		if h.logger.Debug() {
-			h.logger.Debugf("Congestion limited: bytes in flight %d, window %d", h.bytesInFlight, h.congestion.GetCongestionWindow())
+			h.logger.Debugf("Congestion limited: bytes in flight %d, window %d", bytesInFlight, h.congestion.GetCongestionWindow())
 		}
 		return SendAck
 	}
@@ -1078,7 +1155,7 @@ func (h *sentPacketHandler) SendMode(now monotime.Time) SendMode {
 }
 
 func (h *sentPacketHandler) TimeUntilSend() monotime.Time {
-	return h.congestion.TimeUntilSend(h.bytesInFlight)
+	return h.congestion.TimeUntilSend(h.totalBytesInFlight())
 }
 
 func (h *sentPacketHandler) SetMaxDatagramSize(s protocol.ByteCount) {
@@ -1129,7 +1206,10 @@ func (h *sentPacketHandler) ResetForRetry(now monotime.Time) {
 	// A Retry can only happen during the handshake, when PathIDZero is the only
 	// application-data path.
 	appData := h.getAppDataPath(protocol.PathIDZero)
+	// Zero both the handshake bytes in flight and the application-data (0-RTT)
+	// bytes in flight: a Retry drops all packets sent so far.
 	h.bytesInFlight = 0
+	appData.bytesInFlight = 0
 	var firstPacketSendTime monotime.Time
 	for _, p := range h.initialPackets.history.Packets() {
 		if firstPacketSendTime.IsZero() {
@@ -1149,7 +1229,7 @@ func (h *sentPacketHandler) ResetForRetry(now monotime.Time) {
 
 	// Only use the Retry to estimate the RTT if we didn't send any retransmission for the Initial.
 	// Otherwise, we don't know which Initial the Retry was sent in response to.
-	if h.ptoCount == 0 {
+	if appData.ptoCount == 0 {
 		// Don't set the RTT to a value lower than 5ms here.
 		h.rttStats.UpdateRTT(max(minRTTAfterRetry, now.Sub(firstPacketSendTime)), 0)
 		if h.logger.Debug() {
@@ -1171,16 +1251,17 @@ func (h *sentPacketHandler) ResetForRetry(now monotime.Time) {
 			})
 		}
 	}
-	h.ptoCount = 0
+	appData.ptoCount = 0
 }
 
 func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSize protocol.ByteCount) {
 	// MigratedPath is RFC 9000 single-path connection migration, not
 	// draft-multipath; PathIDZero is still the only application-data path.
-	appData := h.getAppDataPath(protocol.PathIDZero).space
+	appData := h.getAppDataPath(protocol.PathIDZero)
+	space := appData.space
 	h.rttStats.ResetForPathMigration()
-	for pn, p := range appData.history.Packets() {
-		appData.history.DeclareLost(pn)
+	for pn, p := range space.history.Packets() {
+		space.history.DeclareLost(pn)
 		if !p.isPathProbePacket {
 			h.removeFromBytesInFlight(p)
 			if p.IsAckEliciting() {
@@ -1188,8 +1269,8 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 			}
 		}
 	}
-	for pn := range appData.history.PathProbes() {
-		appData.history.RemovePathProbe(pn)
+	for pn := range space.history.PathProbes() {
+		space.history.RemovePathProbe(pn)
 	}
 	h.congestion = congestion.NewCubicSender(
 		congestion.DefaultClock{},
@@ -1199,5 +1280,8 @@ func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSi
 		true, // use Reno
 		h.qlogger,
 	)
+	// Keep the PathIDZero appData controller in sync with the rebuilt handler
+	// controller; for a single path they are the same instance.
+	appData.congestion = h.congestion
 	h.setLossDetectionTimer(now)
 }
