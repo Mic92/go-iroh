@@ -27,23 +27,32 @@ type headerDecryptor interface {
 	DecryptHeader(sample []byte, firstByte *byte, pnBytes []byte)
 }
 
-// LongHeaderOpener opens a long header packet
+// LongHeaderOpener opens a long header packet. Long-header (Initial / Handshake
+// / 0-RTT) packets are never multipath, so callers pass PathIDZero, which
+// reconstructs and decrypts byte-identically to single-path.
 type LongHeaderOpener interface {
 	headerDecryptor
-	DecodePacketNumber(wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber
-	Open(dst, src []byte, pn protocol.PacketNumber, associatedData []byte) ([]byte, error)
+	DecodePacketNumber(pid protocol.PathID, wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber
+	Open(dst, src []byte, pid protocol.PathID, pn protocol.PacketNumber, associatedData []byte) ([]byte, error)
 }
 
-// ShortHeaderOpener opens a short header packet
+// ShortHeaderOpener opens a short header packet. pid is the
+// draft-ietf-quic-multipath PathID the 1-RTT packet arrived on; it folds into
+// the AEAD nonce (§2.4) and selects the per-path largest-received packet number
+// used to reconstruct the truncated wire packet number. PathIDZero is the
+// single-path behavior, unchanged.
 type ShortHeaderOpener interface {
 	headerDecryptor
-	DecodePacketNumber(wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber
-	Open(dst, src []byte, rcvTime monotime.Time, pn protocol.PacketNumber, kp protocol.KeyPhaseBit, associatedData []byte) ([]byte, error)
+	DecodePacketNumber(pid protocol.PathID, wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber
+	Open(dst, src []byte, rcvTime monotime.Time, pid protocol.PathID, pn protocol.PacketNumber, kp protocol.KeyPhaseBit, associatedData []byte) ([]byte, error)
 }
 
-// LongHeaderSealer seals a long header packet
+// LongHeaderSealer seals a long header packet. pid is the
+// draft-ietf-quic-multipath PathID the packet targets; it folds into the AEAD
+// nonce (§2.4). Long-header packets are never multipath, so callers pass
+// PathIDZero, which seals byte-identically to single-path.
 type LongHeaderSealer interface {
-	Seal(dst, src []byte, packetNumber protocol.PacketNumber, associatedData []byte) []byte
+	Seal(dst, src []byte, pid protocol.PathID, packetNumber protocol.PacketNumber, associatedData []byte) []byte
 	EncryptHeader(sample []byte, firstByte *byte, pnBytes []byte)
 	Overhead() int
 }

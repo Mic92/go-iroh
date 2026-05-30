@@ -1003,7 +1003,7 @@ func (p *packetPacker) appendLongHeaderPacket(buffer *packetBuffer, header *wire
 	if err != nil {
 		return nil, err
 	}
-	raw = p.encryptPacket(raw, sealer, header.PacketNumber, payloadOffset, pnLen)
+	raw = p.encryptPacket(raw, sealer, protocol.PathIDZero, header.PacketNumber, payloadOffset, pnLen)
 	buffer.Data = buffer.Data[:len(buffer.Data)+len(raw)]
 
 	if pn := p.pnManager.PopPacketNumber(encLevel); pn != header.PacketNumber {
@@ -1054,7 +1054,7 @@ func (p *packetPacker) appendShortHeaderPacket(
 			return shortHeaderPacket{}, fmt.Errorf("PacketPacker BUG: packet too large (%d bytes, allowed %d bytes)", size, maxPacketSize)
 		}
 	}
-	raw = p.encryptPacket(raw, sealer, pn, payloadOffset, protocol.ByteCount(pnLen))
+	raw = p.encryptPacket(raw, sealer, pid, pn, payloadOffset, protocol.ByteCount(pnLen))
 	buffer.Data = buffer.Data[:len(buffer.Data)+len(raw)]
 
 	// Pop the packet number from the target path's own number space. For
@@ -1116,8 +1116,8 @@ func (p *packetPacker) appendPacketPayload(raw []byte, pl payload, paddingLen pr
 	return raw, nil
 }
 
-func (p *packetPacker) encryptPacket(raw []byte, sealer sealer, pn protocol.PacketNumber, payloadOffset, pnLen protocol.ByteCount) []byte {
-	_ = sealer.Seal(raw[payloadOffset:payloadOffset], raw[payloadOffset:], pn, raw[:payloadOffset])
+func (p *packetPacker) encryptPacket(raw []byte, sealer sealer, pid protocol.PathID, pn protocol.PacketNumber, payloadOffset, pnLen protocol.ByteCount) []byte {
+	_ = sealer.Seal(raw[payloadOffset:payloadOffset], raw[payloadOffset:], pid, pn, raw[:payloadOffset])
 	raw = raw[:len(raw)+sealer.Overhead()]
 	// apply header protection
 	pnOffset := payloadOffset - pnLen

@@ -3,7 +3,6 @@ package handshake
 import (
 	"crypto"
 	"crypto/cipher"
-	"encoding/binary"
 	"fmt"
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
 	"sync/atomic"
@@ -48,11 +47,17 @@ type updatableAEAD struct {
 
 	firstRcvdWithCurrentKey protocol.PacketNumber
 	firstSentWithCurrentKey protocol.PacketNumber
-	highestRcvdPN           protocol.PacketNumber // highest packet number received (which could be successfully unprotected)
-	numRcvdWithCurrentKey   uint64
-	numSentWithCurrentKey   uint64
-	rcvAEAD                 cipher.AEAD
-	sendAEAD                cipher.AEAD
+	// highestRcvdPN is the highest packet number successfully unprotected, kept
+	// per draft-ietf-quic-multipath PathID: each path has its own packet-number
+	// space, so a high-PN packet on one path must not skew the truncated
+	// packet-number reconstruction of a low-PN packet on another. With multipath
+	// off the map holds only the PathIDZero entry and behaves like the former
+	// single global value.
+	highestRcvdPN         map[protocol.PathID]protocol.PacketNumber
+	numRcvdWithCurrentKey uint64
+	numSentWithCurrentKey uint64
+	rcvAEAD               cipher.AEAD
+	sendAEAD              cipher.AEAD
 	// caches cipher.AEAD.Overhead(). This speeds up calls to Overhead().
 	aeadOverhead int
 
@@ -85,6 +90,7 @@ func newUpdatableAEAD(rttStats *utils.RTTStats, qlogger qlogwriter.Recorder, log
 		largestAcked:            protocol.InvalidPacketNumber,
 		firstRcvdWithCurrentKey: protocol.InvalidPacketNumber,
 		firstSentWithCurrentKey: protocol.InvalidPacketNumber,
+		highestRcvdPN:           map[protocol.PathID]protocol.PacketNumber{},
 		rttStats:                rttStats,
 		qlogger:                 qlogger,
 		logger:                  logger,
@@ -162,7 +168,11 @@ func (a *updatableAEAD) SetWriteKey(suite cipherSuite, trafficSecret []byte) {
 }
 
 func (a *updatableAEAD) setAEADParameters(aead cipher.AEAD, suite cipherSuite) {
-	a.nonceBuf = make([]byte, aead.NonceSize())
+	// 12 bytes holds the draft-ietf-quic-multipath §2.4 path-and-packet-number
+	// (path id + packet number); putPathNonce writes the trailing 8 bytes for
+	// PathIDZero and all 12 for a non-zero path. aead.NonceSize() is 8 (the
+	// xorNonceAEAD packet-number size), so this is strictly larger.
+	a.nonceBuf = make([]byte, aeadNonceLength)
 	a.aeadOverhead = aead.Overhead()
 	a.suite = suite
 	switch suite.ID {
@@ -175,12 +185,14 @@ func (a *updatableAEAD) setAEADParameters(aead cipher.AEAD, suite cipherSuite) {
 	}
 }
 
-func (a *updatableAEAD) DecodePacketNumber(wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber {
-	return protocol.DecodePacketNumber(wirePNLen, a.highestRcvdPN, wirePN)
+func (a *updatableAEAD) DecodePacketNumber(pid protocol.PathID, wirePN protocol.PacketNumber, wirePNLen protocol.PacketNumberLen) protocol.PacketNumber {
+	// The zero value (no packet yet seen on pid) is packet number 0, matching the
+	// former single global highestRcvdPN field, so PathIDZero decode is unchanged.
+	return protocol.DecodePacketNumber(wirePNLen, a.highestRcvdPN[pid], wirePN)
 }
 
-func (a *updatableAEAD) Open(dst, src []byte, rcvTime monotime.Time, pn protocol.PacketNumber, kp protocol.KeyPhaseBit, ad []byte) ([]byte, error) {
-	dec, err := a.open(dst, src, rcvTime, pn, kp, ad)
+func (a *updatableAEAD) Open(dst, src []byte, rcvTime monotime.Time, pid protocol.PathID, pn protocol.PacketNumber, kp protocol.KeyPhaseBit, ad []byte) ([]byte, error) {
+	dec, err := a.open(dst, src, rcvTime, pid, pn, kp, ad)
 	if err == ErrDecryptionFailed {
 		a.invalidPacketCount++
 		if a.invalidPacketCount >= a.invalidPacketLimit {
@@ -188,12 +200,12 @@ func (a *updatableAEAD) Open(dst, src []byte, rcvTime monotime.Time, pn protocol
 		}
 	}
 	if err == nil {
-		a.highestRcvdPN = max(a.highestRcvdPN, pn)
+		a.highestRcvdPN[pid] = max(a.highestRcvdPN[pid], pn)
 	}
 	return dec, err
 }
 
-func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pn protocol.PacketNumber, kp protocol.KeyPhaseBit, ad []byte) ([]byte, error) {
+func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pid protocol.PathID, pn protocol.PacketNumber, kp protocol.KeyPhaseBit, ad []byte) ([]byte, error) {
 	if a.prevRcvAEAD != nil && !a.prevRcvAEADExpiry.IsZero() && rcvTime.After(a.prevRcvAEADExpiry) {
 		a.prevRcvAEAD = nil
 		a.logger.Debugf("Dropping key phase %d", a.keyPhase-1)
@@ -209,21 +221,21 @@ func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pn protocol
 			})
 		}
 	}
-	binary.BigEndian.PutUint64(a.nonceBuf[len(a.nonceBuf)-8:], uint64(pn))
+	nonce := putPathNonce(a.nonceBuf, pid, pn)
 	if kp != a.keyPhase.Bit() {
 		if a.keyPhase > 0 && a.firstRcvdWithCurrentKey == protocol.InvalidPacketNumber || pn < a.firstRcvdWithCurrentKey {
 			if a.prevRcvAEAD == nil {
 				return nil, ErrKeysDropped
 			}
 			// we updated the key, but the peer hasn't updated yet
-			dec, err := a.prevRcvAEAD.Open(dst, a.nonceBuf, src, ad)
+			dec, err := a.prevRcvAEAD.Open(dst, nonce, src, ad)
 			if err != nil {
 				err = ErrDecryptionFailed
 			}
 			return dec, err
 		}
 		// try opening the packet with the next key phase
-		dec, err := a.nextRcvAEAD.Open(dst, a.nonceBuf, src, ad)
+		dec, err := a.nextRcvAEAD.Open(dst, nonce, src, ad)
 		if err != nil {
 			return nil, ErrDecryptionFailed
 		}
@@ -256,7 +268,7 @@ func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pn protocol
 	}
 	// The AEAD we're using here will be the qtls.aeadAESGCM13.
 	// It uses the nonce provided here and XOR it with the IV.
-	dec, err := a.rcvAEAD.Open(dst, a.nonceBuf, src, ad)
+	dec, err := a.rcvAEAD.Open(dst, nonce, src, ad)
 	if err != nil {
 		return dec, ErrDecryptionFailed
 	}
@@ -273,7 +285,7 @@ func (a *updatableAEAD) open(dst, src []byte, rcvTime monotime.Time, pn protocol
 	return dec, err
 }
 
-func (a *updatableAEAD) Seal(dst, src []byte, pn protocol.PacketNumber, ad []byte) []byte {
+func (a *updatableAEAD) Seal(dst, src []byte, pid protocol.PathID, pn protocol.PacketNumber, ad []byte) []byte {
 	if a.firstSentWithCurrentKey == protocol.InvalidPacketNumber {
 		a.firstSentWithCurrentKey = pn
 	}
@@ -281,10 +293,9 @@ func (a *updatableAEAD) Seal(dst, src []byte, pn protocol.PacketNumber, ad []byt
 		a.firstPacketNumber = pn
 	}
 	a.numSentWithCurrentKey++
-	binary.BigEndian.PutUint64(a.nonceBuf[len(a.nonceBuf)-8:], uint64(pn))
 	// The AEAD we're using here will be the qtls.aeadAESGCM13.
 	// It uses the nonce provided here and XOR it with the IV.
-	return a.sendAEAD.Seal(dst, a.nonceBuf, src, ad)
+	return a.sendAEAD.Seal(dst, putPathNonce(a.nonceBuf, pid, pn), src, ad)
 }
 
 func (a *updatableAEAD) SetLargestAcked(pn protocol.PacketNumber) error {

@@ -106,12 +106,16 @@ func (u *packetUnpacker) UnpackLongHeader(hdr *wire.Header, data []byte) (*unpac
 	}, nil
 }
 
-func (u *packetUnpacker) UnpackShortHeader(rcvTime monotime.Time, data []byte) (protocol.PacketNumber, protocol.PacketNumberLen, protocol.KeyPhaseBit, []byte, error) {
+// UnpackShortHeader unpacks a 1-RTT packet that arrived on multipath PathID pid.
+// pid folds into the AEAD nonce (draft-ietf-quic-multipath §2.4) and selects the
+// per-path largest-received packet number used to reconstruct the truncated wire
+// packet number. PathIDZero is the single-path behavior, unchanged.
+func (u *packetUnpacker) UnpackShortHeader(rcvTime monotime.Time, pid protocol.PathID, data []byte) (protocol.PacketNumber, protocol.PacketNumberLen, protocol.KeyPhaseBit, []byte, error) {
 	opener, err := u.cs.Get1RTTOpener()
 	if err != nil {
 		return 0, 0, 0, nil, err
 	}
-	pn, pnLen, kp, decrypted, err := u.unpackShortHeaderPacket(opener, rcvTime, data)
+	pn, pnLen, kp, decrypted, err := u.unpackShortHeaderPacket(opener, rcvTime, pid, data)
 	if err != nil {
 		return 0, 0, 0, nil, err
 	}
@@ -133,8 +137,8 @@ func (u *packetUnpacker) unpackLongHeaderPacket(opener handshake.LongHeaderOpene
 		return nil, nil, parseErr
 	}
 	extHdrLen := extHdr.ParsedLen()
-	extHdr.PacketNumber = opener.DecodePacketNumber(extHdr.PacketNumber, extHdr.PacketNumberLen)
-	decrypted, err := opener.Open(data[extHdrLen:extHdrLen], data[extHdrLen:], extHdr.PacketNumber, data[:extHdrLen])
+	extHdr.PacketNumber = opener.DecodePacketNumber(protocol.PathIDZero, extHdr.PacketNumber, extHdr.PacketNumberLen)
+	decrypted, err := opener.Open(data[extHdrLen:extHdrLen], data[extHdrLen:], protocol.PathIDZero, extHdr.PacketNumber, data[:extHdrLen])
 	if err != nil {
 		return nil, nil, err
 	}
@@ -144,7 +148,7 @@ func (u *packetUnpacker) unpackLongHeaderPacket(opener handshake.LongHeaderOpene
 	return extHdr, decrypted, nil
 }
 
-func (u *packetUnpacker) unpackShortHeaderPacket(opener handshake.ShortHeaderOpener, rcvTime monotime.Time, data []byte) (protocol.PacketNumber, protocol.PacketNumberLen, protocol.KeyPhaseBit, []byte, error) {
+func (u *packetUnpacker) unpackShortHeaderPacket(opener handshake.ShortHeaderOpener, rcvTime monotime.Time, pid protocol.PathID, data []byte) (protocol.PacketNumber, protocol.PacketNumberLen, protocol.KeyPhaseBit, []byte, error) {
 	l, pn, pnLen, kp, parseErr := u.unpackShortHeader(opener, data)
 	// If the reserved bits are set incorrectly, we still need to continue unpacking.
 	// This avoids a timing side-channel, which otherwise might allow an attacker
@@ -152,8 +156,8 @@ func (u *packetUnpacker) unpackShortHeaderPacket(opener handshake.ShortHeaderOpe
 	if parseErr != nil && parseErr != wire.ErrInvalidReservedBits {
 		return 0, 0, 0, nil, &headerParseError{parseErr}
 	}
-	pn = opener.DecodePacketNumber(pn, pnLen)
-	decrypted, err := opener.Open(data[l:l], data[l:], rcvTime, pn, kp, data[:l])
+	pn = opener.DecodePacketNumber(pid, pn, pnLen)
+	decrypted, err := opener.Open(data[l:l], data[l:], rcvTime, pid, pn, kp, data[:l])
 	if err != nil {
 		return 0, 0, 0, nil, err
 	}

@@ -986,7 +986,7 @@ func (s *baseServer) maybeSendInvalidToken(p rejectedPacket) {
 		return
 	}
 	hdrLen := extHdr.ParsedLen()
-	if _, err := opener.Open(data[hdrLen:hdrLen], data[hdrLen:], extHdr.PacketNumber, data[:hdrLen]); err != nil {
+	if _, err := opener.Open(data[hdrLen:hdrLen], data[hdrLen:], protocol.PathIDZero, extHdr.PacketNumber, data[:hdrLen]); err != nil {
 		if s.qlogger != nil {
 			s.qlogger.RecordEvent(qlog.PacketDropped{
 				Header: qlog.PacketHeader{
@@ -1042,7 +1042,7 @@ func (s *baseServer) sendError(remoteAddr net.Addr, hdr *wire.Header, sealer han
 		return err
 	}
 
-	_ = sealer.Seal(b.Data[payloadOffset:payloadOffset], b.Data[payloadOffset:], replyHdr.PacketNumber, b.Data[:payloadOffset])
+	_ = sealer.Seal(b.Data[payloadOffset:payloadOffset], b.Data[payloadOffset:], protocol.PathIDZero, replyHdr.PacketNumber, b.Data[:payloadOffset])
 	b.Data = b.Data[0 : len(b.Data)+sealer.Overhead()]
 
 	pnOffset := payloadOffset - int(replyHdr.PacketNumberLen)

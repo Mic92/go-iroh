@@ -79,25 +79,33 @@ func (f *xorNonceAEAD) NonceSize() int        { return 8 } // 64-bit sequence nu
 func (f *xorNonceAEAD) Overhead() int         { return f.aead.Overhead() }
 func (f *xorNonceAEAD) explicitNonceLen() int { return 0 }
 
+// Seal and Open XOR nonce into the low bytes of nonceMask (the IV). nonce is
+// right-aligned: an 8-byte nonce (the RFC 9001 64-bit packet number) lands in
+// nonceMask[4:12], a 12-byte nonce (the draft-ietf-quic-multipath §2.4
+// path-and-packet-number, with the path ID in the high 32 bits) covers the full
+// IV. For a path-0 multipath nonce the leading 4 bytes are zero, so the XOR is
+// byte-identical to the 8-byte single-path nonce.
 func (f *xorNonceAEAD) Seal(out, nonce, plaintext, additionalData []byte) []byte {
+	off := aeadNonceLength - len(nonce)
 	for i, b := range nonce {
-		f.nonceMask[4+i] ^= b
+		f.nonceMask[off+i] ^= b
 	}
 	result := f.aead.Seal(out, f.nonceMask[:], plaintext, additionalData)
 	for i, b := range nonce {
-		f.nonceMask[4+i] ^= b
+		f.nonceMask[off+i] ^= b
 	}
 
 	return result
 }
 
 func (f *xorNonceAEAD) Open(out, nonce, ciphertext, additionalData []byte) ([]byte, error) {
+	off := aeadNonceLength - len(nonce)
 	for i, b := range nonce {
-		f.nonceMask[4+i] ^= b
+		f.nonceMask[off+i] ^= b
 	}
 	result, err := f.aead.Open(out, f.nonceMask[:], ciphertext, additionalData)
 	for i, b := range nonce {
-		f.nonceMask[4+i] ^= b
+		f.nonceMask[off+i] ^= b
 	}
 
 	return result, err

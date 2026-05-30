@@ -29,7 +29,7 @@ import (
 
 type unpacker interface {
 	UnpackLongHeader(hdr *wire.Header, data []byte) (*unpackedPacket, error)
-	UnpackShortHeader(rcvTime monotime.Time, data []byte) (protocol.PacketNumber, protocol.PacketNumberLen, protocol.KeyPhaseBit, []byte, error)
+	UnpackShortHeader(rcvTime monotime.Time, pid protocol.PathID, data []byte) (protocol.PacketNumber, protocol.PacketNumberLen, protocol.KeyPhaseBit, []byte, error)
 }
 
 type cryptoStreamHandler interface {
@@ -1327,7 +1327,7 @@ func (c *Conn) handleShortHeaderPacket(
 	// so duplicate detection and received-packet tracking are byte-identical to
 	// single-path.
 	pid := c.pathForReceivedConnID(destConnID)
-	pn, pnLen, keyPhase, data, err := c.unpacker.UnpackShortHeader(p.rcvTime, p.data)
+	pn, pnLen, keyPhase, data, err := c.unpacker.UnpackShortHeader(p.rcvTime, pid, p.data)
 	if err != nil {
 		// Stateless reset packets (see RFC 9000, section 10.3):
 		// * fill the entire UDP datagram (i.e. they cannot be part of a coalesced packet)
