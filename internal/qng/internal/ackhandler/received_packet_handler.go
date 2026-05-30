@@ -12,8 +12,15 @@ import (
 type ReceivedPacketHandler struct {
 	initialPackets   *receivedPacketTracker
 	handshakePackets *receivedPacketTracker
-	appDataPackets   appDataReceivedPacketTracker
+	// appDataPaths holds the per-path application-data (0-RTT/1-RTT) packet
+	// trackers. It always contains exactly the PathIDZero entry until
+	// additional paths are opened (Stage 5), making the path map a behavioral
+	// no-op with multipath off.
+	appDataPaths map[protocol.PathID]*appDataReceivedPacketTracker
 
+	// lowest1RTTPacket is connection-global today. Under multipath each path
+	// has its own 0-RTT/1-RTT boundary; that split is deferred (Stage 4 spec
+	// risk #7).
 	lowest1RTTPacket protocol.PacketNumber
 }
 
@@ -21,9 +28,17 @@ func NewReceivedPacketHandler(logger utils.Logger) *ReceivedPacketHandler {
 	return &ReceivedPacketHandler{
 		initialPackets:   newReceivedPacketTracker(),
 		handshakePackets: newReceivedPacketTracker(),
-		appDataPackets:   *newAppDataReceivedPacketTracker(logger),
+		appDataPaths: map[protocol.PathID]*appDataReceivedPacketTracker{
+			protocol.PathIDZero: newAppDataReceivedPacketTracker(logger),
+		},
 		lowest1RTTPacket: protocol.InvalidPacketNumber,
 	}
+}
+
+// getAppDataPath returns the per-path application-data tracker for pid. The map
+// always contains the PathIDZero entry.
+func (h *ReceivedPacketHandler) getAppDataPath(pid protocol.PathID) *appDataReceivedPacketTracker {
+	return h.appDataPaths[pid]
 }
 
 func (h *ReceivedPacketHandler) ReceivedPacket(
@@ -47,19 +62,19 @@ func (h *ReceivedPacketHandler) ReceivedPacket(
 		if h.lowest1RTTPacket != protocol.InvalidPacketNumber && pn > h.lowest1RTTPacket {
 			return fmt.Errorf("received packet number %d on a 0-RTT packet after receiving %d on a 1-RTT packet", pn, h.lowest1RTTPacket)
 		}
-		return h.appDataPackets.ReceivedPacket(pn, ecn, rcvTime, ackEliciting)
+		return h.getAppDataPath(protocol.PathIDZero).ReceivedPacket(pn, ecn, rcvTime, ackEliciting)
 	case protocol.Encryption1RTT:
 		if h.lowest1RTTPacket == protocol.InvalidPacketNumber || pn < h.lowest1RTTPacket {
 			h.lowest1RTTPacket = pn
 		}
-		return h.appDataPackets.ReceivedPacket(pn, ecn, rcvTime, ackEliciting)
+		return h.getAppDataPath(protocol.PathIDZero).ReceivedPacket(pn, ecn, rcvTime, ackEliciting)
 	default:
 		panic(fmt.Sprintf("received packet with unknown encryption level: %s", encLevel))
 	}
 }
 
 func (h *ReceivedPacketHandler) IgnorePacketsBelow(pn protocol.PacketNumber) {
-	h.appDataPackets.IgnoreBelow(pn)
+	h.getAppDataPath(protocol.PathIDZero).IgnoreBelow(pn)
 }
 
 func (h *ReceivedPacketHandler) DropPackets(encLevel protocol.EncryptionLevel) {
@@ -78,7 +93,7 @@ func (h *ReceivedPacketHandler) DropPackets(encLevel protocol.EncryptionLevel) {
 }
 
 func (h *ReceivedPacketHandler) GetAlarmTimeout() monotime.Time {
-	return h.appDataPackets.GetAlarmTimeout()
+	return h.getAppDataPath(protocol.PathIDZero).GetAlarmTimeout()
 }
 
 func (h *ReceivedPacketHandler) GetAckFrame(encLevel protocol.EncryptionLevel, now monotime.Time, onlyIfQueued bool) *wire.AckFrame {
@@ -95,7 +110,7 @@ func (h *ReceivedPacketHandler) GetAckFrame(encLevel protocol.EncryptionLevel, n
 		}
 		return nil
 	case protocol.Encryption1RTT:
-		return h.appDataPackets.GetAckFrame(now, onlyIfQueued)
+		return h.getAppDataPath(protocol.PathIDZero).GetAckFrame(now, onlyIfQueued)
 	default:
 		// 0-RTT packets can't contain ACK frames
 		return nil
@@ -113,7 +128,7 @@ func (h *ReceivedPacketHandler) IsPotentiallyDuplicate(pn protocol.PacketNumber,
 			return h.handshakePackets.IsPotentiallyDuplicate(pn)
 		}
 	case protocol.Encryption0RTT, protocol.Encryption1RTT:
-		return h.appDataPackets.IsPotentiallyDuplicate(pn)
+		return h.getAppDataPath(protocol.PathIDZero).IsPotentiallyDuplicate(pn)
 	}
 	panic("unexpected encryption level")
 }
