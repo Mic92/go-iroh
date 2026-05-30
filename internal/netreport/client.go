@@ -236,8 +236,10 @@ func (c *Client) runQADProbe(ctx context.Context, cfg relay.Config, probe Probe)
 	}
 	defer qad.close(qadCloseCode, qadCloseReason)
 
-	// Without the observed-address extension we cannot wait for an address; we
-	// read the connection RTT directly. iroh-relay/src/quic.rs:345.
+	// Read the connection RTT (iroh-relay/src/quic.rs:345) and the relay's
+	// observed-address report if one has arrived. observedAddr returns
+	// ErrExtensionNotNegotiated when no report is available yet, in which case
+	// the probe is latency-only.
 	latency := qad.rtt(0)
 	addrPort, addrErr := qad.observedAddr(ctx)
 	rep := &probeReport{probe: probe, relay: cfg.URL, latency: latency}

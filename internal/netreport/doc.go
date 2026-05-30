@@ -14,14 +14,20 @@
 // From those probes the client picks a preferred relay, applying hysteresis so a
 // responsive relay is not abandoned unless a new one is meaningfully faster.
 //
-// # Reflexive address discovery is degraded
+// # Reflexive address discovery
 //
-// In Rust, a QAD connection also learns the host's public address from the
-// relay via the QUIC observed-address extension. The forked quic-go in
-// [github.com/tmc/go-iroh/internal/qng] does not yet implement that extension
-// (tracked as slice X3), so QAD here yields latency only: [Report.GlobalV4] and
-// [Report.GlobalV6] are always absent and [Report.UDPv4]/[Report.UDPv6] are
-// never set. Relay selection and latency measurement are unaffected. When the
-// extension lands this package can fill in the reflexive addresses without an
-// API change.
+// A QAD connection also learns the host's public address from the relay via the
+// QUIC Address Discovery observed-address extension
+// (draft-seemann-quic-address-discovery), implemented in the forked quic-go
+// [github.com/tmc/go-iroh/internal/qng] (slice X3). The QAD client advertises
+// the receive-only address-discovery role, and a QAD relay reports the client's
+// reflexive address with OBSERVED_ADDRESS frames; the latest report is surfaced
+// as [Report.GlobalV4]/[Report.GlobalV6] (and the matching UDP fields).
+//
+// Reports arrive asynchronously over the connection, so a probe that completes
+// before any report has been received is still treated as latency-only: in that
+// timing window, and when QAD is not negotiated at all,
+// [qadConn.observedAddr] returns [ErrExtensionNotNegotiated] rather than
+// fabricate an address. Relay selection and latency measurement are unaffected
+// either way.
 package netreport

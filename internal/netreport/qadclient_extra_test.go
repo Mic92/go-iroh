@@ -50,6 +50,9 @@ func TestDefaultQADConfigGolden(t *testing.T) {
 	if cfg.MaxIdleTimeout != 35*time.Second {
 		t.Errorf("MaxIdleTimeout = %v, want 35s (quic.rs:298-300)", cfg.MaxIdleTimeout)
 	}
+	if !cfg.ReceiveObservedAddressReports {
+		t.Error("ReceiveObservedAddressReports = false, want true for QAD clients")
+	}
 }
 
 func TestAddrMatchesProbePredicate(t *testing.T) {
@@ -221,7 +224,8 @@ func TestNewQADClientUnreachableNoLeak(t *testing.T) {
 
 // TestRunQADProbeOverLoopback drives runQADProbe end to end against a loopback
 // QAD listener for both the IPv4 and IPv6 families, asserting a non-negative
-// latency is recorded and (degraded) no reflexive address is set.
+// latency is recorded. The server does not send observed-address reports, so no
+// reflexive address is set.
 func TestRunQADProbeOverLoopback(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -255,9 +259,9 @@ func TestRunQADProbeOverLoopback(t *testing.T) {
 			if rep.latency < 0 {
 				t.Errorf("latency = %v, want >= 0", rep.latency)
 			}
-			// Reflexive address discovery is degraded: no addr is recorded.
+			// No observed-address report is sent by this test server.
 			if rep.addr.IsValid() {
-				t.Errorf("addr = %v, want unset (observed-address extension absent)", rep.addr)
+				t.Errorf("addr = %v, want unset", rep.addr)
 			}
 		})
 	}
@@ -517,6 +521,13 @@ func TestAddReportHistoryCarriesForwardMappingVaries(t *testing.T) {
 // startLoopbackQAD starts a loopback QAD QUIC listener bound to ip:0, accepting
 // connections until stop is called, and returns its address.
 func startLoopbackQAD(t *testing.T, ip net.IP) (netip.AddrPort, func()) {
+	return startLoopbackQADWithConfig(t, ip, &quic.Config{
+		MaxIdleTimeout:  qadMaxIdle,
+		KeepAlivePeriod: qadKeepAlive,
+	})
+}
+
+func startLoopbackQADWithConfig(t *testing.T, ip net.IP, cfg *quic.Config) (netip.AddrPort, func()) {
 	t.Helper()
 	serverCert := selfSignedCert(t)
 	serverTLS := &tls.Config{
@@ -529,10 +540,7 @@ func startLoopbackQAD(t *testing.T, ip net.IP) (netip.AddrPort, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln, err := quic.Listen(udpConn, serverTLS, &quic.Config{
-		MaxIdleTimeout:  qadMaxIdle,
-		KeepAlivePeriod: qadKeepAlive,
-	})
+	ln, err := quic.Listen(udpConn, serverTLS, cfg)
 	if err != nil {
 		udpConn.Close()
 		t.Fatal(err)

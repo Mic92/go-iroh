@@ -11,16 +11,17 @@ import (
 	quic "github.com/tmc/go-iroh/internal/qng"
 )
 
-// ErrExtensionNotNegotiated is returned by [qadConn.observedAddr] because the
-// forked quic-go does not implement the QUIC observed-address extension that
-// QUIC Address Discovery relies on (slice X3). Until it lands, QAD probes yield
-// latency only; see the package doc.
+// ErrExtensionNotNegotiated is returned by [qadConn.observedAddr] when no
+// reflexive address is available: either QUIC Address Discovery was not
+// negotiated on the connection, or no OBSERVED_ADDRESS report has arrived yet
+// (reports are asynchronous, so a probe can complete first). The forked quic-go
+// implements the extension (slice X3); see the package doc.
 var ErrExtensionNotNegotiated = errors.New("netreport: quic observed-address extension not negotiated")
 
 // qadConn is a client-side QUIC Address Discovery connection to a relay. It
-// mirrors the QAD client in iroh-relay/src/quic.rs, but because the forked
-// quic-go lacks the observed-address extension it provides connection latency
-// only.
+// mirrors the QAD client in iroh-relay/src/quic.rs: it advertises the
+// receive-only address-discovery role so the relay reports our reflexive
+// address, and exposes both the connection latency and the observed address.
 //
 // The zero value is not usable; construct one with [newQADClient].
 type qadConn struct {
@@ -89,15 +90,17 @@ func qadTLSConfig(host string, base *tls.Config) *tls.Config {
 // defaultQADConfig returns the QAD transport configuration matching
 // iroh-relay/src/quic.rs:286-301.
 //
-// Rust also sets initial_rtt to [qadInitialRTT] (111ms) and enables receiving
-// observed-address reports. The forked quic-go's public Config exposes neither
-// knob, so the initial RTT stays at the qng default and observed-address
-// reception is unavailable (see [ErrExtensionNotNegotiated]). Keep-alive and
-// idle timeout are set as in Rust.
+// ReceiveObservedAddressReports advertises the address-discovery role
+// (receive-only) so a QAD relay reports our reflexive address, mirroring
+// transport.receive_observed_address_reports(true) (quic.rs:294). Rust also sets
+// initial_rtt to [qadInitialRTT] (111ms); the forked quic-go's public Config
+// does not expose that knob, so the initial RTT stays at the qng default.
+// Keep-alive and idle timeout are set as in Rust.
 func defaultQADConfig() *quic.Config {
 	return &quic.Config{
-		KeepAlivePeriod: qadKeepAlive,
-		MaxIdleTimeout:  qadMaxIdle,
+		KeepAlivePeriod:               qadKeepAlive,
+		MaxIdleTimeout:                qadMaxIdle,
+		ReceiveObservedAddressReports: true,
 	}
 }
 
@@ -112,10 +115,20 @@ func (qad *qadConn) rtt(pathID uint64) time.Duration {
 	return qad.conn.ConnectionStats().SmoothedRTT
 }
 
-// observedAddr would return the host's reflexive address as reported by the
-// relay. The forked quic-go does not implement the observed-address extension,
-// so it always returns [ErrExtensionNotNegotiated]. See the package doc.
+// observedAddr returns the host's reflexive address as reported by the relay
+// over the QUIC Address Discovery OBSERVED_ADDRESS extension. When QAD was
+// negotiated and the relay has reported an address, it returns that address.
+// Otherwise it returns [ErrExtensionNotNegotiated] rather than fabricate an
+// address: QAD reports arrive asynchronously, so a probe that completes before
+// any report is treated as degraded (latency-only), as is a connection where
+// QAD was not negotiated. See the package doc.
 func (qad *qadConn) observedAddr(ctx context.Context) (netip.AddrPort, error) {
+	if qad.conn == nil {
+		return netip.AddrPort{}, ErrExtensionNotNegotiated
+	}
+	if addr, ok := qad.conn.ObservedAddr(); ok {
+		return addr, nil
+	}
 	return netip.AddrPort{}, ErrExtensionNotNegotiated
 }
 

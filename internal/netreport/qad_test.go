@@ -44,8 +44,8 @@ func TestQADWireConstants(t *testing.T) {
 }
 
 func TestObservedAddrDegraded(t *testing.T) {
-	// Until the qng observed-address extension lands, observedAddr must report
-	// ErrExtensionNotNegotiated rather than fabricate an address.
+	// With no connection, observedAddr must report ErrExtensionNotNegotiated
+	// rather than fabricate an address.
 	qad := &qadConn{}
 	_, err := qad.observedAddr(context.Background())
 	if !errors.Is(err, ErrExtensionNotNegotiated) {
@@ -55,9 +55,8 @@ func TestObservedAddrDegraded(t *testing.T) {
 
 // TestQADLoopbackHandshake proves the QAD client can complete a real QUIC
 // handshake over the QAD ALPN against a loopback qng listener, read a non-zero
-// RTT, and close gracefully with the QAD close code and reason. Reflexive
-// address discovery is intentionally absent (the observed-address extension is
-// not implemented); the probe is latency-only.
+// RTT, and close gracefully with the QAD close code and reason. The server does
+// not advertise observed-address reports, so the probe is latency-only.
 func TestQADLoopbackHandshake(t *testing.T) {
 	// A relay presents a standard WebPKI (X.509) certificate for QAD, not a raw
 	// public key, so the QAD client uses ordinary chain verification (skipped
@@ -123,7 +122,7 @@ func TestQADLoopbackHandshake(t *testing.T) {
 		t.Errorf("rtt(1) = %v, want 0 (no multipath)", rtt)
 	}
 
-	// Observed-address discovery is degraded.
+	// No observed-address report was negotiated by the server.
 	if _, err := qad.observedAddr(ctx); !errors.Is(err, ErrExtensionNotNegotiated) {
 		t.Errorf("observedAddr err = %v, want ErrExtensionNotNegotiated", err)
 	}
@@ -131,6 +130,62 @@ func TestQADLoopbackHandshake(t *testing.T) {
 	// Graceful close with the QAD close code and reason must not error.
 	if err := qad.close(qadCloseCode, qadCloseReason); err != nil {
 		t.Errorf("close: %v", err)
+	}
+}
+
+func TestQADObservedAddrLoopback(t *testing.T) {
+	tests := []struct {
+		name string
+		ip   net.IP
+	}{
+		{"ipv4", net.IPv4(127, 0, 0, 1)},
+		{"ipv6", net.IPv6loopback},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			addr, stop := startLoopbackQADWithConfig(t, tt.ip, &quic.Config{
+				SendObservedAddressReports: true,
+				KeepAlivePeriod:            100 * time.Millisecond,
+				MaxIdleTimeout:             qadMaxIdle,
+			})
+			defer stop()
+
+			qad, err := newQADClient(addr, "relay.iroh.invalid",
+				&tls.Config{InsecureSkipVerify: true},
+				&quic.Config{
+					ReceiveObservedAddressReports: true,
+					KeepAlivePeriod:               100 * time.Millisecond,
+					MaxIdleTimeout:                qadMaxIdle,
+				})
+			if err != nil {
+				t.Fatalf("newQADClient: %v", err)
+			}
+			defer qad.close(qadCloseCode, qadCloseReason)
+
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				got, err := qad.observedAddr(context.Background())
+				if err == nil {
+					if tt.ip.To4() != nil && !got.Addr().Is4() {
+						t.Fatalf("observedAddr = %v, want IPv4", got)
+					}
+					if tt.ip.To4() == nil && !got.Addr().Is6() {
+						t.Fatalf("observedAddr = %v, want IPv6", got)
+					}
+					if got.Port() == 0 {
+						t.Fatalf("observedAddr = %v, want non-zero port", got)
+					}
+					return
+				}
+				if !errors.Is(err, ErrExtensionNotNegotiated) {
+					t.Fatalf("observedAddr err = %v, want nil or ErrExtensionNotNegotiated", err)
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("observedAddr never received a report")
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+		})
 	}
 }
 
