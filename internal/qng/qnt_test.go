@@ -403,6 +403,55 @@ func TestQNTRoundClearsPreviousPendingState(t *testing.T) {
 	}
 }
 
+func TestQNTProbeUDPAddr(t *testing.T) {
+	tests := []struct {
+		name string
+		addr netip.AddrPort
+		want netip.AddrPort
+	}{
+		{
+			name: "ipv4",
+			addr: netip.MustParseAddrPort("192.0.2.1:1234"),
+			want: netip.MustParseAddrPort("192.0.2.1:1234"),
+		},
+		{
+			name: "mapped ipv4",
+			addr: netip.MustParseAddrPort("[::ffff:192.0.2.1]:1234"),
+			want: netip.MustParseAddrPort("192.0.2.1:1234"),
+		},
+		{
+			name: "ipv6",
+			addr: netip.MustParseAddrPort("[2001:db8::1]:4433"),
+			want: netip.MustParseAddrPort("[2001:db8::1]:4433"),
+		},
+		{
+			name: "invalid",
+		},
+		{
+			name: "zero port",
+			addr: netip.MustParseAddrPort("192.0.2.1:0"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := qntProbeUDPAddr(tt.addr)
+			if !tt.want.IsValid() {
+				if got != nil {
+					t.Fatalf("qntProbeUDPAddr(%v) = %v, want nil", tt.addr, got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("qntProbeUDPAddr(%v) = nil, want %v", tt.addr, tt.want)
+			}
+			if got.AddrPort() != tt.want {
+				t.Fatalf("qntProbeUDPAddr(%v) = %v, want %v", tt.addr, got.AddrPort(), tt.want)
+			}
+		})
+	}
+}
+
 func TestQNTSentProbeConsumesMatchingPathResponse(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
 	challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
@@ -416,6 +465,72 @@ func TestQNTSentProbeConsumesMatchingPathResponse(t *testing.T) {
 	}
 	if got, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge}, remote); ok || got.IsValid() {
 		t.Fatalf("duplicate qntConsumePathResponse = %v, %v, want zero, false", got, ok)
+	}
+}
+
+func TestQNTNextProbeFramePopsPendingProbeAndRecordsChallenge(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	local := netip.MustParseAddrPort("192.0.2.1:1234")
+	remote := netip.MustParseAddrPort("198.51.100.1:5678")
+
+	if err := c.AddNATTraversalAddress(local); err != nil {
+		t.Fatalf("AddNATTraversalAddress: %v", err)
+	}
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 1,
+		Addr:  remote.Addr(),
+		Port:  remote.Port(),
+	}); err != nil {
+		t.Fatalf("addRemoteNATTraversalAddressFrame: %v", err)
+	}
+	if _, err := c.InitiateNATTraversalRound(context.Background()); err != nil {
+		t.Fatalf("InitiateNATTraversalRound: %v", err)
+	}
+
+	got, frame, ok, err := c.qntNextProbeFrame()
+	if err != nil {
+		t.Fatalf("qntNextProbeFrame: %v", err)
+	}
+	if !ok {
+		t.Fatal("qntNextProbeFrame ok = false, want true")
+	}
+	if got != remote {
+		t.Fatalf("qntNextProbeFrame remote = %v, want %v", got, remote)
+	}
+	pathChallenge, ok := frame.Frame.(*wire.PathChallengeFrame)
+	if !ok {
+		t.Fatalf("qntNextProbeFrame frame = %T, want *wire.PathChallengeFrame", frame.Frame)
+	}
+	if probes := c.qntPendingProbeAddresses(); len(probes) != 0 {
+		t.Fatalf("pending probes after qntNextProbeFrame = %v, want none", probes)
+	}
+	if matched, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: pathChallenge.Data}, remote); !ok || matched != remote {
+		t.Fatalf("qntConsumePathResponse after qntNextProbeFrame = %v, %v, want %v, true", matched, ok, remote)
+	}
+}
+
+func TestQNTNextProbeFrameReturnsFalseWhenEmpty(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+
+	remote, frame, ok, err := c.qntNextProbeFrame()
+	if err != nil {
+		t.Fatalf("qntNextProbeFrame: %v", err)
+	}
+	if ok || remote.IsValid() || frame.Frame != nil {
+		t.Fatalf("qntNextProbeFrame = %v, %#v, %v, want zero frame false", remote, frame, ok)
+	}
+}
+
+func TestQNTNextProbeFrameInvalidState(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.qntLocalState().pendingProbes = []netip.AddrPort{netip.AddrPort{}}
+
+	got, frame, ok, err := c.qntNextProbeFrame()
+	if err != nil {
+		t.Fatalf("qntNextProbeFrame: %v", err)
+	}
+	if ok || got.IsValid() || frame.Frame != nil {
+		t.Fatalf("qntNextProbeFrame invalid = %v, %#v, %v, want zero frame false", got, frame, ok)
 	}
 }
 

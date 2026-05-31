@@ -2,11 +2,14 @@ package quic
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
+	"net"
 	"net/netip"
 	"slices"
 	"sync"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -176,6 +179,14 @@ func (c *Conn) qntPendingProbeAddresses() []netip.AddrPort {
 	return slices.Clone(st.pendingProbes)
 }
 
+func qntProbeUDPAddr(addr netip.AddrPort) *net.UDPAddr {
+	addr = canonicalNATTraversalAddr(addr)
+	if !addr.IsValid() || addr.Port() == 0 {
+		return nil
+	}
+	return net.UDPAddrFromAddrPort(addr)
+}
+
 func (c *Conn) qntRecordSentProbe(challenge [8]byte, remote netip.AddrPort) {
 	remote = canonicalNATTraversalAddr(remote)
 	if !remote.IsValid() {
@@ -188,6 +199,46 @@ func (c *Conn) qntRecordSentProbe(challenge [8]byte, remote netip.AddrPort) {
 		st.sentProbes = make(map[[8]byte]netip.AddrPort)
 	}
 	st.sentProbes[challenge] = remote
+}
+
+func (c *Conn) qntNextProbeFrame() (netip.AddrPort, ackhandler.Frame, bool, error) {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	empty := len(st.pendingProbes) == 0
+	st.mu.Unlock()
+	if empty {
+		return netip.AddrPort{}, ackhandler.Frame{}, false, nil
+	}
+
+	var challenge [8]byte
+	if _, err := rand.Read(challenge[:]); err != nil {
+		return netip.AddrPort{}, ackhandler.Frame{}, false, err
+	}
+	remote, frame, ok := c.qntPopPendingProbe(challenge)
+	if !ok {
+		return netip.AddrPort{}, ackhandler.Frame{}, false, nil
+	}
+	return remote, ackhandler.Frame{Frame: frame}, true, nil
+}
+
+func (c *Conn) qntPopPendingProbe(challenge [8]byte) (netip.AddrPort, *wire.PathChallengeFrame, bool) {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.pendingProbes) == 0 {
+		return netip.AddrPort{}, nil, false
+	}
+	remote := st.pendingProbes[0]
+	st.pendingProbes = st.pendingProbes[1:]
+	remote = canonicalNATTraversalAddr(remote)
+	if !remote.IsValid() || remote.Port() == 0 {
+		return netip.AddrPort{}, nil, false
+	}
+	if st.sentProbes == nil {
+		st.sentProbes = make(map[[8]byte]netip.AddrPort)
+	}
+	st.sentProbes[challenge] = remote
+	return remote, &wire.PathChallengeFrame{Data: challenge}, true
 }
 
 func (c *Conn) qntConsumePathResponse(frame *wire.PathResponseFrame, source netip.AddrPort) (netip.AddrPort, bool) {
