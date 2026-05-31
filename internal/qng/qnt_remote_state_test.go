@@ -95,15 +95,14 @@ func TestQNTRemoteAddressStateCanonicalizesIPv4Mapped(t *testing.T) {
 func TestQNTRemoteAddressStateAddressesSnapshot(t *testing.T) {
 	s := newQNTRemoteAddressState(3)
 	for _, f := range []*wire.AddAddressFrame{
-		{SeqNo: 1, Addr: netip.MustParseAddr("192.0.2.1"), Port: 1001},
 		{SeqNo: 2, Addr: netip.MustParseAddr("192.0.2.2"), Port: 1002},
+		{SeqNo: 1, Addr: netip.MustParseAddr("192.0.2.1"), Port: 1001},
 	} {
 		if _, _, err := s.add(f); err != nil {
 			t.Fatal(err)
 		}
 	}
 	got := s.addresses()
-	slices.SortFunc(got, func(a, b netip.AddrPort) int { return a.Compare(b) })
 	want := []netip.AddrPort{
 		netip.MustParseAddrPort("192.0.2.1:1001"),
 		netip.MustParseAddrPort("192.0.2.2:1002"),

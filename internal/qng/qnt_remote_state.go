@@ -2,6 +2,7 @@ package quic
 
 import (
 	"net/netip"
+	"slices"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
@@ -49,9 +50,14 @@ func (s *qntRemoteAddressState) check(frame *wire.AddAddressFrame) bool {
 }
 
 func (s *qntRemoteAddressState) addresses() []netip.AddrPort {
+	seqs := make([]uint64, 0, len(s.addrs))
+	for seq := range s.addrs {
+		seqs = append(seqs, seq)
+	}
+	slices.Sort(seqs)
 	addrs := make([]netip.AddrPort, 0, len(s.addrs))
-	for _, addr := range s.addrs {
-		addrs = append(addrs, addr)
+	for _, seq := range seqs {
+		addrs = append(addrs, s.addrs[seq])
 	}
 	return addrs
 }
