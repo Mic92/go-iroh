@@ -318,6 +318,9 @@ func TestEndpointConnectWith(t *testing.T) {
 	if used0RTT {
 		t.Fatal("first ConnectWith unexpectedly used 0-RTT")
 	}
+	if conn.StableID() == 0 {
+		t.Fatal("StableID = 0, want non-zero")
+	}
 	if got, err := connecting.Connection(ctx); err != nil || got != conn {
 		t.Fatalf("Connection = %v, %v; want original conn", got, err)
 	}

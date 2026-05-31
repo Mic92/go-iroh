@@ -51,10 +51,11 @@ type Conn struct {
 	remoteID base.EndpointId
 	alpn     []byte
 	side     Side
+	stableID uint64
 }
 
-func newConn(qc *quic.Conn, remoteID base.EndpointId, alpn []byte, side Side) (*Conn, error) {
-	return &Conn{qc: qc, remoteID: remoteID, alpn: alpn, side: side}, nil
+func newConn(qc *quic.Conn, remoteID base.EndpointId, alpn []byte, side Side, stableID uint64) (*Conn, error) {
+	return &Conn{qc: qc, remoteID: remoteID, alpn: alpn, side: side, stableID: stableID}, nil
 }
 
 // ConnectOptions configures [Endpoint.ConnectWith]. It is reserved for future
@@ -255,7 +256,11 @@ func (a *Accepting) Into0RTT() *Conn {
 	if a == nil || a.qc == nil {
 		return nil
 	}
-	return &Conn{qc: a.qc, side: SideServer}
+	var stableID uint64
+	if a.ep != nil {
+		stableID = a.ep.connStableID(a.qc)
+	}
+	return &Conn{qc: a.qc, side: SideServer, stableID: stableID}
 }
 
 // Connection waits for the handshake, verifies the peer id, registers the
@@ -276,6 +281,10 @@ func (c *Conn) ALPN() []byte { return c.alpn }
 
 // Side reports whether this connection was dialed or accepted.
 func (c *Conn) Side() Side { return c.side }
+
+// StableID returns an endpoint-local identifier for this connection. It is
+// fixed for the connection lifetime, even when the transport path changes.
+func (c *Conn) StableID() uint64 { return c.stableID }
 
 // OpenStream opens a new bidirectional stream, blocking until the peer's flow
 // control permits it or ctx is done.

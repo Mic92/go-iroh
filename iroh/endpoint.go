@@ -54,6 +54,8 @@ type Endpoint struct {
 	addrWatch   *watch.Value[base.EndpointAddr]
 	externalNAT []netip.AddrPort
 	netReport   netReportRunner
+	nextStable  uint64
+	stableIDs   map[*quic.Conn]uint64
 }
 
 // config holds the options assembled by [Option] values before [Bind].
@@ -360,6 +362,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		lookup:       c.lookup,
 		closedCh:     make(chan struct{}),
 		netReport:    endpointNetReportRunner(c, relayMap),
+		stableIDs:    make(map[*quic.Conn]uint64),
 	}
 	// The per-remote state registry shares the serve context: its actors stop
 	// when the endpoint's recv loop stops. Its resolve hook is backed by the
@@ -836,7 +839,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 			}
 			continue
 		}
-		conn, err := newConn(qc, addr.Id, alpn, SideClient)
+		conn, err := newConn(qc, addr.Id, alpn, SideClient, e.connStableID(qc))
 		if err != nil {
 			return nil, err
 		}
@@ -932,7 +935,7 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 		return nil, err
 	}
 	alpn := []byte(qc.ConnectionState().TLS.NegotiatedProtocol)
-	conn, err := newConn(qc, remote, alpn, SideServer)
+	conn, err := newConn(qc, remote, alpn, SideServer, e.connStableID(qc))
 	if err != nil {
 		return nil, err
 	}
@@ -992,6 +995,21 @@ func (e *Endpoint) registerConn(remote base.EndpointId, qc *quic.Conn) {
 	// connection fail. The actor/qng layers keep the failure visible to explicit
 	// hole-punch calls.
 	_ = e.remotes.Actor(remote).AddNATTraversalAddresses(e.localNATTraversalCandidates())
+}
+
+func (e *Endpoint) connStableID(qc *quic.Conn) uint64 {
+	if qc == nil {
+		return 0
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if id, ok := e.stableIDs[qc]; ok {
+		return id
+	}
+	e.nextStable++
+	id := e.nextStable
+	e.stableIDs[qc] = id
+	return id
 }
 
 // resolveFunc returns the address-lookup hook the RemoteMap actors use to
