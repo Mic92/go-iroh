@@ -373,9 +373,9 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		return err == nil
 	})
 
-	// Select a home relay. net_report-based selection (latency probing) is a
-	// later slice; until then the lexically-first configured relay is the home
-	// relay, which is enough to make relay connectivity work.
+	// Select an initial home relay so relay connectivity starts before the first
+	// net_report finishes. applyNetReport switches to net_report's preferred
+	// relay once latency data is available.
 	if ep.relay != nil {
 		if urls := relayMap.URLs(); len(urls) > 0 {
 			ep.relay.SetHomeRelay(urls[0])
@@ -538,7 +538,18 @@ func (e *Endpoint) AddExternalAddr(ctx context.Context, addr netip.AddrPort) {
 }
 
 func (e *Endpoint) applyNetReport(report netreport.Report) bool {
-	return e.setExternalNATTraversalCandidates(report.GlobalV4, report.GlobalV6)
+	changed := e.setExternalNATTraversalCandidates(report.GlobalV4, report.GlobalV6)
+	if e.relay != nil && !report.PreferredRelay.IsZero() {
+		current := e.relay.HomeRelayStatus().Get()
+		if current == nil || !current.URL.Equal(report.PreferredRelay) {
+			e.relay.SetHomeRelay(report.PreferredRelay)
+			e.mu.Lock()
+			e.updateAddrWatchLocked()
+			e.mu.Unlock()
+			changed = true
+		}
+	}
+	return changed
 }
 
 func (e *Endpoint) refreshNetReport(ctx context.Context) error {

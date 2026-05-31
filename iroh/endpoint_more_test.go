@@ -682,6 +682,30 @@ func TestEndpointApplyNetReportNATTraversalCandidates(t *testing.T) {
 	}
 }
 
+func TestEndpointApplyNetReportPreferredRelay(t *testing.T) {
+	ctx := context.Background()
+	fallback := relayURL(t, "https://a.relay.example/")
+	preferred := relayURL(t, "https://b.relay.example/")
+	ep, err := Bind(ctx, WithRelayMode(relay.ModeCustom(relay.MapFromURLs(fallback, preferred))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	if st := ep.HomeRelayStatus().Get(); st == nil || !st.URL.Equal(fallback) {
+		t.Fatalf("initial home relay = %v, want %v", st, fallback)
+	}
+	if !ep.applyNetReport(netreport.Report{PreferredRelay: preferred}) {
+		t.Fatal("applyNetReport preferred relay = false, want true")
+	}
+	if st := ep.HomeRelayStatus().Get(); st == nil || !st.URL.Equal(preferred) {
+		t.Fatalf("home relay after net_report = %v, want %v", st, preferred)
+	}
+	if ep.applyNetReport(netreport.Report{PreferredRelay: preferred}) {
+		t.Fatal("same preferred relay applyNetReport = true, want false")
+	}
+}
+
 func TestEndpointApplyEmptyNetReportClearsExternalNATTraversalCandidates(t *testing.T) {
 	ctx := context.Background()
 	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
