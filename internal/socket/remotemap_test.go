@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tmc/go-iroh/base"
@@ -137,25 +138,23 @@ func TestRemoteMapReuseActor(t *testing.T) {
 // TestRemoteMapIdleTeardown checks an actor with no connections idles out and
 // deregisters.
 func TestRemoteMapIdleTeardown(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond)
-	id := testEndpointId(t)
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond)
+		id := testEndpointId(t)
 
-	m.Actor(id) // spawns an actor with no connections
-	if m.Len() != 1 {
-		t.Fatalf("Len after spawn = %d, want 1", m.Len())
-	}
-
-	// Wait for the idle teardown to deregister it.
-	deadline := time.After(2 * time.Second)
-	for m.Len() != 0 {
-		select {
-		case <-deadline:
-			t.Fatal("actor did not idle out and deregister")
-		case <-time.After(2 * time.Millisecond):
+		m.Actor(id) // spawns an actor with no connections
+		if m.Len() != 1 {
+			t.Fatalf("Len after spawn = %d, want 1", m.Len())
 		}
-	}
+
+		time.Sleep(10 * time.Millisecond)
+		synctest.Wait()
+		if m.Len() != 0 {
+			t.Fatalf("Len after idle teardown = %d, want 0", m.Len())
+		}
+	})
 }
 
 // TestActorPathEventsAndSelection checks that adding a connection emits Opened
