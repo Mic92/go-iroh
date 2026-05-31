@@ -9,6 +9,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
+	"github.com/tmc/go-iroh/internal/netreport"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
 )
@@ -225,6 +226,70 @@ func TestEndpointExternalNATTraversalCandidatesRemoveStaleRemoteCandidate(t *tes
 	}
 	if len(conn.removedNAT) != 1 || conn.removedNAT[0] != oldExternal {
 		t.Fatalf("removed QNT candidates = %v, want [%v]", conn.removedNAT, oldExternal)
+	}
+}
+
+func TestEndpointApplyNetReportNATTraversalCandidates(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	global4 := netip.MustParseAddrPort("[::ffff:198.51.100.10]:4444")
+	global4Canon := netip.MustParseAddrPort("198.51.100.10:4444")
+	global6 := netip.MustParseAddrPort("[2001:db8::10]:5555")
+	if !ep.applyNetReport(netreport.Report{GlobalV4: global4, GlobalV6: global6}) {
+		t.Fatal("applyNetReport = false, want true")
+	}
+	want := []netip.AddrPort{ep.LocalAddr(), global4Canon, global6}
+	if got := ep.localNATTraversalCandidates(); !equalAddrPorts(got, want) {
+		t.Fatalf("localNATTraversalCandidates = %v, want %v", got, want)
+	}
+	if ep.applyNetReport(netreport.Report{GlobalV4: global4Canon, GlobalV6: global6}) {
+		t.Fatal("same applyNetReport = true, want false")
+	}
+}
+
+func TestEndpointApplyEmptyNetReportClearsExternalNATTraversalCandidates(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	remote, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &endpointQNTFakeConn{
+		addr: socket.IPAddr(netip.MustParseAddrPort("192.0.2.20:5678")),
+		done: make(chan struct{}),
+	}
+	events := ep.remotes.AddConnection(remote.Public(), conn)
+	select {
+	case <-events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial path event")
+	}
+
+	external := netip.MustParseAddrPort("203.0.113.10:4444")
+	if !ep.applyNetReport(netreport.Report{GlobalV4: external}) {
+		t.Fatal("applyNetReport with global = false, want true")
+	}
+	if !ep.applyNetReport(netreport.Report{}) {
+		t.Fatal("empty applyNetReport = false, want true")
+	}
+	if got, want := ep.localNATTraversalCandidates(), []netip.AddrPort{ep.LocalAddr()}; !equalAddrPorts(got, want) {
+		t.Fatalf("localNATTraversalCandidates after empty report = %v, want %v", got, want)
+	}
+	if got, want := conn.currentNAT, []netip.AddrPort{ep.LocalAddr()}; !equalAddrPorts(got, want) {
+		t.Fatalf("current QNT candidates = %v, want %v", got, want)
+	}
+	if len(conn.removedNAT) != 1 || conn.removedNAT[0] != external {
+		t.Fatalf("removed QNT candidates = %v, want [%v]", conn.removedNAT, external)
 	}
 }
 

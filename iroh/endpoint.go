@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/internal/netreport"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/relay"
@@ -304,6 +305,10 @@ func (e *Endpoint) setExternalNATTraversalCandidates(addrs ...netip.AddrPort) bo
 
 	e.advertiseNATTraversalCandidates()
 	return true
+}
+
+func (e *Endpoint) applyNetReport(report netreport.Report) bool {
+	return e.setExternalNATTraversalCandidates(report.GlobalV4, report.GlobalV6)
 }
 
 func (e *Endpoint) advertiseNATTraversalCandidates() {
