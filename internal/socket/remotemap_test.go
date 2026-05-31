@@ -15,6 +15,7 @@ import (
 // fakeConn is a test [Connection]. Close() ends it; SmoothedRTT and RemoteAddr
 // are fixed.
 type fakeConn struct {
+	mu                  sync.Mutex
 	addr                Addr
 	rtt                 time.Duration
 	multipathNegotiated bool
@@ -38,7 +39,16 @@ func (c *fakeConn) SmoothedRTT() time.Duration { return c.rtt }
 func (c *fakeConn) Done() <-chan struct{}      { return c.done }
 func (c *fakeConn) RemoteAddr() Addr           { return c.addr }
 func (c *fakeConn) MultipathNegotiated() bool  { return c.multipathNegotiated }
-func (c *fakeConn) Paths() []PathInfo          { return append([]PathInfo(nil), c.paths...) }
+func (c *fakeConn) Paths() []PathInfo {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]PathInfo(nil), c.paths...)
+}
+func (c *fakeConn) setPaths(paths []PathInfo) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.paths = append([]PathInfo(nil), paths...)
+}
 func (c *fakeConn) AddNATTraversalAddress(addr netip.AddrPort) error {
 	if c.addNATErr != nil {
 		return c.addNATErr
@@ -275,6 +285,55 @@ func TestActorPathEventsAndSelection(t *testing.T) {
 	if sel, ok := a.SelectedPath(); !ok || sel.String() != addr.String() {
 		t.Errorf("SelectedPath = (%v, %v), want %s", sel, ok, addr)
 	}
+}
+
+// TestActorHeartbeatSyncsQNGRoutes checks the actor heartbeat cadence used for
+// path keep-alive work: newly-observed qng route paths are synced on the next
+// HeartbeatInterval tick.
+func TestActorHeartbeatSyncsQNGRoutes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+		a := m.Actor(testEndpointId(t))
+
+		addr := IPAddr(netip.MustParseAddrPort("192.0.2.1:4433"))
+		route := IPAddr(netip.MustParseAddrPort("[2001:db8::1]:4433"))
+		conn := newFakeConn(addr, time.Millisecond)
+		events, ok := a.AddConnection(conn)
+		if !ok {
+			t.Fatal("AddConnection failed")
+		}
+		eventsDone := make(chan struct{})
+		go func() {
+			for range events {
+			}
+			close(eventsDone)
+		}()
+		synctest.Wait()
+
+		conn.setPaths([]PathInfo{{ID: 1, Validated: true, Addr: route, HasAddr: true}})
+		time.Sleep(HeartbeatInterval - time.Nanosecond)
+		synctest.Wait()
+		a.mu.Lock()
+		_, known := a.paths.Status(route)
+		a.mu.Unlock()
+		if known {
+			t.Fatalf("route %s synced before HeartbeatInterval", route)
+		}
+
+		time.Sleep(time.Nanosecond)
+		synctest.Wait()
+		a.mu.Lock()
+		status, known := a.paths.Status(route)
+		a.mu.Unlock()
+		if !known || status != PathStatusOpen {
+			t.Fatalf("route status after heartbeat = %v, %v, want open true", status, known)
+		}
+		cancel()
+		synctest.Wait()
+		<-eventsDone
+	})
 }
 
 // TestActorHolepunchGated asserts the qng X2 degradation: hole-punching returns
