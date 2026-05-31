@@ -7,8 +7,10 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -659,9 +661,7 @@ func TestQNTValidatedProbeQueue(t *testing.T) {
 }
 
 func TestQNTOpenValidatedPathStoresRoute(t *testing.T) {
-	local := uint32(4)
-	peer := uint32(8)
-	c := newMaxPathIDTestConn(&local, &peer)
+	c, frames := newQNTRoutePathTestConn(t)
 	c.multipathManager.handleMaxPathID(protocol.PathID(4))
 	addr := netip.MustParseAddrPort("[::ffff:198.51.100.1]:1234")
 	want := netip.MustParseAddrPort("198.51.100.1:1234")
@@ -686,11 +686,50 @@ func TestQNTOpenValidatedPathStoresRoute(t *testing.T) {
 	if st.validated {
 		t.Fatal("QNT route path is marked validated before route send support exists")
 	}
+	if _, ok := c.sentPacketHandler.PathDebugStats(pid); !ok {
+		t.Fatalf("sent recovery state for path %d not allocated", pid)
+	}
+	if alarm := c.receivedPacketHandler.GetAlarmTimeoutForPath(pid); !alarm.IsZero() {
+		t.Fatalf("new recv path %d ACK alarm = %v, want zero", pid, alarm)
+	}
+	if len(*frames) != 1 {
+		t.Fatalf("queued %d local path CID frames, want 1", len(*frames))
+	}
+	nc, ok := (*frames)[0].(*wire.NewConnectionIDFrame)
+	if !ok {
+		t.Fatalf("queued frame = %T, want *wire.NewConnectionIDFrame", (*frames)[0])
+	}
+	if nc.PathID == nil || *nc.PathID != pid {
+		t.Fatalf("PATH_NEW_CONNECTION_ID PathID = %v, want %d", nc.PathID, pid)
+	}
 	if c.multipathOut.nextPathID != protocol.PathID(2) {
 		t.Fatalf("nextPathID = %d, want 2", c.multipathOut.nextPathID)
 	}
 	if got, ok := c.qntPopValidatedProbe(); ok || got.IsValid() {
 		t.Fatalf("validated queue after route = %v, %v, want zero false", got, ok)
+	}
+}
+
+func TestQNTOpenValidatedPathAllocationErrorPreservesCandidate(t *testing.T) {
+	c, _ := newQNTRoutePathTestConn(t)
+	c.multipathManager.handleMaxPathID(protocol.PathID(4))
+	if err := c.sentPacketHandler.AddPath(protocol.PathID(1)); err != nil {
+		t.Fatalf("pre-add sent path: %v", err)
+	}
+	addr := netip.MustParseAddrPort("198.51.100.1:1234")
+	if !c.qntQueueValidatedProbe(addr) {
+		t.Fatal("qntQueueValidatedProbe = false, want true")
+	}
+	pid, route, ok, err := c.qntOpenValidatedPathLocked()
+	if err == nil {
+		t.Fatal("qntOpenValidatedPathLocked err = nil, want allocation error")
+	}
+	if ok || pid != protocol.PathIDZero || route.IsValid() {
+		t.Fatalf("qntOpenValidatedPathLocked = %d, %v, %v, want zero false", pid, route, ok)
+	}
+	got, ok := c.qntPopValidatedProbe()
+	if !ok || got != addr {
+		t.Fatalf("validated probe after allocation error = %v, %v, want %v true", got, ok, addr)
 	}
 }
 
@@ -763,9 +802,7 @@ func TestQNTOpenValidatedPathNoCandidate(t *testing.T) {
 }
 
 func TestQNTProcessValidatedPathOpenConsumesOneCandidate(t *testing.T) {
-	local := uint32(4)
-	peer := uint32(8)
-	c := newMaxPathIDTestConn(&local, &peer)
+	c, _ := newQNTRoutePathTestConn(t)
 	c.multipathManager.handleMaxPathID(protocol.PathID(4))
 	addr1 := netip.MustParseAddrPort("198.51.100.1:1234")
 	addr2 := netip.MustParseAddrPort("198.51.100.2:1234")
@@ -1216,6 +1253,30 @@ func queuedReachOutFrames(c *Conn) []*wire.ReachOutFrame {
 		}
 	}
 	return frames
+}
+
+func newQNTRoutePathTestConn(t *testing.T) (*Conn, *[]wire.Frame) {
+	t.Helper()
+	local := uint32(4)
+	peer := uint32(8)
+	c := newMaxPathIDTestConn(&local, &peer)
+	rttStats := utils.NewRTTStats()
+	c.sentPacketHandler = ackhandler.NewSentPacketHandler(
+		0,
+		protocol.InitialPacketSize,
+		rttStats,
+		&utils.ConnectionStats{},
+		true,
+		false,
+		func(protocol.PacketNumber) {},
+		protocol.PerspectiveClient,
+		nil,
+		utils.DefaultLogger,
+	)
+	c.receivedPacketHandler = *ackhandler.NewReceivedPacketHandler(utils.DefaultLogger)
+	g, frames, _ := newTestConnIDGenerator(t)
+	c.connIDGenerator = g
+	return c, frames
 }
 
 func hasReachOut(frames []*wire.ReachOutFrame, addr netip.AddrPort) bool {

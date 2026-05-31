@@ -351,18 +351,8 @@ func (c *Conn) openPathLocked() (*MultipathPath, error) {
 	}
 	c.multipathOut.nextPathID++
 
-	// Per-path send + receive recovery state (5a / 5e). Each gets its own
-	// independent packet-number space.
-	if err := c.sentPacketHandler.AddPath(pid); err != nil {
-		return nil, fmt.Errorf("quic: add send path %d: %w", pid, err)
-	}
-	if err := c.receivedPacketHandler.AddPath(pid, c.logger); err != nil {
-		return nil, fmt.Errorf("quic: add recv path %d: %w", pid, err)
-	}
-	// Issue one of our connection IDs for this path (5c), so the peer can address
-	// packets to it. This queues a PATH_NEW_CONNECTION_ID (0x3e78) on path 0.
-	if _, err := c.issuePathConnID(pid); err != nil {
-		return nil, fmt.Errorf("quic: issue path %d connection id: %w", pid, err)
+	if err := c.allocatePathLocked(pid); err != nil {
+		return nil, err
 	}
 
 	st := &pathOpenState{id: pid, validatedChan: make(chan struct{})}
@@ -382,6 +372,9 @@ func (c *Conn) qntOpenValidatedPathLocked() (protocol.PathID, netip.AddrPort, bo
 	if !c.canOpenPath(pid) {
 		return protocol.PathIDZero, netip.AddrPort{}, false, fmt.Errorf("%w: path %d peer max path id not raised that far", ErrPathLimit, pid)
 	}
+	if err := c.allocatePathLocked(pid); err != nil {
+		return protocol.PathIDZero, netip.AddrPort{}, false, err
+	}
 	route, ok := c.qntPopValidatedProbe()
 	if !ok {
 		return protocol.PathIDZero, netip.AddrPort{}, false, nil
@@ -390,6 +383,23 @@ func (c *Conn) qntOpenValidatedPathLocked() (protocol.PathID, netip.AddrPort, bo
 	st := &pathOpenState{id: pid, validatedChan: make(chan struct{}), qntRoute: route}
 	c.multipathOut.paths[pid] = st
 	return pid, route, true, nil
+}
+
+func (c *Conn) allocatePathLocked(pid protocol.PathID) error {
+	// Per-path send + receive recovery state (5a / 5e). Each gets its own
+	// independent packet-number space.
+	if err := c.sentPacketHandler.AddPath(pid); err != nil {
+		return fmt.Errorf("quic: add send path %d: %w", pid, err)
+	}
+	if err := c.receivedPacketHandler.AddPath(pid, c.logger); err != nil {
+		return fmt.Errorf("quic: add recv path %d: %w", pid, err)
+	}
+	// Issue one of our connection IDs for this path (5c), so the peer can address
+	// packets to it. This queues a PATH_NEW_CONNECTION_ID (0x3e78) on path 0.
+	if _, err := c.issuePathConnID(pid); err != nil {
+		return fmt.Errorf("quic: issue path %d connection id: %w", pid, err)
+	}
+	return nil
 }
 
 // driveMultipath performs the per-path send work for every open non-zero path.
