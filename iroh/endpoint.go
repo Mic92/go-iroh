@@ -1002,14 +1002,23 @@ func (e *Endpoint) connStableID(qc *quic.Conn) uint64 {
 		return 0
 	}
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	if id, ok := e.stableIDs[qc]; ok {
+		e.mu.Unlock()
 		return id
 	}
 	e.nextStable++
 	id := e.nextStable
 	e.stableIDs[qc] = id
+	e.mu.Unlock()
+	go e.removeStableIDWhenClosed(qc)
 	return id
+}
+
+func (e *Endpoint) removeStableIDWhenClosed(qc *quic.Conn) {
+	<-qc.Context().Done()
+	e.mu.Lock()
+	delete(e.stableIDs, qc)
+	e.mu.Unlock()
 }
 
 // resolveFunc returns the address-lookup hook the RemoteMap actors use to

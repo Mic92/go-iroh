@@ -324,10 +324,22 @@ func TestEndpointConnectWith(t *testing.T) {
 	if got, err := connecting.Connection(ctx); err != nil || got != conn {
 		t.Fatalf("Connection = %v, %v; want original conn", got, err)
 	}
+	if clientStableIDCount(client) == 0 {
+		t.Fatal("client stable ID map is empty before close")
+	}
 	conn.CloseWithError(0, "")
+	if !waitFor(ctx, func() bool { return clientStableIDCount(client) == 0 }) {
+		t.Fatalf("client stable ID map retained %d entries after close", clientStableIDCount(client))
+	}
 	if err := <-accepted; err != nil {
 		t.Fatalf("accept: %v", err)
 	}
+}
+
+func clientStableIDCount(e *Endpoint) int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return len(e.stableIDs)
 }
 
 // ExampleConn_Close closes a loopback connection with an application code and
