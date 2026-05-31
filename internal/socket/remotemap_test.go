@@ -21,6 +21,8 @@ type fakeConn struct {
 	openPath            func(context.Context) error
 	openPathCalls       atomic.Int64
 	paths               []PathInfo
+	natAddrs            []netip.AddrPort
+	addNATErr           error
 	done                chan struct{}
 	once                sync.Once
 }
@@ -34,6 +36,13 @@ func (c *fakeConn) Done() <-chan struct{}      { return c.done }
 func (c *fakeConn) RemoteAddr() Addr           { return c.addr }
 func (c *fakeConn) MultipathNegotiated() bool  { return c.multipathNegotiated }
 func (c *fakeConn) Paths() []PathInfo          { return append([]PathInfo(nil), c.paths...) }
+func (c *fakeConn) AddNATTraversalAddress(addr netip.AddrPort) error {
+	if c.addNATErr != nil {
+		return c.addNATErr
+	}
+	c.natAddrs = append(c.natAddrs, addr)
+	return nil
+}
 func (c *fakeConn) OpenPath(ctx context.Context) error {
 	c.openPathCalls.Add(1)
 	if c.openPath != nil {

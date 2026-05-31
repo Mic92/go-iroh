@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/tmc/go-iroh/base"
@@ -198,6 +199,11 @@ func (a *connAdapter) Paths() []socket.PathInfo {
 		}
 	}
 	return paths
+}
+
+// AddNATTraversalAddress hands one local QNT candidate address to qng.
+func (a *connAdapter) AddNATTraversalAddress(addr netip.AddrPort) error {
+	return a.qc.AddNATTraversalAddress(addr)
 }
 
 // OpenPath opens and validates one qng multipath path over the connection's

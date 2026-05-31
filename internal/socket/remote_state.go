@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sort"
 	"sync"
 	"time"
@@ -79,6 +80,10 @@ type PathInfo struct {
 
 type pathObservingConnection interface {
 	Paths() []PathInfo
+}
+
+type natTraversalAddressConnection interface {
+	AddNATTraversalAddress(netip.AddrPort) error
 }
 
 // ResolveFunc resolves additional transport addresses for a remote endpoint. It
@@ -474,6 +479,46 @@ func (a *RemoteStateActor) MultipathPaths() []PathInfo {
 		return !paths[i].Validated && paths[j].Validated
 	})
 	return paths
+}
+
+// AddNATTraversalAddresses hands local QNT candidate addresses to active qng
+// connections. Candidate discovery stays outside this method: callers must pass
+// already-vetted local candidates, such as endpoint-bound direct addresses and
+// QAD reflexive addresses. qng owns QNT state, wire frames, probe timers, and
+// eventual path opening.
+func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) error {
+	a.mu.Lock()
+	conns := make([]Connection, 0, len(a.conns))
+	for conn := range a.conns {
+		conns = append(conns, conn)
+	}
+	a.mu.Unlock()
+
+	negotiated := false
+	var target natTraversalAddressConnection
+	for _, conn := range conns {
+		mp, ok := conn.(multipathConnection)
+		if !ok || !mp.MultipathNegotiated() {
+			continue
+		}
+		negotiated = true
+		if qnt, ok := conn.(natTraversalAddressConnection); ok {
+			target = qnt
+			break
+		}
+	}
+	if !negotiated {
+		return ErrExtensionNotNegotiated
+	}
+	if target == nil {
+		return ErrHolepunchNotImplemented
+	}
+	for _, addr := range addrs {
+		if err := target.AddNATTraversalAddress(addr); err != nil {
+			return fmt.Errorf("socket: add nat traversal address %s: %w", addr, err)
+		}
+	}
+	return nil
 }
 
 // SendDatagram routes a datagram toward the remote via send. If a path is
