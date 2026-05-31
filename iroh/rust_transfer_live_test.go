@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/netip"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/internal/qlogtest"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -30,6 +32,9 @@ func TestLiveRustTransferFetchPingDirectPath(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+
+	goQlogDir := t.TempDir()
+	t.Setenv("QLOGDIR", goQlogDir)
 
 	relayURL := relay.StagingMap().URLs()[0]
 	server, err := Bind(ctx,
@@ -93,6 +98,18 @@ func TestLiveRustTransferFetchPingDirectPath(t *testing.T) {
 		t.Fatalf("Rust transfer output has no selected IP path\n%s", run.Output())
 	}
 	t.Logf("Rust transfer selected direct path: %s", ip)
+	_ = conn.CloseWithError(0, "")
+
+	qlogCtx, qlogCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer qlogCancel()
+	goFiles, goFrames, err := waitLiveRustQlogEvidence(qlogCtx, goQlogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goFrames["max_path_id"] == 0 || goFrames["add_address"] == 0 || !hasAnyLiveRustQlogFrame(goFrames, "reach_out", "path_challenge", "path_response", "path_new_connection_id") {
+		t.Fatalf("Go qlog frame types = %v, want max_path_id, add_address, and one direct-path proof frame in %v", qlogtest.SortedFrameTypes(goFrames), goFiles)
+	}
+	t.Logf("Go qlog files: %v", goFiles)
 }
 
 type liveRustAccept struct {
@@ -113,12 +130,13 @@ type liveRustTransferRun struct {
 func startRustTransferFetchPing(t *testing.T, ctx context.Context, bin, remoteID, relayURL string, duration int) (*liveRustTransferRun, error) {
 	t.Helper()
 	dir := t.TempDir()
-	for _, name := range []string{"home", "config", "cache", "data", "logs"} {
+	for _, name := range []string{"home", "config", "cache", "data", "logs", "qlog"} {
 		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
 			return nil, err
 		}
 	}
 	logDir := filepath.Join(dir, "logs")
+	qlogDir := filepath.Join(dir, "qlog")
 
 	cmd := exec.CommandContext(ctx, bin,
 		"--output", "json",
@@ -132,7 +150,7 @@ func startRustTransferFetchPing(t *testing.T, ctx context.Context, bin, remoteID
 		"--no-address-lookup",
 		"--bind-addr-v4", "127.0.0.1:0",
 	)
-	cmd.Env = liveRustEnv(dir)
+	cmd.Env = liveRustEnv(dir, qlogDir)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("%s stdout: %w", bin, err)
@@ -165,7 +183,7 @@ func startRustTransferFetchPing(t *testing.T, ctx context.Context, bin, remoteID
 	return run, nil
 }
 
-func liveRustEnv(dir string) []string {
+func liveRustEnv(dir, qlogDir string) []string {
 	env := make([]string, 0, len(os.Environ())+4)
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "QLOGDIR=") || strings.HasPrefix(kv, "IROH_SECRET=") {
@@ -178,6 +196,7 @@ func liveRustEnv(dir string) []string {
 		"XDG_CONFIG_HOME="+filepath.Join(dir, "config"),
 		"XDG_CACHE_HOME="+filepath.Join(dir, "cache"),
 		"XDG_DATA_HOME="+filepath.Join(dir, "data"),
+		"QLOGDIR="+qlogDir,
 	)
 }
 
@@ -244,9 +263,13 @@ func scanLiveRustOutput(r io.Reader, out *liveRustOutput, errs chan<- error, wg 
 	for scanner.Scan() {
 		out.AppendLine(scanner.Text())
 	}
-	if err := scanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil && !isLiveRustClosedPipe(err) {
 		errs <- err
 	}
+}
+
+func isLiveRustClosedPipe(err error) bool {
+	return errors.Is(err, os.ErrClosed) || strings.Contains(err.Error(), "file already closed")
 }
 
 func rustTransferSelectedIP(output string) (string, bool, error) {
@@ -288,6 +311,44 @@ func rustTransferSelectedIP(output string) (string, bool, error) {
 		}
 	}
 	return selectedIP, selectedIP != "" && (!sawPathStats || statsHasSelectedIP), nil
+}
+
+func waitLiveRustQlogEvidence(ctx context.Context, dir string) ([]string, map[string]int, error) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		files, err := qlogtest.Files(dir)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(files) > 0 {
+			types, err := qlogtest.FrameTypes(files)
+			if err != nil {
+				return nil, nil, err
+			}
+			if types["max_path_id"] > 0 && types["add_address"] > 0 && hasAnyLiveRustQlogFrame(types, "reach_out", "path_challenge", "path_response", "path_new_connection_id") {
+				return files, types, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			if len(files) == 0 {
+				return nil, nil, fmt.Errorf("found no qlog files in %s: %w", dir, ctx.Err())
+			}
+			types, _ := qlogtest.FrameTypes(files)
+			return nil, nil, fmt.Errorf("qlog frame types = %v, want max_path_id, add_address, and one direct-path proof frame in %v: %w", qlogtest.SortedFrameTypes(types), files, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func hasAnyLiveRustQlogFrame(types map[string]int, names ...string) bool {
+	for _, name := range names {
+		if types[name] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func requireLiveRustTransferExample(t *testing.T) string {

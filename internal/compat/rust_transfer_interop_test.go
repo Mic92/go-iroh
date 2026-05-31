@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/internal/qlogtest"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/relay"
 )
@@ -317,16 +318,16 @@ func TestLiveRustTransferQlog(t *testing.T) {
 
 	qlogCtx, qlogCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer qlogCancel()
-	goFiles, err := waitQlogFiles(qlogCtx, goQlogDir)
+	goFiles, err := qlogtest.WaitFiles(qlogCtx, goQlogDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	goFrames, err := qlogFrameTypes(goFiles)
+	goFrames, err := qlogtest.FrameTypes(goFiles)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if goFrames["max_path_id"] == 0 {
-		t.Fatalf("Go qlog frame types = %v, want max_path_id in %v", sortedQlogFrameTypes(goFrames), goFiles)
+		t.Fatalf("Go qlog frame types = %v, want max_path_id in %v", qlogtest.SortedFrameTypes(goFrames), goFiles)
 	}
 	if goFrames["add_address"] > 0 {
 		t.Logf("Go qlog includes add_address")
@@ -335,16 +336,16 @@ func TestLiveRustTransferQlog(t *testing.T) {
 
 	rustQlogCtx, rustQlogCancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer rustQlogCancel()
-	rustFiles, err := waitQlogFiles(rustQlogCtx, run.Provider.QlogDir)
+	rustFiles, err := qlogtest.WaitFiles(rustQlogCtx, run.Provider.QlogDir)
 	if err != nil {
 		t.Skipf("Rust transfer qlog files not found in %s; build transfer with `cargo +1.94.1 build --locked -p iroh --example transfer --features qlog`: %v", run.Provider.QlogDir, err)
 	}
-	rustFrames, err := qlogFrameTypes(rustFiles)
+	rustFrames, err := qlogtest.FrameTypes(rustFiles)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rustFrames["max_path_id"] == 0 {
-		t.Fatalf("Rust qlog frame types = %v, want max_path_id in %v", sortedQlogFrameTypes(rustFrames), rustFiles)
+		t.Fatalf("Rust qlog frame types = %v, want max_path_id in %v", qlogtest.SortedFrameTypes(rustFrames), rustFiles)
 	}
 	t.Logf("Rust qlog files: %v", rustFiles)
 }
