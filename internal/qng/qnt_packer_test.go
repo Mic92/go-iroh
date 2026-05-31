@@ -42,6 +42,39 @@ func TestQNTPackerPullsQueuedAddAddressFrame(t *testing.T) {
 	}
 }
 
+func TestQNTPackerPullsQueuedReachOutFrame(t *testing.T) {
+	f := newFramer(noopConnectionFlowController{})
+	addr := netip.MustParseAddrPort("[2001:db8::1]:5678")
+	f.QueueControlFrame(&wire.ReachOutFrame{
+		Round: 9,
+		Addr:  addr.Addr(),
+		Port:  addr.Port(),
+	})
+
+	p := &packetPacker{
+		framer:              f,
+		acks:                noAckFrameSource{},
+		retransmissionQueue: newRetransmissionQueue(),
+	}
+	pl := p.composeNextPacket(1200, false, true, monotime.Now(), protocol.Version1)
+	if len(pl.frames) != 1 {
+		t.Fatalf("packed %d control frames, want 1", len(pl.frames))
+	}
+	got, ok := pl.frames[0].Frame.(*wire.ReachOutFrame)
+	if !ok {
+		t.Fatalf("packed frame = %T, want *wire.ReachOutFrame", pl.frames[0].Frame)
+	}
+	if got.Round != 9 || netip.AddrPortFrom(got.Addr, got.Port) != addr {
+		t.Fatalf("REACH_OUT = round %d %s:%d, want round 9 %v", got.Round, got.Addr, got.Port, addr)
+	}
+	if pl.frames[0].Handler == nil {
+		t.Fatal("REACH_OUT frame has no retransmission handler")
+	}
+	if f.HasData() {
+		t.Fatal("framer still has data after packer pulled REACH_OUT")
+	}
+}
+
 type noAckFrameSource struct{}
 
 func (noAckFrameSource) GetAckFrame(protocol.EncryptionLevel, monotime.Time, bool) *wire.AckFrame {
