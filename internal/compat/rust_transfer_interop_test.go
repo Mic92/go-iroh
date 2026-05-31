@@ -299,6 +299,63 @@ func TestLiveRustTransferGoToRustUpload(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
+	runLiveRustTransferGoToRustUpload(t, ctx, bin, "")
+}
+
+func TestLiveRustTransferQlog(t *testing.T) {
+	bin := requireRustTransferExample(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	goQlogDir := t.TempDir()
+	run := runLiveRustTransferGoToRustUpload(t, ctx, bin, goQlogDir)
+
+	if err := run.Provider.Close(); err != nil {
+		t.Fatalf("stop Rust transfer provider: %v\n%s", err, run.Provider.Output())
+	}
+
+	qlogCtx, qlogCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer qlogCancel()
+	goFiles, err := waitQlogFiles(qlogCtx, goQlogDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goFrames, err := qlogFrameTypes(goFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goFrames["max_path_id"] == 0 {
+		t.Fatalf("Go qlog frame types = %v, want max_path_id in %v", sortedQlogFrameTypes(goFrames), goFiles)
+	}
+	if goFrames["add_address"] > 0 {
+		t.Logf("Go qlog includes add_address")
+	}
+	t.Logf("Go qlog files: %v", goFiles)
+
+	rustQlogCtx, rustQlogCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer rustQlogCancel()
+	rustFiles, err := waitQlogFiles(rustQlogCtx, run.Provider.QlogDir)
+	if err != nil {
+		t.Skipf("Rust transfer qlog files not found in %s; build transfer with `cargo +1.94.1 build --locked -p iroh --example transfer --features qlog`: %v", run.Provider.QlogDir, err)
+	}
+	rustFrames, err := qlogFrameTypes(rustFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rustFrames["max_path_id"] == 0 {
+		t.Fatalf("Rust qlog frame types = %v, want max_path_id in %v", sortedQlogFrameTypes(rustFrames), rustFiles)
+	}
+	t.Logf("Rust qlog files: %v", rustFiles)
+}
+
+type rustTransferUploadRun struct {
+	Provider *rustTransferProvider
+}
+
+func runLiveRustTransferGoToRustUpload(t *testing.T, ctx context.Context, bin, goQlogDir string) rustTransferUploadRun {
+	t.Helper()
+
 	provider, err := startRustTransferProvider(t, bin)
 	if err != nil {
 		t.Fatal(err)
@@ -308,11 +365,18 @@ func TestLiveRustTransferGoToRustUpload(t *testing.T) {
 	}
 	t.Logf("Rust transfer example ready: id=%s direct=%v relay=%s", provider.Ready.EndpointIDText, provider.Ready.DirectAddrs, provider.Ready.RelayURL)
 
+	if goQlogDir != "" {
+		t.Setenv("QLOGDIR", goQlogDir)
+	}
 	client, err := iroh.Bind(ctx, iroh.WithRelayMode(relay.ModeCustomURLs(provider.Ready.RelayURL)))
 	if err != nil {
 		t.Fatalf("bind Go endpoint: %v", err)
 	}
-	defer client.Close(ctx)
+	defer func() {
+		if err := client.Close(ctx); err != nil {
+			t.Errorf("close Go endpoint: %v", err)
+		}
+	}()
 
 	if len(provider.Ready.DirectAddrs) == 0 {
 		if err := client.Online(ctx); err != nil {
@@ -386,6 +450,7 @@ func TestLiveRustTransferGoToRustUpload(t *testing.T) {
 		t.Fatalf("close Rust transfer connection: %v\n%s", err, provider.Output())
 	}
 	connClosed = true
+	return rustTransferUploadRun{Provider: provider}
 }
 
 func TestLiveRustTransferExampleStarts(t *testing.T) {
@@ -604,6 +669,9 @@ func rustTransferUploadRequest(payload []byte) []byte {
 type rustTransferProvider struct {
 	Ready rustTransferReady
 
+	LogDir  string
+	QlogDir string
+
 	cmd     *exec.Cmd
 	done    chan error
 	out     *rustTransferOutput
@@ -674,10 +742,12 @@ func startRustTransferProvider(t *testing.T, bin string) (*rustTransferProvider,
 			return nil, err
 		}
 	}
+	logDir := filepath.Join(dir, "logs")
+	qlogDir := filepath.Join(dir, "qlog")
 
 	cmd := exec.Command(bin,
 		"--output", "json",
-		"--logs-path", filepath.Join(dir, "logs"),
+		"--logs-path", logDir,
 		"provide",
 		"--env", "prod",
 	)
@@ -686,7 +756,7 @@ func startRustTransferProvider(t *testing.T, bin string) (*rustTransferProvider,
 		"XDG_CONFIG_HOME="+filepath.Join(dir, "config"),
 		"XDG_CACHE_HOME="+filepath.Join(dir, "cache"),
 		"XDG_DATA_HOME="+filepath.Join(dir, "data"),
-		"QLOGDIR="+filepath.Join(dir, "qlog"),
+		"QLOGDIR="+qlogDir,
 	)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -717,7 +787,13 @@ func startRustTransferProvider(t *testing.T, bin string) (*rustTransferProvider,
 	go func() {
 		done <- cmd.Wait()
 	}()
-	provider := &rustTransferProvider{cmd: cmd, done: done, out: out}
+	provider := &rustTransferProvider{
+		LogDir:  logDir,
+		QlogDir: qlogDir,
+		cmd:     cmd,
+		done:    done,
+		out:     out,
+	}
 
 	timer := time.NewTimer(30 * time.Second)
 	defer timer.Stop()
