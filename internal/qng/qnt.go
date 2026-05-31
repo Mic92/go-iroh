@@ -8,8 +8,10 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
+	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
@@ -51,6 +53,8 @@ type qntLocalState struct {
 	sentProbes            map[[8]byte]netip.AddrPort
 	probeAttempts         map[netip.AddrPort]uint8
 	validatedProbes       []netip.AddrPort
+	retryAttempt          uint8
+	nextRetry             monotime.Time
 }
 
 type qntLocalAddress struct {
@@ -131,6 +135,8 @@ func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort,
 	st.pendingReachOut = st.pendingReachOut[:0]
 	st.pendingProbes = append(st.pendingProbes[:0], remote...)
 	clear(st.sentProbes)
+	st.retryAttempt = 0
+	st.nextRetry = 0
 	st.probeAttempts = make(map[netip.AddrPort]uint8, len(remote))
 	for _, addr := range remote {
 		st.probeAttempts[addr] = qntMaxProbeAttempts - 1
@@ -307,6 +313,9 @@ func (c *Conn) qntConsumePathResponse(frame *wire.PathResponseFrame, source neti
 	st.pendingProbes = slices.DeleteFunc(st.pendingProbes, func(addr netip.AddrPort) bool {
 		return addr == remote
 	})
+	if !qntHasRetryableProbeLocked(st) {
+		st.nextRetry = 0
+	}
 	return remote, true
 }
 
@@ -420,6 +429,8 @@ func (c *Conn) qntQueueReachOutProbe(frame *wire.ReachOutFrame) error {
 		clear(st.sentProbes)
 		clear(st.probeAttempts)
 		st.validatedProbes = st.validatedProbes[:0]
+		st.retryAttempt = 0
+		st.nextRetry = 0
 	}
 	if qntHasProbeLocked(st, addr) {
 		return nil
@@ -441,16 +452,74 @@ func (c *Conn) qntQueueProbeRetries() bool {
 	defer st.mu.Unlock()
 	var queued bool
 	for addr, remaining := range st.probeAttempts {
-		if remaining == 0 {
+		if !qntCanRetryProbeLocked(st, addr, remaining) {
 			continue
 		}
 		st.probeAttempts[addr] = remaining - 1
-		if !slices.Contains(st.pendingProbes, addr) {
-			st.pendingProbes = append(st.pendingProbes, addr)
-		}
+		st.pendingProbes = append(st.pendingProbes, addr)
 		queued = true
 	}
+	if queued {
+		st.retryAttempt++
+		st.nextRetry = 0
+	}
 	return queued
+}
+
+func (c *Conn) qntArmNextRetry(now monotime.Time, initialRTT time.Duration) (monotime.Time, bool) {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if !qntHasRetryableProbeLocked(st) {
+		st.nextRetry = 0
+		return 0, false
+	}
+	delay := qntRetryDelay(st.retryAttempt, initialRTT)
+	if delay <= 0 {
+		st.nextRetry = 0
+		return 0, false
+	}
+	st.nextRetry = now.Add(delay)
+	return st.nextRetry, true
+}
+
+func (c *Conn) qntNextRetryDeadline() monotime.Time {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.nextRetry
+}
+
+func (c *Conn) qntRetryAttempt() uint8 {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.retryAttempt
+}
+
+func qntHasRetryableProbeLocked(st *qntLocalState) bool {
+	for addr, remaining := range st.probeAttempts {
+		if qntCanRetryProbeLocked(st, addr, remaining) {
+			return true
+		}
+	}
+	return false
+}
+
+func qntCanRetryProbeLocked(st *qntLocalState, addr netip.AddrPort, remaining uint8) bool {
+	return remaining > 0 &&
+		!slices.Contains(st.pendingProbes, addr) &&
+		!slices.Contains(st.validatedProbes, addr) &&
+		qntHasSentProbeLocked(st, addr)
+}
+
+func qntHasSentProbeLocked(st *qntLocalState, addr netip.AddrPort) bool {
+	for _, sent := range st.sentProbes {
+		if sent == addr {
+			return true
+		}
+	}
+	return false
 }
 
 func qntHasProbeLocked(st *qntLocalState, addr netip.AddrPort) bool {
