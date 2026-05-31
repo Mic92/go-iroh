@@ -246,6 +246,51 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	}
 }
 
+func TestEndpointWithDNSResolver(t *testing.T) {
+	ctx := context.Background()
+	sk, _ := base.GenerateSecretKey()
+	id := sk.Public()
+	info := dns.NewEndpointInfo(id).WithIPAddrs(netip.MustParseAddrPort("127.0.0.1:1234"))
+
+	ep, err := Bind(ctx, WithDNSResolver(&dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	resolve := ep.resolveFunc()
+	if resolve == nil {
+		t.Fatal("resolveFunc() = nil with WithDNSResolver")
+	}
+	addrs, err := resolve(ctx, id)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(addrs) != 1 {
+		t.Fatalf("resolved addrs = %v, want one", addrs)
+	}
+}
+
+func TestEndpointWithTransportConfig(t *testing.T) {
+	ctx := context.Background()
+	const keepAlive = 2 * time.Second
+	const idle = 9 * time.Second
+	ep, err := Bind(ctx, WithTransportConfig(&QuicTransportConfig{
+		KeepAlivePeriod: keepAlive,
+		MaxIdleTimeout:  idle,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+	if ep.quicConf.KeepAlivePeriod != keepAlive {
+		t.Fatalf("KeepAlivePeriod = %v, want %v", ep.quicConf.KeepAlivePeriod, keepAlive)
+	}
+	if ep.quicConf.MaxIdleTimeout != idle {
+		t.Fatalf("MaxIdleTimeout = %v, want %v", ep.quicConf.MaxIdleTimeout, idle)
+	}
+}
+
 func TestEndpointLocalNATTraversalCandidates(t *testing.T) {
 	ctx := context.Background()
 

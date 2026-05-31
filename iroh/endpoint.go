@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"time"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/internal/netreport"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/qng/qlog"
@@ -66,12 +68,20 @@ type config struct {
 	enableNetReport bool
 	netReport       netReportRunner
 	keyLogWriter    io.Writer
+	transportConfig *QuicTransportConfig
 }
 
 // Option configures an [Endpoint] at [Bind] time.
 type Option func(*config) error
 
 type netReportRunner func(context.Context) (*netreport.Report, error)
+
+// QuicTransportConfig configures stable QUIC transport settings used by
+// endpoints. A zero field keeps the default.
+type QuicTransportConfig struct {
+	KeepAlivePeriod time.Duration
+	MaxIdleTimeout  time.Duration
+}
 
 // WithSecretKey sets the endpoint's identity. If unset, [Bind] generates a
 // random key.
@@ -132,6 +142,18 @@ func WithAddressLookup(s *AddressLookupServices) Option {
 	}
 }
 
+// WithDNSResolver configures DNS endpoint discovery through the number0
+// production origin. It is a convenience wrapper around [WithAddressLookup].
+func WithDNSResolver(r *dns.Resolver) Option {
+	return func(c *config) error {
+		if c.lookup == nil {
+			c.lookup = &AddressLookupServices{}
+		}
+		c.lookup.Add(NewDnsAddressLookup(dns.N0DNSEndpointOriginProd, r))
+		return nil
+	}
+}
+
 // WithRelayMode selects which relay servers the endpoint uses. The default is
 // [relay.ModeDisabled] (no relays), matching this build's direct-only default.
 // Pass [relay.ModeDefault], [relay.ModeStaging], or [relay.ModeCustom] to enable
@@ -159,6 +181,15 @@ func WithNetReport() Option {
 func WithKeyLogWriter(w io.Writer) Option {
 	return func(c *config) error {
 		c.keyLogWriter = w
+		return nil
+	}
+}
+
+// WithTransportConfig overrides stable QUIC transport settings. Unsupported
+// qng internals remain private to the endpoint.
+func WithTransportConfig(tc *QuicTransportConfig) Option {
+	return func(c *config) error {
+		c.transportConfig = tc
 		return nil
 	}
 }
@@ -210,6 +241,14 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		// the TLS server name (ServerName(id)), the same per-peer bucketing the
 		// session cache uses. The capacity matches maxTLSTickets.
 		TokenStore: quic.NewLRUTokenStore(32, 8),
+	}
+	if c.transportConfig != nil {
+		if c.transportConfig.KeepAlivePeriod != 0 {
+			quicConf.KeepAlivePeriod = c.transportConfig.KeepAlivePeriod
+		}
+		if c.transportConfig.MaxIdleTimeout != 0 {
+			quicConf.MaxIdleTimeout = c.transportConfig.MaxIdleTimeout
+		}
 	}
 
 	// The QUIC transport is driven over the magic socket rather than the raw
