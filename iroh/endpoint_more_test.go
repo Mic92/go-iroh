@@ -186,6 +186,37 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 	}
 }
 
+func TestEndpointWithBindAddrOpts(t *testing.T) {
+	ctx := context.Background()
+	defaultRoute := true
+	ep, err := Bind(ctx, WithBindAddrOpts(netip.AddrPortFrom(netip.IPv6Loopback(), 0), BindOpts{
+		PrefixLen:      128,
+		IsRequired:     true,
+		IsDefaultRoute: &defaultRoute,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	if got := ep.BoundSockets(); len(got) != 1 || got[0] != ep.LocalAddr() {
+		t.Fatalf("BoundSockets = %v, want [%v]", got, ep.LocalAddr())
+	}
+	if !ep.LocalAddr().Addr().Is6() {
+		t.Fatalf("LocalAddr = %v, want IPv6", ep.LocalAddr())
+	}
+}
+
+func TestEndpointWithBindAddrOptsRejectsBadPrefix(t *testing.T) {
+	ctx := context.Background()
+	if _, err := Bind(ctx, WithBindAddrOpts(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0), BindOpts{PrefixLen: 33})); err == nil {
+		t.Fatal("Bind IPv4 /33 succeeded")
+	}
+	if _, err := Bind(ctx, WithBindAddrOpts(netip.AddrPortFrom(netip.IPv6Loopback(), 0), BindOpts{PrefixLen: 129})); err == nil {
+		t.Fatal("Bind IPv6 /129 succeeded")
+	}
+}
+
 func containsAddrPort(addrs []netip.AddrPort, want netip.AddrPort) bool {
 	for _, addr := range addrs {
 		if addr == want {

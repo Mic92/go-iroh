@@ -62,6 +62,7 @@ type config struct {
 	haveKey         bool
 	alpns           [][]byte
 	bindAddr        netip.AddrPort
+	bindOpts        BindOpts
 	haveBindAddr    bool
 	disableIP       bool
 	relayMode       relay.Mode
@@ -77,6 +78,20 @@ type config struct {
 type Option func(*config) error
 
 type netReportRunner func(context.Context) (*netreport.Report, error)
+
+// BindOpts configures how a bound IP socket participates in route selection.
+//
+// PrefixLen is the network prefix length matched by this socket. IsRequired
+// keeps parity with Rust's bind options: a required bind fails the endpoint when
+// the socket cannot be opened, which is also the behavior of this single-socket
+// Go build. IsDefaultRoute marks the socket as a default route when non-nil.
+//
+// The zero value is usable and means "host route, required, default inferred".
+type BindOpts struct {
+	PrefixLen      uint8
+	IsRequired     bool
+	IsDefaultRoute *bool
+}
 
 // QuicTransportConfig configures stable QUIC transport settings used by
 // endpoints. A zero field keeps the default.
@@ -109,9 +124,41 @@ func WithALPNs(alpns ...[]byte) Option {
 func WithBindAddr(addr netip.AddrPort) Option {
 	return func(c *config) error {
 		c.bindAddr = addr
+		c.bindOpts = BindOpts{}
 		c.haveBindAddr = true
 		return nil
 	}
+}
+
+// WithBindAddrOpts sets the local UDP address to bind with route-selection
+// metadata. PrefixLen must fit the address family: at most 32 for IPv4 and at
+// most 128 for IPv6.
+func WithBindAddrOpts(addr netip.AddrPort, opts BindOpts) Option {
+	return func(c *config) error {
+		if err := validateBindOpts(addr, opts); err != nil {
+			return err
+		}
+		c.bindAddr = addr
+		c.bindOpts = opts
+		c.haveBindAddr = true
+		return nil
+	}
+}
+
+func validateBindOpts(addr netip.AddrPort, opts BindOpts) error {
+	if !addr.IsValid() {
+		return errors.New("iroh: invalid bind address")
+	}
+	if addr.Addr().Is4() {
+		if opts.PrefixLen > 32 {
+			return fmt.Errorf("iroh: invalid IPv4 bind prefix length %d", opts.PrefixLen)
+		}
+		return nil
+	}
+	if opts.PrefixLen > 128 {
+		return fmt.Errorf("iroh: invalid IPv6 bind prefix length %d", opts.PrefixLen)
+	}
+	return nil
 }
 
 // WithoutIPTransports prevents the endpoint from advertising or dialing direct
