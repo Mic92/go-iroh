@@ -2534,7 +2534,9 @@ func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame, source netip.A
 }
 
 func (c *Conn) handleQNTPathResponseFrame(f *wire.PathResponseFrame, source netip.AddrPort) {
-	c.qntConsumePathResponse(f, source)
+	if addr, ok := c.qntConsumePathResponse(f, source); ok {
+		c.qntQueueValidatedProbe(addr)
+	}
 }
 
 func (c *Conn) handlePathResponseFrameClient(f *wire.PathResponseFrame) error {
@@ -3169,6 +3171,24 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 				c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, now)
 				tr.WriteTo(buf.Data, c.conn.RemoteAddr())
 				// There's (likely) more data to send. Loop around again.
+				c.scheduleSending()
+				return nil
+			}
+		}
+	}
+
+	if c.handshakeConfirmed {
+		remote, probe, buf, ok, err := c.qntPackNextProbe(c.connIDManager.Get(), c.version)
+		if err != nil {
+			return err
+		}
+		if ok {
+			addr := qntProbeUDPAddr(remote)
+			if addr != nil {
+				c.logger.Debugf("sending QNT probe packet to %s", addr)
+				c.logShortHeaderPacket(probe, protocol.ECNNon, buf.Len())
+				c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, now)
+				c.sendQueue.SendProbe(buf, addr)
 				c.scheduleSending()
 				return nil
 			}

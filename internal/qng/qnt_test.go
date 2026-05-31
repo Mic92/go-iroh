@@ -534,6 +534,29 @@ func TestQNTNextProbeFrameInvalidState(t *testing.T) {
 	}
 }
 
+func TestQNTValidatedProbeQueue(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	addr := netip.MustParseAddrPort("[::ffff:198.51.100.1]:1234")
+	want := netip.MustParseAddrPort("198.51.100.1:1234")
+
+	if !c.qntQueueValidatedProbe(addr) {
+		t.Fatal("qntQueueValidatedProbe = false, want true")
+	}
+	if c.qntQueueValidatedProbe(want) {
+		t.Fatal("duplicate qntQueueValidatedProbe = true, want false")
+	}
+	if c.qntQueueValidatedProbe(netip.AddrPort{}) {
+		t.Fatal("invalid qntQueueValidatedProbe = true, want false")
+	}
+	got, ok := c.qntPopValidatedProbe()
+	if !ok || got != want {
+		t.Fatalf("qntPopValidatedProbe = %v, %v, want %v, true", got, ok, want)
+	}
+	if got, ok := c.qntPopValidatedProbe(); ok || got.IsValid() {
+		t.Fatalf("empty qntPopValidatedProbe = %v, %v, want zero false", got, ok)
+	}
+}
+
 func TestQNTSentProbeRequiresChallengeAndSource(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
 	challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
@@ -587,8 +610,12 @@ func TestQNTPathResponseHandlerReceivesSourceAddress(t *testing.T) {
 
 	c.qntRecordSentProbe(challenge, source)
 	_ = c.handlePathResponseFrame(frame, source)
+	got, ok := c.qntPopValidatedProbe()
+	if !ok || got != source {
+		t.Fatalf("validated QNT probe = %v, %v, want %v, true", got, ok, source)
+	}
 	if _, ok := c.qntConsumePathResponse(frame, source); ok {
-		t.Fatal("PATH_RESPONSE from matching source was not passed to QNT hook")
+		t.Fatal("PATH_RESPONSE from matching source was not consumed by QNT hook")
 	}
 }
 

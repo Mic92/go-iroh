@@ -1,9 +1,11 @@
 package quic
 
 import (
+	"errors"
 	"net/netip"
 	"testing"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/handshake"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
@@ -73,6 +75,134 @@ func TestQNTPackerPullsQueuedReachOutFrame(t *testing.T) {
 	if f.HasData() {
 		t.Fatal("framer still has data after packer pulled REACH_OUT")
 	}
+}
+
+func TestQNTPackNextProbePacksPathChallenge(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.version = protocol.Version1
+	c.packer = newQNTProbeTestPacker()
+	remote := netip.MustParseAddrPort("198.51.100.7:4433")
+	c.qntLocalState().pendingProbes = []netip.AddrPort{remote}
+
+	got, packet, buf, ok, err := c.qntPackNextProbe(protocol.ParseConnectionID([]byte{1, 2, 3, 4}), protocol.Version1)
+	if err != nil {
+		t.Fatalf("qntPackNextProbe: %v", err)
+	}
+	if !ok {
+		t.Fatal("qntPackNextProbe ok = false, want true")
+	}
+	defer buf.Release()
+	if got != remote {
+		t.Fatalf("qntPackNextProbe remote = %v, want %v", got, remote)
+	}
+	if !packet.IsPathProbePacket {
+		t.Fatal("packed packet IsPathProbePacket = false, want true")
+	}
+	if packet.PacketNumber != 1 {
+		t.Fatalf("packet number = %d, want 1", packet.PacketNumber)
+	}
+	if len(packet.Frames) != 1 {
+		t.Fatalf("packed frames = %d, want 1", len(packet.Frames))
+	}
+	challenge, ok := packet.Frames[0].Frame.(*wire.PathChallengeFrame)
+	if !ok {
+		t.Fatalf("packed frame = %T, want *wire.PathChallengeFrame", packet.Frames[0].Frame)
+	}
+	if challenge.Data == ([8]byte{}) {
+		t.Fatal("PATH_CHALLENGE data is zero")
+	}
+	if matched, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge.Data}, remote); !ok || matched != remote {
+		t.Fatalf("qntConsumePathResponse = %v, %v, want %v, true", matched, ok, remote)
+	}
+	if len(buf.Data) < int(protocol.MinInitialPacketSize) {
+		t.Fatalf("packed buffer length = %d, want at least %d", len(buf.Data), protocol.MinInitialPacketSize)
+	}
+}
+
+func TestQNTPackNextProbeReturnsFalseWhenEmpty(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.packer = newQNTProbeTestPacker()
+
+	remote, packet, buf, ok, err := c.qntPackNextProbe(protocol.ParseConnectionID([]byte{1, 2, 3, 4}), protocol.Version1)
+	if err != nil {
+		t.Fatalf("qntPackNextProbe: %v", err)
+	}
+	if ok || remote.IsValid() || buf != nil || packet.IsPathProbePacket {
+		t.Fatalf("qntPackNextProbe empty = %v, %+v, %v, %v, want zero packet nil false", remote, packet, buf, ok)
+	}
+}
+
+func TestQNTPackNextProbeInvalidStateNoop(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.packer = newQNTProbeTestPacker()
+	c.qntLocalState().pendingProbes = []netip.AddrPort{netip.AddrPort{}}
+
+	remote, packet, buf, ok, err := c.qntPackNextProbe(protocol.ParseConnectionID([]byte{1, 2, 3, 4}), protocol.Version1)
+	if err != nil {
+		t.Fatalf("qntPackNextProbe: %v", err)
+	}
+	if ok || remote.IsValid() || buf != nil || packet.IsPathProbePacket {
+		t.Fatalf("qntPackNextProbe invalid = %v, %+v, %v, %v, want zero packet nil false", remote, packet, buf, ok)
+	}
+}
+
+func newQNTProbeTestPacker() *packetPacker {
+	return &packetPacker{
+		cryptoSetup:         qntProbeCryptoSetup{},
+		pnManager:           &qntProbePNManager{pn: 1},
+		retransmissionQueue: newRetransmissionQueue(),
+		acks:                noAckFrameSource{},
+	}
+}
+
+type qntProbeCryptoSetup struct{}
+
+func (qntProbeCryptoSetup) GetInitialSealer() (handshake.LongHeaderSealer, error) {
+	return nil, errors.New("initial sealer unused")
+}
+
+func (qntProbeCryptoSetup) GetHandshakeSealer() (handshake.LongHeaderSealer, error) {
+	return nil, errors.New("handshake sealer unused")
+}
+
+func (qntProbeCryptoSetup) Get0RTTSealer() (handshake.LongHeaderSealer, error) {
+	return nil, errors.New("0-rtt sealer unused")
+}
+
+func (qntProbeCryptoSetup) Get1RTTSealer() (handshake.ShortHeaderSealer, error) {
+	return qntProbeSealer{}, nil
+}
+
+type qntProbeSealer struct{}
+
+func (qntProbeSealer) Seal(dst, src []byte, _ protocol.PathID, _ protocol.PacketNumber, _ []byte) []byte {
+	return append(dst, src...)
+}
+
+func (qntProbeSealer) EncryptHeader([]byte, *byte, []byte) {}
+func (qntProbeSealer) Overhead() int                       { return 0 }
+func (qntProbeSealer) KeyPhase() protocol.KeyPhaseBit      { return protocol.KeyPhaseZero }
+
+type qntProbePNManager struct {
+	pn protocol.PacketNumber
+}
+
+func (m *qntProbePNManager) PeekPacketNumber(protocol.EncryptionLevel) (protocol.PacketNumber, protocol.PacketNumberLen) {
+	return m.pn, protocol.PacketNumberLen2
+}
+
+func (m *qntProbePNManager) PopPacketNumber(protocol.EncryptionLevel) protocol.PacketNumber {
+	pn := m.pn
+	m.pn++
+	return pn
+}
+
+func (m *qntProbePNManager) PeekPacketNumberForPath(protocol.PathID) (protocol.PacketNumber, protocol.PacketNumberLen) {
+	return m.PeekPacketNumber(protocol.Encryption1RTT)
+}
+
+func (m *qntProbePNManager) PopPacketNumberForPath(protocol.PathID) protocol.PacketNumber {
+	return m.PopPacketNumber(protocol.Encryption1RTT)
 }
 
 type noAckFrameSource struct{}

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
+	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -48,6 +49,7 @@ type qntLocalState struct {
 	pendingReachOut       []*wire.ReachOutFrame
 	pendingProbes         []netip.AddrPort
 	sentProbes            map[[8]byte]netip.AddrPort
+	validatedProbes       []netip.AddrPort
 }
 
 type qntLocalAddress struct {
@@ -241,6 +243,24 @@ func (c *Conn) qntPopPendingProbe(challenge [8]byte) (netip.AddrPort, *wire.Path
 	return remote, &wire.PathChallengeFrame{Data: challenge}, true
 }
 
+func (c *Conn) qntPackNextProbe(connID protocol.ConnectionID, v protocol.Version) (netip.AddrPort, shortHeaderPacket, *packetBuffer, bool, error) {
+	if c.packer == nil {
+		return netip.AddrPort{}, shortHeaderPacket{}, nil, false, nil
+	}
+	remote, frame, ok, err := c.qntNextProbeFrame()
+	if err != nil || !ok {
+		return netip.AddrPort{}, shortHeaderPacket{}, nil, false, err
+	}
+	if qntProbeUDPAddr(remote) == nil {
+		return netip.AddrPort{}, shortHeaderPacket{}, nil, false, nil
+	}
+	packet, buf, err := c.packer.PackPathProbePacket(connID, []ackhandler.Frame{frame}, v)
+	if err != nil {
+		return netip.AddrPort{}, shortHeaderPacket{}, nil, false, err
+	}
+	return remote, packet, buf, true, nil
+}
+
 func (c *Conn) qntConsumePathResponse(frame *wire.PathResponseFrame, source netip.AddrPort) (netip.AddrPort, bool) {
 	if frame == nil {
 		return netip.AddrPort{}, false
@@ -258,6 +278,33 @@ func (c *Conn) qntConsumePathResponse(frame *wire.PathResponseFrame, source neti
 	}
 	delete(st.sentProbes, frame.Data)
 	return remote, true
+}
+
+func (c *Conn) qntQueueValidatedProbe(addr netip.AddrPort) bool {
+	addr = canonicalNATTraversalAddr(addr)
+	if !addr.IsValid() || addr.Port() == 0 {
+		return false
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if slices.Contains(st.validatedProbes, addr) {
+		return false
+	}
+	st.validatedProbes = append(st.validatedProbes, addr)
+	return true
+}
+
+func (c *Conn) qntPopValidatedProbe() (netip.AddrPort, bool) {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.validatedProbes) == 0 {
+		return netip.AddrPort{}, false
+	}
+	addr := st.validatedProbes[0]
+	st.validatedProbes = st.validatedProbes[1:]
+	return addr, true
 }
 
 func (c *Conn) queueLocalAddAddressFrame(seq uint64, addr netip.AddrPort) {
