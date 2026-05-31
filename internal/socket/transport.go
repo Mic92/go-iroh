@@ -9,19 +9,17 @@ import (
 )
 
 // Transports multiplexes the magic socket's network paths: a direct-IP
-// transport plus an optional relay transport. It is the Go analog of the Rust
-// Transports struct (iroh/src/socket/transports.rs:47).
+// transport plus optional relay and custom transports. It is the Go analog of
+// the Rust Transports struct (iroh/src/socket/transports.rs:47).
 //
 // The IP transport is always present. The relay transport is present when the
 // endpoint has relays configured; otherwise relay-addressed sends are blackholed
 // (reported as success so quic-go's loss recovery retransmits). Custom transport
 // routing is recognized and degrades cleanly until a later slice adds it.
 type Transports struct {
-	ip    *IpTransport
-	relay *RelayTransport
-	// custom transport is added by a later slice. Its mapped addresses are
-	// still recognized by [MagicConn.WriteTo], which blackholes sends to them
-	// until the transport exists.
+	ip     *IpTransport
+	relay  *RelayTransport
+	custom []*customTransport
 }
 
 // MagicConn is the single net.PacketConn handed to a quic-go Transport. It
@@ -63,10 +61,21 @@ func NewMagicConn(sock *Socket, udp *net.UDPConn) *MagicConn {
 // relay mapped address route to the actor. Start the receive loops with
 // [MagicConn.Serve].
 func NewMagicConnWithRelay(sock *Socket, udp *net.UDPConn, actor *RelayActor) *MagicConn {
+	return NewMagicConnWithTransports(sock, udp, actor)
+}
+
+// NewMagicConnWithTransports returns a MagicConn with direct IP, optional relay,
+// and optional custom transports.
+func NewMagicConnWithTransports(sock *Socket, udp *net.UDPConn, actor *RelayActor, custom ...CustomTransport) *MagicConn {
 	recvCh := make(chan recvBatch, 64)
 	transports := &Transports{ip: NewIpTransport(udp, recvCh)}
 	if actor != nil {
 		transports.relay = NewRelayTransport(sock, actor, recvCh)
+	}
+	for _, t := range custom {
+		if t != nil {
+			transports.custom = append(transports.custom, newCustomTransport(t, recvCh))
+		}
 	}
 	m := &MagicConn{
 		sock:       sock,
@@ -87,6 +96,9 @@ func (m *MagicConn) Relay() *RelayTransport { return m.transports.relay }
 func (m *MagicConn) Serve(ctx context.Context) {
 	if m.transports.relay != nil {
 		go m.transports.relay.Serve(ctx)
+	}
+	for _, t := range m.transports.custom {
+		go t.Serve(ctx)
 	}
 	m.transports.ip.Serve(ctx)
 }
@@ -173,9 +185,18 @@ func (m *MagicConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 			m.transports.relay.Send(RelayMappedAddr{a: ap.Addr()}, p)
 		}
 		return len(p), nil
+	case KindCustom:
+		if c, ok := m.sock.LookupCustom(CustomMappedAddr{a: ap.Addr()}); ok {
+			for _, t := range m.transports.custom {
+				if t.Send(c, nil, p) {
+					break
+				}
+			}
+		}
+		return len(p), nil
 	default:
-		// EndpointId / custom paths require machinery of later slices. Until
-		// then the datagram is blackholed.
+		// EndpointId paths require machinery of later slices. Until then the
+		// datagram is blackholed.
 		return len(p), nil
 	}
 }

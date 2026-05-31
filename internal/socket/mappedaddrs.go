@@ -105,6 +105,10 @@ func (m RelayMappedAddr) Addr() netip.Addr { return m.a }
 // Addr returns the underlying IPv6 address.
 func (m CustomMappedAddr) Addr() netip.Addr { return m.a }
 
+// CustomMappedAddrFromAddr wraps an existing custom mapped IPv6 address. It is
+// used to reverse-look-up the custom address via [Socket.LookupCustom].
+func CustomMappedAddrFromAddr(a netip.Addr) CustomMappedAddr { return CustomMappedAddr{a: a} }
+
 // AddrPort returns the mapped address with the fixed dummy port, suitable for
 // handing to quic-go as a path's net.Addr.
 func (m EndpointIDMappedAddr) AddrPort() netip.AddrPort { return netip.AddrPortFrom(m.a, mappedPort) }

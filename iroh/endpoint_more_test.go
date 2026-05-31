@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"net/netip"
 	"sync"
 	"testing"
@@ -23,6 +24,49 @@ func withNetReportRunner(run netReportRunner) Option {
 		c.netReport = run
 		return nil
 	}
+}
+
+type endpointFakeCustomTransport struct {
+	mu    sync.Mutex
+	sends []endpointFakeCustomSend
+	recv  chan socket.CustomDatagram
+}
+
+type endpointFakeCustomSend struct {
+	remote base.CustomAddr
+	data   []byte
+}
+
+func newEndpointFakeCustomTransport() *endpointFakeCustomTransport {
+	return &endpointFakeCustomTransport{recv: make(chan socket.CustomDatagram, 4)}
+}
+
+func (t *endpointFakeCustomTransport) Serve(ctx context.Context, recv func(socket.CustomDatagram) bool) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case d := <-t.recv:
+			recv(d)
+		}
+	}
+}
+
+func (t *endpointFakeCustomTransport) Send(remote base.CustomAddr, local *base.CustomAddr, p []byte) bool {
+	_ = local
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sends = append(t.sends, endpointFakeCustomSend{remote: remote, data: append([]byte(nil), p...)})
+	return true
+}
+
+func (t *endpointFakeCustomTransport) lastSend() (endpointFakeCustomSend, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.sends) == 0 {
+		return endpointFakeCustomSend{}, false
+	}
+	return t.sends[len(t.sends)-1], true
 }
 
 // TestEndpointSecretKey verifies SecretKey returns the configured key and that
@@ -373,6 +417,46 @@ func TestEndpointWithTransportConfig(t *testing.T) {
 	}
 	if ep.quicConf.MaxIdleTimeout != idle {
 		t.Fatalf("MaxIdleTimeout = %v, want %v", ep.quicConf.MaxIdleTimeout, idle)
+	}
+}
+
+func TestEndpointWithCustomTransport(t *testing.T) {
+	ctx := context.Background()
+	custom := newEndpointFakeCustomTransport()
+	ep, err := Bind(ctx, WithCustomTransport(custom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	remote := base.NewCustomAddr(42, []byte("endpoint-custom"))
+	mapped := ep.sock.CustomMappedAddrFor(remote)
+	const payload = "endpoint-custom-send"
+	n, err := ep.magic.WriteTo([]byte(payload), net.UDPAddrFromAddrPort(mapped.AddrPort()))
+	if err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("WriteTo n = %d, want %d", n, len(payload))
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		send, ok := custom.lastSend()
+		if ok {
+			if send.remote.String() != remote.String() {
+				t.Fatalf("send remote = %v, want %v", send.remote, remote)
+			}
+			if string(send.data) != payload {
+				t.Fatalf("send data = %q, want %q", send.data, payload)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for custom send")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,6 +12,58 @@ import (
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
 )
+
+type fakeCustomTransport struct {
+	mu    sync.Mutex
+	sends []fakeCustomSend
+	recv  chan socket.CustomDatagram
+}
+
+type fakeCustomSend struct {
+	remote base.CustomAddr
+	local  *base.CustomAddr
+	data   []byte
+}
+
+func newFakeCustomTransport() *fakeCustomTransport {
+	return &fakeCustomTransport{recv: make(chan socket.CustomDatagram, 4)}
+}
+
+func (t *fakeCustomTransport) Serve(ctx context.Context, recv func(socket.CustomDatagram) bool) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case d := <-t.recv:
+			recv(d)
+		}
+	}
+}
+
+func (t *fakeCustomTransport) Send(remote base.CustomAddr, local *base.CustomAddr, p []byte) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var localCopy *base.CustomAddr
+	if local != nil {
+		v := *local
+		localCopy = &v
+	}
+	t.sends = append(t.sends, fakeCustomSend{
+		remote: remote,
+		local:  localCopy,
+		data:   append([]byte(nil), p...),
+	})
+	return true
+}
+
+func (t *fakeCustomTransport) lastSend() (fakeCustomSend, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.sends) == 0 {
+		return fakeCustomSend{}, false
+	}
+	return t.sends[len(t.sends)-1], true
+}
 
 // newLoopbackMagic binds a loopback UDP socket and returns a serving MagicConn
 // plus a stop func.
@@ -137,6 +190,97 @@ func TestMagicConnBlackhole(t *testing.T) {
 	}
 	if n != len(payload) {
 		t.Errorf("WriteTo after close n = %d, want %d", n, len(payload))
+	}
+}
+
+func TestMagicConnCustomSend(t *testing.T) {
+	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+
+	sock := socket.NewSocket()
+	custom := newFakeCustomTransport()
+	m := socket.NewMagicConnWithTransports(sock, udp, nil, custom)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Serve(ctx)
+	defer m.Close()
+
+	remote := base.NewCustomAddr(7, []byte("remote"))
+	mapped := sock.CustomMappedAddrFor(remote)
+	const payload = "custom-send"
+	n, err := m.WriteTo([]byte(payload), net.UDPAddrFromAddrPort(mapped.AddrPort()))
+	if err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("WriteTo n = %d, want %d", n, len(payload))
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		send, ok := custom.lastSend()
+		if ok {
+			if send.remote.String() != remote.String() {
+				t.Fatalf("send remote = %v, want %v", send.remote, remote)
+			}
+			if send.local != nil {
+				t.Fatalf("send local = %v, want nil", send.local)
+			}
+			if string(send.data) != payload {
+				t.Fatalf("send data = %q, want %q", send.data, payload)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for custom send")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func TestMagicConnCustomRecvRewrite(t *testing.T) {
+	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+
+	sock := socket.NewSocket()
+	custom := newFakeCustomTransport()
+	m := socket.NewMagicConnWithTransports(sock, udp, nil, custom)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Serve(ctx)
+	defer m.Close()
+
+	remote := base.NewCustomAddr(9, []byte("peer"))
+	const payload = "custom-recv"
+	custom.recv <- socket.CustomDatagram{Remote: remote, Data: []byte(payload)}
+
+	m.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 64)
+	n, addr, err := m.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("ReadFrom: %v", err)
+	}
+	if string(buf[:n]) != payload {
+		t.Fatalf("payload = %q, want %q", buf[:n], payload)
+	}
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("addr type = %T, want *net.UDPAddr", addr)
+	}
+	if socket.Classify(udpAddr.AddrPort().Addr()) != socket.KindCustom {
+		t.Fatalf("addr = %v, want custom mapped", udpAddr)
+	}
+	if got, ok := sock.LookupCustom(socket.CustomMappedAddrFromAddr(udpAddr.AddrPort().Addr())); !ok || got.String() != remote.String() {
+		t.Fatalf("LookupCustom = %v, %v; want %v", got, ok, remote)
 	}
 }
 

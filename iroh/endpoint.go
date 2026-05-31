@@ -72,6 +72,7 @@ type config struct {
 	keyLogWriter    io.Writer
 	transportConfig *QuicTransportConfig
 	hooks           []EndpointHooks
+	custom          []socket.CustomTransport
 }
 
 // Option configures an [Endpoint] at [Bind] time.
@@ -254,6 +255,18 @@ func WithTransportConfig(tc *QuicTransportConfig) Option {
 	}
 }
 
+// WithCustomTransport adds a custom transport backend to the magic socket.
+// Custom transports own their wire format and exchange datagrams using
+// [base.CustomAddr] values advertised in endpoint addresses.
+func WithCustomTransport(t socket.CustomTransport) Option {
+	return func(c *config) error {
+		if t != nil {
+			c.custom = append(c.custom, t)
+		}
+		return nil
+	}
+}
+
 // Bind binds a UDP socket and returns a ready [Endpoint].
 //
 // By default the endpoint enables qng datagrams and advertises the iroh
@@ -326,7 +339,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		})
 	}
 
-	magic := socket.NewMagicConnWithRelay(sock, udp, relayActor)
+	magic := socket.NewMagicConnWithTransports(sock, udp, relayActor, c.custom...)
 	serveCtx, serveStop := context.WithCancel(context.Background())
 	go magic.Serve(serveCtx)
 
