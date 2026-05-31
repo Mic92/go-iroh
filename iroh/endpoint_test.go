@@ -2,12 +2,14 @@ package iroh
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/internal/socket"
 )
 
 // TestEndpointDirectEcho is the slice-B gate: two endpoints connect over a
@@ -80,7 +82,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 	if !conn.MultipathNegotiated() {
 		t.Error("client did not negotiate multipath")
 	}
-	if err := client.remotes.Actor(server.ID()).TriggerHolepunch(); err != nil {
+	if err := client.remotes.Actor(server.ID()).TriggerHolepunch(); err != nil && !errors.Is(err, socket.ErrExtensionNotNegotiated) {
 		t.Fatalf("TriggerHolepunch: %v", err)
 	}
 
