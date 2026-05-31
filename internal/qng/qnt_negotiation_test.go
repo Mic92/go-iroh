@@ -101,43 +101,65 @@ func TestQNTApplyTransportParametersDoesNotAdmitFrames(t *testing.T) {
 	}
 }
 
-func TestQNTManualParserAdmissionHandlesReachOut(t *testing.T) {
-	const limit = uint8(8)
+func TestQNTManualParserAdmissionParsesAndHandlesFrames(t *testing.T) {
+	const limit = uint8(4)
 	c := newQNTTransportParameterConn(limit, limit)
 	c.applyTransportParameters()
+	if !c.qntNegotiated() {
+		t.Fatal("qntNegotiated() = false, want true")
+	}
 	c.frameParser.SetSupportsNATTraversal(true)
 
-	want := &wire.ReachOutFrame{
-		Round: 1,
-		Addr:  netip.MustParseAddr("198.51.100.7"),
-		Port:  4433,
+	added := netip.MustParseAddrPort("198.51.100.1:1001")
+	reachOut := netip.MustParseAddrPort("198.51.100.2:1002")
+	frames := []wire.Frame{
+		&wire.AddAddressFrame{SeqNo: 1, Addr: added.Addr(), Port: added.Port()},
+		&wire.ReachOutFrame{Round: 1, Addr: reachOut.Addr(), Port: reachOut.Port()},
+		&wire.RemoveAddressFrame{SeqNo: 1},
 	}
-	b, err := want.Append(nil, protocol.Version1)
+	for _, f := range frames {
+		parsed := parseQNTFrameWithManualAdmission(t, c, f)
+		switch frame := parsed.(type) {
+		case *wire.AddAddressFrame:
+			if err := c.handleAddAddressFrame(frame); err != nil {
+				t.Fatalf("handle ADD_ADDRESS: %v", err)
+			}
+		case *wire.ReachOutFrame:
+			if err := c.handleReachOutFrame(frame); err != nil {
+				t.Fatalf("handle REACH_OUT: %v", err)
+			}
+		case *wire.RemoveAddressFrame:
+			if err := c.handleRemoveAddressFrame(frame); err != nil {
+				t.Fatalf("handle REMOVE_ADDRESS: %v", err)
+			}
+		default:
+			t.Fatalf("parsed QNT frame = %T", parsed)
+		}
+	}
+
+	if addrs, err := c.NATTraversalAddresses(); err != nil || len(addrs) != 0 {
+		t.Fatalf("NATTraversalAddresses after ADD/REMOVE = %v, %v, want none, nil", addrs, err)
+	}
+	if probes := c.qntPendingProbeAddresses(); len(probes) != 1 || probes[0] != reachOut {
+		t.Fatalf("pending probes after REACH_OUT = %v, want [%v]", probes, reachOut)
+	}
+}
+
+func parseQNTFrameWithManualAdmission(t *testing.T, c *Conn, f wire.Frame) wire.Frame {
+	t.Helper()
+	b, err := f.Append(nil, protocol.Version1)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("append %T: %v", f, err)
 	}
 	ft, n, err := c.frameParser.ParseType(b, protocol.Encryption1RTT)
 	if err != nil {
-		t.Fatalf("ParseType: %v", err)
+		t.Fatalf("ParseType(%T): %v", f, err)
 	}
-	got, _, err := c.frameParser.ParseLessCommonFrame(ft, b[n:], protocol.Version1)
+	parsed, _, err := c.frameParser.ParseLessCommonFrame(ft, b[n:], protocol.Version1)
 	if err != nil {
-		t.Fatalf("ParseLessCommonFrame: %v", err)
+		t.Fatalf("ParseLessCommonFrame(%T): %v", f, err)
 	}
-	reachOut, ok := got.(*wire.ReachOutFrame)
-	if !ok {
-		t.Fatalf("parsed frame = %T, want *wire.ReachOutFrame", got)
-	}
-	if reachOut.Round != want.Round || reachOut.Addr != want.Addr || reachOut.Port != want.Port {
-		t.Fatalf("parsed REACH_OUT = %+v, want %+v", reachOut, want)
-	}
-	if err := c.handleReachOutFrame(reachOut); err != nil {
-		t.Fatalf("handleReachOutFrame: %v", err)
-	}
-	probes := c.qntPendingProbeAddresses()
-	if len(probes) != 1 || probes[0] != netip.AddrPortFrom(want.Addr, want.Port) {
-		t.Fatalf("pending probes after REACH_OUT = %v, want [%v]", probes, netip.AddrPortFrom(want.Addr, want.Port))
-	}
+	return parsed
 }
 
 func newQNTTransportParameterConn(local, peer uint8) *Conn {
