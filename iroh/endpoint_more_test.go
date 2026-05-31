@@ -2,12 +2,14 @@ package iroh
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
+	quic "github.com/tmc/go-iroh/internal/qng"
 )
 
 // TestEndpointSecretKey verifies SecretKey returns the configured key and that
@@ -103,6 +105,64 @@ func TestEndpointLocalNATTraversalCandidates(t *testing.T) {
 	}
 	if got[0] != loopback.LocalAddr() {
 		t.Fatalf("loopback localNATTraversalCandidates = %v, want [%v]", got, loopback.LocalAddr())
+	}
+}
+
+func TestEndpointRegisterConnSeedsQNTCandidatesOpportunistically(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-qnt-handoff-test/0"
+	server, err := Bind(ctx,
+		WithALPNs([]byte(alpn)),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	candidates := client.localNATTraversalCandidates()
+	if len(candidates) == 0 {
+		t.Fatal("client localNATTraversalCandidates = nil, want concrete loopback candidate")
+	}
+
+	accepted := make(chan error, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err != nil {
+			accepted <- err
+			return
+		}
+		accepted <- conn.CloseWithError(0, "")
+	}()
+
+	conn, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+
+	if !conn.MultipathNegotiated() {
+		t.Fatal("MultipathNegotiated = false, want true so registerConn attempts QNT handoff")
+	}
+	if err := conn.qc.AddNATTraversalAddress(candidates[0]); !errors.Is(err, quic.ErrNATTraversalNotNegotiated) {
+		t.Fatalf("AddNATTraversalAddress = %v, want %v", err, quic.ErrNATTraversalNotNegotiated)
+	}
+
+	select {
+	case err := <-accepted:
+		if err != nil {
+			t.Fatalf("Accept close: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
 }
 
