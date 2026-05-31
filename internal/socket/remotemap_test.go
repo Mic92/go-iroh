@@ -20,6 +20,8 @@ type fakeConn struct {
 	multipathNegotiated bool
 	openPath            func(context.Context) error
 	openPathCalls       atomic.Int64
+	initiateRound       func(context.Context) ([]netip.AddrPort, error)
+	initiateRoundCalls  atomic.Int64
 	paths               []PathInfo
 	natAddrs            []netip.AddrPort
 	addNATErr           error
@@ -49,6 +51,13 @@ func (c *fakeConn) OpenPath(ctx context.Context) error {
 		return c.openPath(ctx)
 	}
 	return nil
+}
+func (c *fakeConn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort, error) {
+	c.initiateRoundCalls.Add(1)
+	if c.initiateRound != nil {
+		return c.initiateRound(ctx)
+	}
+	return nil, nil
 }
 func (c *fakeConn) Close() { c.once.Do(func() { close(c.done) }) }
 

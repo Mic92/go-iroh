@@ -521,6 +521,13 @@ func TestTriggerHolepunchAfterMultipathNegotiated(t *testing.T) {
 	if _, ok := a.AddConnection(conn); !ok {
 		t.Fatal("AddConnection failed")
 	}
+	candidates := []netip.AddrPort{
+		netip.MustParseAddrPort("192.0.2.10:1111"),
+		netip.MustParseAddrPort("[2001:db8::10]:2222"),
+	}
+	if err := a.AddNATTraversalAddresses(candidates); err != nil {
+		t.Fatalf("AddNATTraversalAddresses: %v", err)
+	}
 
 	err := a.TriggerHolepunch()
 	if errors.Is(err, ErrExtensionNotNegotiated) {
@@ -529,8 +536,19 @@ func TestTriggerHolepunchAfterMultipathNegotiated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TriggerHolepunch() = %v, want nil", err)
 	}
-	if conn.openPathCalls.Load() != 1 {
-		t.Fatalf("OpenPath calls = %d, want 1", conn.openPathCalls.Load())
+	if conn.initiateRoundCalls.Load() != 1 {
+		t.Fatalf("InitiateNATTraversalRound calls = %d, want 1", conn.initiateRoundCalls.Load())
+	}
+	if conn.openPathCalls.Load() != 0 {
+		t.Fatalf("OpenPath calls = %d, want 0", conn.openPathCalls.Load())
+	}
+	if len(conn.natAddrs) != 2*len(candidates) {
+		t.Fatalf("advertised addrs = %v, want AddNATTraversalAddresses plus TriggerHolepunch re-advertise", conn.natAddrs)
+	}
+	for i, want := range append(candidates, candidates...) {
+		if conn.natAddrs[i] != want {
+			t.Fatalf("advertised addr %d = %v, want %v", i, conn.natAddrs[i], want)
+		}
 	}
 }
 
@@ -669,15 +687,15 @@ func TestActorAddNATTraversalAddressesHandoff(t *testing.T) {
 	}
 }
 
-func TestTriggerHolepunchOpenPathError(t *testing.T) {
+func TestTriggerHolepunchInitiateRoundError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
 	a := m.Actor(testEndpointId(t))
-	want := errors.New("path refused")
+	want := errors.New("round refused")
 	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 	conn.multipathNegotiated = true
-	conn.openPath = func(context.Context) error { return want }
+	conn.initiateRound = func(context.Context) ([]netip.AddrPort, error) { return nil, want }
 	if _, ok := a.AddConnection(conn); !ok {
 		t.Fatal("AddConnection failed")
 	}
@@ -685,6 +703,9 @@ func TestTriggerHolepunchOpenPathError(t *testing.T) {
 	err := a.TriggerHolepunch()
 	if !errors.Is(err, want) {
 		t.Fatalf("TriggerHolepunch() = %v, want wrapped %v", err, want)
+	}
+	if conn.openPathCalls.Load() != 0 {
+		t.Fatalf("OpenPath calls = %d, want 0", conn.openPathCalls.Load())
 	}
 }
 

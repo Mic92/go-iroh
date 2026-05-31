@@ -63,8 +63,9 @@ type multipathConnection interface {
 	MultipathNegotiated() bool
 }
 
-type pathOpeningConnection interface {
-	OpenPath(context.Context) error
+type natTraversalRoundConnection interface {
+	AddNATTraversalAddress(netip.AddrPort) error
+	InitiateNATTraversalRound(context.Context) ([]netip.AddrPort, error)
 }
 
 // PathInfo is qng multipath path state observed through a [Connection]. Addr is
@@ -164,6 +165,7 @@ type RemoteStateActor struct {
 	paths    *RemotePathState
 	conns    map[Connection]*connState
 	selected *Addr
+	localNAT []netip.AddrPort
 }
 
 // newRemoteStateActor creates and starts an actor for id. The returned actor is
@@ -496,6 +498,15 @@ func appendUniqueAddr(addrs []Addr, addr Addr) []Addr {
 	return append(addrs, addr)
 }
 
+func appendUniqueNATAddr(addrs []netip.AddrPort, addr netip.AddrPort) []netip.AddrPort {
+	for _, a := range addrs {
+		if a == addr {
+			return addrs
+		}
+	}
+	return append(addrs, addr)
+}
+
 // reselect runs the path selector over the current candidates and, if the
 // selection changes, records it and emits a Selected event.
 func (a *RemoteStateActor) reselect() {
@@ -540,38 +551,47 @@ func (a *RemoteStateActor) reselect() {
 	a.watcher.Send(PathEvent{Kind: PathEventSelected, Addr: selected})
 }
 
-// TriggerHolepunch attempts to open a new direct path by NAT traversal. It
-// stays fail-closed until qng multipath is negotiated by at least one active
-// connection. After that gate, this build opens and validates one qng multipath
-// path over the connection's existing socket. QNT candidate discovery is still
-// not implemented, so this is only the direct path-open step; the actor falls
-// back to the relay path and any pre-validated direct path when the extension
-// gate is closed. See iroh/DESIGN.md §3.4.
+// TriggerHolepunch attempts to open a new direct path by NAT traversal. It is
+// gated on an active qng connection with QNT support: socket advertises its
+// already-known local candidates and asks qng to initiate one NAT traversal
+// round. qng owns QNT frames, probe timers, response matching, and path opening.
 func (a *RemoteStateActor) TriggerHolepunch() error {
 	a.mu.Lock()
-	var opener pathOpeningConnection
-	negotiated := false
+	conns := make([]Connection, 0, len(a.conns))
 	for conn := range a.conns {
+		conns = append(conns, conn)
+	}
+	candidates := append([]netip.AddrPort(nil), a.localNAT...)
+	a.mu.Unlock()
+
+	negotiated := false
+	var target natTraversalRoundConnection
+	for _, conn := range conns {
 		mp, ok := conn.(multipathConnection)
-		if ok && mp.MultipathNegotiated() {
-			negotiated = true
-			if p, ok := conn.(pathOpeningConnection); ok {
-				opener = p
-			}
+		if !ok || !mp.MultipathNegotiated() {
+			continue
+		}
+		negotiated = true
+		if qnt, ok := conn.(natTraversalRoundConnection); ok {
+			target = qnt
 			break
 		}
 	}
-	a.mu.Unlock()
-	if negotiated && opener == nil {
-		return ErrHolepunchNotImplemented
-	}
-	if opener == nil {
+	if !negotiated {
 		return ErrExtensionNotNegotiated
+	}
+	if target == nil {
+		return ErrHolepunchNotImplemented
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), HolepunchAttemptsInterval)
 	defer cancel()
-	if err := opener.OpenPath(ctx); err != nil {
-		return fmt.Errorf("socket: open multipath path: %w", err)
+	for _, addr := range candidates {
+		if err := target.AddNATTraversalAddress(addr); err != nil {
+			return fmt.Errorf("socket: add nat traversal address %s: %w", addr, err)
+		}
+	}
+	if _, err := target.InitiateNATTraversalRound(ctx); err != nil {
+		return fmt.Errorf("socket: initiate nat traversal round: %w", err)
 	}
 	return nil
 }
@@ -622,6 +642,9 @@ func (a *RemoteStateActor) MultipathPaths() []PathInfo {
 // eventual path opening.
 func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) error {
 	a.mu.Lock()
+	for _, addr := range addrs {
+		a.localNAT = appendUniqueNATAddr(a.localNAT, addr)
+	}
 	conns := make([]Connection, 0, len(a.conns))
 	for conn := range a.conns {
 		conns = append(conns, conn)

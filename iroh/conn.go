@@ -207,7 +207,20 @@ func (a *connAdapter) Paths() []socket.PathInfo {
 
 // AddNATTraversalAddress hands one local QNT candidate address to qng.
 func (a *connAdapter) AddNATTraversalAddress(addr netip.AddrPort) error {
-	return a.qc.AddNATTraversalAddress(addr)
+	err := a.qc.AddNATTraversalAddress(addr)
+	if errors.Is(err, quic.ErrNATTraversalNotNegotiated) {
+		return socket.ErrExtensionNotNegotiated
+	}
+	return err
+}
+
+// InitiateNATTraversalRound asks qng to start one QNT round.
+func (a *connAdapter) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort, error) {
+	addrs, err := a.qc.InitiateNATTraversalRound(ctx)
+	if errors.Is(err, quic.ErrNATTraversalNotNegotiated) {
+		return nil, socket.ErrExtensionNotNegotiated
+	}
+	return addrs, err
 }
 
 // OpenPath opens and validates one qng multipath path over the connection's
