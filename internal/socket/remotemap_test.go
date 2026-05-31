@@ -191,6 +191,51 @@ func TestRemoteMapIdleTeardown(t *testing.T) {
 	})
 }
 
+// TestRemoteMapIdleTeardownWaitsForConnections checks that the idle timer does
+// not deregister an actor while it has a live connection.
+func TestRemoteMapIdleTeardownWaitsForConnections(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond)
+		id := testEndpointId(t)
+
+		addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
+		c := newFakeConn(addr, time.Millisecond)
+		events := m.AddConnection(id, c)
+		eventsDone := make(chan struct{})
+		go func() {
+			for range events {
+			}
+			close(eventsDone)
+		}()
+
+		synctest.Wait()
+		if m.Len() != 1 {
+			t.Fatalf("Len after connection = %d, want 1", m.Len())
+		}
+
+		time.Sleep(10 * time.Millisecond)
+		synctest.Wait()
+		if m.Len() != 1 {
+			t.Fatalf("Len while connection is active = %d, want 1", m.Len())
+		}
+
+		c.Close()
+		synctest.Wait()
+		time.Sleep(10 * time.Millisecond)
+		synctest.Wait()
+		if m.Len() != 0 {
+			t.Fatalf("Len after connection close and idle teardown = %d, want 0", m.Len())
+		}
+		select {
+		case <-eventsDone:
+		default:
+			t.Fatal("path events channel still open after idle teardown")
+		}
+	})
+}
+
 // TestActorPathEventsAndSelection checks that adding a connection emits Opened
 // and Selected path events and that the actor selects the connection's path.
 func TestActorPathEventsAndSelection(t *testing.T) {
