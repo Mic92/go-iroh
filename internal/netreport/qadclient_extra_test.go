@@ -41,9 +41,13 @@ func TestProbeStringDefaultArm(t *testing.T) {
 func TestDefaultQADConfigGolden(t *testing.T) {
 	// Wire-golden: the QAD transport config must match the Rust relay defaults so
 	// a real relay accepts the connection on the same keep-alive/idle schedule.
+	// iroh-relay/src/quic.rs:293 (initial_rtt = Duration::from_millis(111)),
 	// iroh-relay/src/quic.rs:297 (keep_alive_interval = Duration::from_secs(25)),
 	// iroh-relay/src/quic.rs:298-300 (max_idle_timeout = Duration::from_secs(35)).
 	cfg := defaultQADConfig()
+	if cfg.InitialRTT != 111*time.Millisecond {
+		t.Errorf("InitialRTT = %v, want 111ms (quic.rs:293)", cfg.InitialRTT)
+	}
 	if cfg.KeepAlivePeriod != 25*time.Second {
 		t.Errorf("KeepAlivePeriod = %v, want 25s (quic.rs:297)", cfg.KeepAlivePeriod)
 	}

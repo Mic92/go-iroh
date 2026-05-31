@@ -92,12 +92,11 @@ func qadTLSConfig(host string, base *tls.Config) *tls.Config {
 //
 // ReceiveObservedAddressReports advertises the address-discovery role
 // (receive-only) so a QAD relay reports our reflexive address, mirroring
-// transport.receive_observed_address_reports(true) (quic.rs:294). Rust also sets
-// initial_rtt to [qadInitialRTT] (111ms); the forked quic-go's public Config
-// does not expose that knob, so the initial RTT stays at the qng default.
-// Keep-alive and idle timeout are set as in Rust.
+// transport.receive_observed_address_reports(true) (quic.rs:294). Initial RTT,
+// keep-alive, and idle timeout are set as in Rust.
 func defaultQADConfig() *quic.Config {
 	return &quic.Config{
+		InitialRTT:                    qadInitialRTT,
 		KeepAlivePeriod:               qadKeepAlive,
 		MaxIdleTimeout:                qadMaxIdle,
 		ReceiveObservedAddressReports: true,

@@ -400,7 +400,9 @@ var newConnection = func(
 		connIDGenerator,
 	)
 	s.preSetup()
-	s.rttStats.SetInitialRTT(rtt)
+	if rtt > 0 {
+		s.rttStats.SetInitialRTT(rtt)
+	}
 	s.sentPacketHandler = ackhandler.NewSentPacketHandler(
 		0,
 		protocol.ByteCount(s.config.InitialPacketSize),
@@ -629,6 +631,9 @@ func (c *Conn) preSetup() {
 		false, // multipath is not negotiated yet (Stage 3)
 	)
 	c.rttStats = utils.NewRTTStats()
+	if c.config.InitialRTT > 0 {
+		c.rttStats.SetInitialRTT(c.config.InitialRTT)
+	}
 	c.connFlowController = flowcontrol.NewConnectionFlowController(
 		protocol.ByteCount(c.config.InitialConnectionReceiveWindow),
 		protocol.ByteCount(c.config.MaxConnectionReceiveWindow),

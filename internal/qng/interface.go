@@ -105,6 +105,9 @@ type Config struct {
 	// Additionally, if the handshake doesn't complete in twice this time, the connection attempt is also aborted.
 	// If this value is zero, the timeout is set to 5 seconds.
 	HandshakeIdleTimeout time.Duration
+	// InitialRTT is the RTT estimate used before receiving the first RTT sample.
+	// If this value is zero, the estimate is set to 100 milliseconds.
+	InitialRTT time.Duration
 	// MaxIdleTimeout is the maximum duration that may pass without any incoming network activity.
 	// The actual value for the idle timeout is the minimum of this value and the peer's.
 	// This value only applies after the handshake has completed.

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/quicvarint"
 )
 
@@ -68,6 +69,10 @@ func populateConfig(config *Config) *Config {
 	if config.HandshakeIdleTimeout != 0 {
 		handshakeIdleTimeout = config.HandshakeIdleTimeout
 	}
+	initialRTT := config.InitialRTT
+	if initialRTT <= 0 {
+		initialRTT = utils.DefaultInitialRTT
+	}
 	idleTimeout := protocol.DefaultIdleTimeout
 	if config.MaxIdleTimeout != 0 {
 		idleTimeout = config.MaxIdleTimeout
@@ -109,6 +114,7 @@ func populateConfig(config *Config) *Config {
 		GetConfigForClient:               config.GetConfigForClient,
 		Versions:                         versions,
 		HandshakeIdleTimeout:             handshakeIdleTimeout,
+		InitialRTT:                       initialRTT,
 		MaxIdleTimeout:                   idleTimeout,
 		KeepAlivePeriod:                  config.KeepAlivePeriod,
 		InitialStreamReceiveWindow:       initialStreamReceiveWindow,
