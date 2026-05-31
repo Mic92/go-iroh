@@ -1,12 +1,14 @@
 package compat
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
-	stdstrconv "strconv"
+	"strings"
 	"testing"
+	"time"
 
 	quic "github.com/tmc/go-iroh/internal/qng"
 )
@@ -92,21 +94,32 @@ func TestRustIrohBin(t *testing.T) {
 	})
 }
 
+func TestRustIrohHelp(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "iroh")
+	script := `#!/bin/sh
+if [ "$1" = "--help" ]; then
+	echo "Usage: iroh [COMMAND]"
+	exit 0
+fi
+exit 2
+`
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := rustIrohHelp(t, bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstLine(out) != "Usage: iroh [COMMAND]" {
+		t.Fatalf("first help line = %q, want Usage: iroh [COMMAND]", firstLine(out))
+	}
+}
+
 func TestLiveRustInteropGate(t *testing.T) {
 	if os.Getenv(liveRustInteropEnv) != "1" {
 		t.Skipf("set %s=1 with %s or %s pointing at a local Rust iroh checkout; this test never downloads or builds Rust dependencies", liveRustInteropEnv, rustIrohBinEnv, rustRepoEnv)
-	}
-
-	rustc, err := exec.LookPath("rustc")
-	if err != nil {
-		t.Skip("rustc not installed; live Rust interop requires rustc >= 1.91 when the Rust peer is built locally")
-	}
-	out, err := exec.Command(rustc, "--version").Output()
-	if err != nil {
-		t.Skipf("rustc --version failed: %v", err)
-	}
-	if !rustcAtLeast191(string(out)) {
-		t.Skipf("rustc version %q is older than 1.91; live Rust interop requires rustc >= 1.91", string(out))
 	}
 
 	bin, checked, ok := rustIrohBin()
@@ -122,7 +135,11 @@ func TestLiveRustInteropGate(t *testing.T) {
 		t.Fatalf("Rust iroh binary %s is not executable", bin)
 	}
 
-	t.Skip("live Rust peer orchestration is not implemented; next step is to start this binary and prove multipath, QAD observed-address, and QNT route acceptance against go-iroh")
+	out, err := rustIrohHelp(t, bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Rust iroh --help succeeded: %s", firstLine(out))
 }
 
 func rustIrohBin() (bin string, checked []string, ok bool) {
@@ -145,12 +162,42 @@ func rustIrohBin() (bin string, checked []string, ok bool) {
 	return "", checked, false
 }
 
-func rustcAtLeast191(version string) bool {
-	m := regexp.MustCompile(`rustc ([0-9]+)\.([0-9]+)`).FindStringSubmatch(version)
-	if m == nil {
-		return false
+func rustIrohHelp(t *testing.T, bin string) (string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"home", "config", "cache", "data"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			return "", err
+		}
 	}
-	major, _ := stdstrconv.Atoi(m[1])
-	minor, _ := stdstrconv.Atoi(m[2])
-	return major > 1 || major == 1 && minor >= 91
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, bin, "--help")
+	cmd.Env = append(os.Environ(),
+		"HOME="+filepath.Join(dir, "home"),
+		"XDG_CONFIG_HOME="+filepath.Join(dir, "config"),
+		"XDG_CACHE_HOME="+filepath.Join(dir, "cache"),
+		"XDG_DATA_HOME="+filepath.Join(dir, "data"),
+	)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return "", fmt.Errorf("%s --help: %w", bin, ctx.Err())
+	}
+	if err != nil {
+		return "", fmt.Errorf("%s --help: %w\n%s", bin, err, out)
+	}
+	if strings.TrimSpace(string(out)) == "" {
+		return "", fmt.Errorf("%s --help: empty output", bin)
+	}
+	return string(out), nil
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
