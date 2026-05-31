@@ -6,7 +6,10 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
+	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -193,6 +196,61 @@ func TestQNTHandleRetryDeadlineSynctest(t *testing.T) {
 		}
 		if got := c.qntNextRetryDeadline(); !got.IsZero() {
 			t.Fatalf("retry deadline after handling = %v, want zero", got)
+		}
+	})
+}
+
+func TestQNTMaybeResetTimerUsesRetryDeadlineSynctest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newNegotiatedQNTConn(8, 16)
+		now := monotime.Now()
+		c.config = populateConfig(&Config{MaxIdleTimeout: time.Hour})
+		c.handshakeComplete = true
+		c.creationTime = now
+		c.lastPacketReceivedTime = now
+		c.rttStats = utils.NewRTTStats()
+		c.sentPacketHandler = ackhandler.NewSentPacketHandler(
+			0,
+			protocol.InitialPacketSize,
+			c.rttStats,
+			&utils.ConnectionStats{},
+			true,
+			false,
+			func(protocol.PacketNumber) {},
+			protocol.PerspectiveClient,
+			nil,
+			utils.DefaultLogger,
+		)
+		c.receivedPacketHandler = *ackhandler.NewReceivedPacketHandler(utils.DefaultLogger)
+		c.timer = time.NewTimer(time.Hour)
+		defer c.timer.Stop()
+
+		addr := netip.MustParseAddrPort("198.51.100.1:1234")
+		challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+		st := c.qntLocalState()
+		st.mu.Lock()
+		st.sentProbes = map[[8]byte]netip.AddrPort{challenge: addr}
+		st.probeAttempts = map[netip.AddrPort]uint8{addr: qntMaxProbeAttempts - 1}
+		st.mu.Unlock()
+
+		initialRTT := 100 * time.Millisecond
+		deadline, ok := c.qntArmNextRetry(now, initialRTT)
+		if !ok {
+			t.Fatal("qntArmNextRetry = false, want true")
+		}
+		c.maybeResetTimer()
+
+		time.Sleep(monotime.Until(deadline) - time.Nanosecond)
+		select {
+		case <-c.timer.C:
+			t.Fatal("timer fired before QNT retry deadline")
+		default:
+		}
+		time.Sleep(time.Nanosecond)
+		select {
+		case <-c.timer.C:
+		default:
+			t.Fatal("timer did not fire at QNT retry deadline")
 		}
 	})
 }
