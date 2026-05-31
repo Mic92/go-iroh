@@ -687,6 +687,43 @@ func TestActorAddNATTraversalAddressesHandoff(t *testing.T) {
 	}
 }
 
+func TestActorAddNATTraversalAddressesCanonicalizesAndDedups(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	conn.multipathNegotiated = true
+	if _, ok := a.AddConnection(conn); !ok {
+		t.Fatal("AddConnection failed")
+	}
+
+	mapped := netip.MustParseAddrPort("[::ffff:192.0.2.10]:1111")
+	canon := netip.MustParseAddrPort("192.0.2.10:1111")
+	if err := a.AddNATTraversalAddresses([]netip.AddrPort{
+		mapped,
+		canon,
+		netip.AddrPort{},
+		netip.MustParseAddrPort("192.0.2.11:0"),
+	}); err != nil {
+		t.Fatalf("AddNATTraversalAddresses: %v", err)
+	}
+	if len(conn.natAddrs) != 1 || conn.natAddrs[0] != canon {
+		t.Fatalf("forwarded addrs = %v, want [%v]", conn.natAddrs, canon)
+	}
+
+	if err := a.TriggerHolepunch(); err != nil {
+		t.Fatalf("TriggerHolepunch: %v", err)
+	}
+	if conn.initiateRoundCalls.Load() != 1 {
+		t.Fatalf("InitiateNATTraversalRound calls = %d, want 1", conn.initiateRoundCalls.Load())
+	}
+	if len(conn.natAddrs) != 2 || conn.natAddrs[1] != canon {
+		t.Fatalf("forwarded addrs after TriggerHolepunch = %v, want two canonical entries", conn.natAddrs)
+	}
+}
+
 func TestTriggerHolepunchInitiateRoundError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

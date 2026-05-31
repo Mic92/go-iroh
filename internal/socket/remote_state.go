@@ -499,12 +499,23 @@ func appendUniqueAddr(addrs []Addr, addr Addr) []Addr {
 }
 
 func appendUniqueNATAddr(addrs []netip.AddrPort, addr netip.AddrPort) []netip.AddrPort {
+	addr, ok := canonicalNATAddr(addr)
+	if !ok {
+		return addrs
+	}
 	for _, a := range addrs {
 		if a == addr {
 			return addrs
 		}
 	}
 	return append(addrs, addr)
+}
+
+func canonicalNATAddr(addr netip.AddrPort) (netip.AddrPort, bool) {
+	if !addr.IsValid() || addr.Port() == 0 {
+		return netip.AddrPort{}, false
+	}
+	return netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port()), true
 }
 
 // reselect runs the path selector over the current candidates and, if the
@@ -642,8 +653,14 @@ func (a *RemoteStateActor) MultipathPaths() []PathInfo {
 // eventual path opening.
 func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) error {
 	a.mu.Lock()
+	var candidates []netip.AddrPort
 	for _, addr := range addrs {
-		a.localNAT = appendUniqueNATAddr(a.localNAT, addr)
+		canon, ok := canonicalNATAddr(addr)
+		if !ok {
+			continue
+		}
+		candidates = appendUniqueNATAddr(candidates, canon)
+		a.localNAT = appendUniqueNATAddr(a.localNAT, canon)
 	}
 	conns := make([]Connection, 0, len(a.conns))
 	for conn := range a.conns {
@@ -670,7 +687,7 @@ func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) erro
 	if target == nil {
 		return ErrHolepunchNotImplemented
 	}
-	for _, addr := range addrs {
+	for _, addr := range candidates {
 		if err := target.AddNATTraversalAddress(addr); err != nil {
 			return fmt.Errorf("socket: add nat traversal address %s: %w", addr, err)
 		}
