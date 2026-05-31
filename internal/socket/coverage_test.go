@@ -723,6 +723,40 @@ func TestActorAddNATTraversalAddressesHandoff(t *testing.T) {
 	}
 }
 
+func TestActorNATTraversalAddresses(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+
+	if addrs, err := a.NATTraversalAddresses(); !errors.Is(err, ErrExtensionNotNegotiated) {
+		t.Fatalf("NATTraversalAddresses without QNT = %v, %v, want ErrExtensionNotNegotiated", addrs, err)
+	}
+
+	addr1 := netip.MustParseAddrPort("192.0.2.10:1111")
+	addr2 := netip.MustParseAddrPort("[2001:db8::10]:2222")
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	conn.multipathNegotiated = true
+	conn.remoteNAT = []netip.AddrPort{addr1, addr2, addr1}
+	if _, ok := a.AddConnection(conn); !ok {
+		t.Fatal("AddConnection failed")
+	}
+
+	addrs, err := a.NATTraversalAddresses()
+	if err != nil {
+		t.Fatalf("NATTraversalAddresses: %v", err)
+	}
+	want := []netip.AddrPort{addr1, addr2}
+	if len(addrs) != len(want) {
+		t.Fatalf("NATTraversalAddresses = %v, want %v", addrs, want)
+	}
+	for i := range want {
+		if addrs[i] != want[i] {
+			t.Fatalf("NATTraversalAddresses[%d] = %v, want %v", i, addrs[i], want[i])
+		}
+	}
+}
+
 func TestActorAddNATTraversalAddressesCanonicalizesAndDedups(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

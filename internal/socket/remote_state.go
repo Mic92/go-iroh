@@ -68,6 +68,10 @@ type natTraversalRoundConnection interface {
 	InitiateNATTraversalRound(context.Context) ([]netip.AddrPort, error)
 }
 
+type natTraversalRemoteAddressConnection interface {
+	NATTraversalAddresses() ([]netip.AddrPort, error)
+}
+
 // PathInfo is qng multipath path state observed through a [Connection]. Addr is
 // set only when qng reports the address that actually routes the path; socket
 // must not fabricate it from the connection's original RemoteAddr.
@@ -674,6 +678,45 @@ func (a *RemoteStateActor) MultipathPaths() []PathInfo {
 		return !paths[i].Validated && paths[j].Validated
 	})
 	return paths
+}
+
+// NATTraversalAddresses returns the remote QNT ADD_ADDRESS set observed on
+// active qng connections. Duplicate addresses are removed in first-seen order.
+func (a *RemoteStateActor) NATTraversalAddresses() ([]netip.AddrPort, error) {
+	a.mu.Lock()
+	conns := make([]Connection, 0, len(a.conns))
+	for conn := range a.conns {
+		conns = append(conns, conn)
+	}
+	a.mu.Unlock()
+
+	negotiated := false
+	var out []netip.AddrPort
+	for _, conn := range conns {
+		mp, ok := conn.(multipathConnection)
+		if !ok || !mp.MultipathNegotiated() {
+			continue
+		}
+		negotiated = true
+		qnt, ok := conn.(natTraversalRemoteAddressConnection)
+		if !ok {
+			continue
+		}
+		addrs, err := qnt.NATTraversalAddresses()
+		if err != nil {
+			return nil, err
+		}
+		for _, addr := range addrs {
+			out = appendUniqueNATAddr(out, addr)
+		}
+	}
+	if !negotiated {
+		return nil, ErrExtensionNotNegotiated
+	}
+	if out == nil {
+		out = []netip.AddrPort{}
+	}
+	return out, nil
 }
 
 // AddNATTraversalAddresses reconciles the full local QNT candidate set for

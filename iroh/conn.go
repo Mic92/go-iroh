@@ -437,6 +437,15 @@ func (a *connAdapter) InitiateNATTraversalRound(ctx context.Context) ([]netip.Ad
 	return addrs, err
 }
 
+// NATTraversalAddresses reports the remote QNT candidate set qng has learned.
+func (a *connAdapter) NATTraversalAddresses() ([]netip.AddrPort, error) {
+	addrs, err := a.qc.NATTraversalAddresses()
+	if errors.Is(err, quic.ErrNATTraversalNotNegotiated) {
+		return nil, socket.ErrExtensionNotNegotiated
+	}
+	return addrs, err
+}
+
 // OpenPath opens and validates one qng multipath path over the connection's
 // existing MagicConn socket.
 func (a *connAdapter) OpenPath(ctx context.Context) error {

@@ -26,6 +26,7 @@ type fakeConn struct {
 	paths               []PathInfo
 	natAddrs            []netip.AddrPort
 	removedNAT          []netip.AddrPort
+	remoteNAT           []netip.AddrPort
 	addNATErr           error
 	done                chan struct{}
 	once                sync.Once
@@ -73,6 +74,9 @@ func (c *fakeConn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrP
 		return c.initiateRound(ctx)
 	}
 	return nil, nil
+}
+func (c *fakeConn) NATTraversalAddresses() ([]netip.AddrPort, error) {
+	return append([]netip.AddrPort(nil), c.remoteNAT...), nil
 }
 func (c *fakeConn) Close() { c.once.Do(func() { close(c.done) }) }
 
