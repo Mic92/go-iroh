@@ -240,7 +240,7 @@ func TestQNTLocalAddressStateFailsClosedWhenNotNegotiated(t *testing.T) {
 	}
 }
 
-func TestQNTRoundPreconditions(t *testing.T) {
+func TestQNTRoundQueuesState(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
 	local := netip.MustParseAddrPort("192.0.2.1:1234")
 	remote := netip.MustParseAddrPort("198.51.100.2:5678")
@@ -272,11 +272,133 @@ func TestQNTRoundPreconditions(t *testing.T) {
 		t.Fatalf("addRemoteNATTraversalAddressFrame: %v", err)
 	}
 	addrs, err = c.InitiateNATTraversalRound(context.Background())
-	if !errors.Is(err, ErrNATTraversalRoundNotImplemented) {
-		t.Fatalf("InitiateNATTraversalRound with candidates err = %v, want ErrNATTraversalRoundNotImplemented", err)
+	if err != nil {
+		t.Fatalf("InitiateNATTraversalRound with candidates: %v", err)
 	}
 	if len(addrs) != 1 || addrs[0] != remote {
 		t.Fatalf("InitiateNATTraversalRound with candidates addresses = %v, want [%v]", addrs, remote)
+	}
+	reachOut := c.qntPendingReachOutFrames()
+	if len(reachOut) != 1 {
+		t.Fatalf("pending REACH_OUT frames = %d, want 1", len(reachOut))
+	}
+	if reachOut[0].Round != 1 || netip.AddrPortFrom(reachOut[0].Addr, reachOut[0].Port) != local {
+		t.Fatalf("pending REACH_OUT = round %d %s:%d, want round 1 %v", reachOut[0].Round, reachOut[0].Addr, reachOut[0].Port, local)
+	}
+	probes := c.qntPendingProbeAddresses()
+	if len(probes) != 1 || probes[0] != remote {
+		t.Fatalf("pending probe addresses = %v, want [%v]", probes, remote)
+	}
+
+	addrs, err = c.InitiateNATTraversalRound(context.Background())
+	if err != nil {
+		t.Fatalf("second InitiateNATTraversalRound with candidates: %v", err)
+	}
+	if len(addrs) != 1 || addrs[0] != remote {
+		t.Fatalf("second InitiateNATTraversalRound addresses = %v, want [%v]", addrs, remote)
+	}
+	reachOut = c.qntPendingReachOutFrames()
+	if len(reachOut) != 1 {
+		t.Fatalf("second pending REACH_OUT frames = %d, want 1", len(reachOut))
+	}
+	if reachOut[0].Round != 2 || netip.AddrPortFrom(reachOut[0].Addr, reachOut[0].Port) != local {
+		t.Fatalf("second pending REACH_OUT = round %d %s:%d, want round 2 %v", reachOut[0].Round, reachOut[0].Addr, reachOut[0].Port, local)
+	}
+}
+
+func TestQNTRoundQueuesOneReachOutPerLocalAndProbePerRemote(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	local1 := netip.MustParseAddrPort("192.0.2.1:1234")
+	local2 := netip.MustParseAddrPort("[2001:db8::1]:4433")
+	remote1 := netip.MustParseAddrPort("198.51.100.1:1001")
+	remote2 := netip.MustParseAddrPort("198.51.100.2:1002")
+
+	for _, addr := range []netip.AddrPort{local1, local2} {
+		if err := c.AddNATTraversalAddress(addr); err != nil {
+			t.Fatalf("AddNATTraversalAddress(%v): %v", addr, err)
+		}
+	}
+	for seq, addr := range map[uint64]netip.AddrPort{1: remote1, 2: remote2} {
+		if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{SeqNo: seq, Addr: addr.Addr(), Port: addr.Port()}); err != nil {
+			t.Fatalf("add remote seq %d: %v", seq, err)
+		}
+	}
+
+	addrs, err := c.InitiateNATTraversalRound(context.Background())
+	if err != nil {
+		t.Fatalf("InitiateNATTraversalRound: %v", err)
+	}
+	if len(addrs) != 2 || !slices.Contains(addrs, remote1) || !slices.Contains(addrs, remote2) {
+		t.Fatalf("round addresses = %v, want %v and %v", addrs, remote1, remote2)
+	}
+	reachOut := c.qntPendingReachOutFrames()
+	if len(reachOut) != 2 {
+		t.Fatalf("pending REACH_OUT frames = %d, want 2", len(reachOut))
+	}
+	for _, f := range reachOut {
+		if f.Round != 1 {
+			t.Fatalf("REACH_OUT round = %d, want 1", f.Round)
+		}
+	}
+	if !hasReachOut(reachOut, local1) || !hasReachOut(reachOut, local2) {
+		t.Fatalf("pending REACH_OUT frames = %+v, want local candidates %v and %v", reachOut, local1, local2)
+	}
+	probes := c.qntPendingProbeAddresses()
+	if len(probes) != 2 || !slices.Contains(probes, remote1) || !slices.Contains(probes, remote2) {
+		t.Fatalf("pending probes = %v, want %v and %v", probes, remote1, remote2)
+	}
+}
+
+func TestQNTRoundClearsPreviousPendingState(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	local1 := netip.MustParseAddrPort("192.0.2.1:1234")
+	local2 := netip.MustParseAddrPort("192.0.2.2:1234")
+	remote1 := netip.MustParseAddrPort("198.51.100.1:1001")
+	remote2 := netip.MustParseAddrPort("198.51.100.2:1002")
+
+	for _, addr := range []netip.AddrPort{local1, local2} {
+		if err := c.AddNATTraversalAddress(addr); err != nil {
+			t.Fatalf("AddNATTraversalAddress(%v): %v", addr, err)
+		}
+	}
+	for seq, addr := range map[uint64]netip.AddrPort{1: remote1, 2: remote2} {
+		if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{SeqNo: seq, Addr: addr.Addr(), Port: addr.Port()}); err != nil {
+			t.Fatalf("add remote seq %d: %v", seq, err)
+		}
+	}
+	if _, err := c.InitiateNATTraversalRound(context.Background()); err != nil {
+		t.Fatalf("first InitiateNATTraversalRound: %v", err)
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	st.sentProbes = map[uint64]netip.AddrPort{1234: remote1}
+	st.mu.Unlock()
+
+	if err := c.RemoveNATTraversalAddress(local1); err != nil {
+		t.Fatalf("RemoveNATTraversalAddress: %v", err)
+	}
+	if err := c.removeRemoteNATTraversalAddressFrame(&wire.RemoveAddressFrame{SeqNo: 1}); err != nil {
+		t.Fatalf("remove remote seq 1: %v", err)
+	}
+	addrs, err := c.InitiateNATTraversalRound(context.Background())
+	if err != nil {
+		t.Fatalf("second InitiateNATTraversalRound: %v", err)
+	}
+	if len(addrs) != 1 || addrs[0] != remote2 {
+		t.Fatalf("second round addresses = %v, want [%v]", addrs, remote2)
+	}
+	reachOut := c.qntPendingReachOutFrames()
+	if len(reachOut) != 1 || reachOut[0].Round != 2 || netip.AddrPortFrom(reachOut[0].Addr, reachOut[0].Port) != local2 {
+		t.Fatalf("second round REACH_OUT = %+v, want round 2 for %v", reachOut, local2)
+	}
+	probes := c.qntPendingProbeAddresses()
+	if len(probes) != 1 || probes[0] != remote2 {
+		t.Fatalf("second round probes = %v, want [%v]", probes, remote2)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.sentProbes) != 0 {
+		t.Fatalf("sent probes after second round = %v, want none", st.sentProbes)
 	}
 }
 
@@ -520,6 +642,12 @@ func queuedRemoveAddressFrames(c *Conn) []*wire.RemoveAddressFrame {
 		}
 	}
 	return frames
+}
+
+func hasReachOut(frames []*wire.ReachOutFrame, addr netip.AddrPort) bool {
+	return slices.ContainsFunc(frames, func(f *wire.ReachOutFrame) bool {
+		return netip.AddrPortFrom(f.Addr, f.Port) == addr
+	})
 }
 
 func newLocalOnlyQNTConn(local uint8) *Conn {

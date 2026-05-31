@@ -41,6 +41,10 @@ type qntLocalState struct {
 	local                 []qntLocalAddress
 	nextLocalAddressSeqNo uint64
 	remote                *qntRemoteAddressState
+	round                 uint64
+	pendingReachOut       []*wire.ReachOutFrame
+	pendingProbes         []netip.AddrPort
+	sentProbes            map[uint64]netip.AddrPort
 }
 
 type qntLocalAddress struct {
@@ -115,7 +119,18 @@ func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort,
 	if len(st.local) == 0 || len(remote) == 0 {
 		return nil, ErrNATTraversalNotEnoughAddresses
 	}
-	return remote, ErrNATTraversalRoundNotImplemented
+	st.round++
+	st.pendingReachOut = st.pendingReachOut[:0]
+	st.pendingProbes = append(st.pendingProbes[:0], remote...)
+	clear(st.sentProbes)
+	for _, local := range st.local {
+		st.pendingReachOut = append(st.pendingReachOut, &wire.ReachOutFrame{
+			Round: st.round,
+			Addr:  local.addr.Addr(),
+			Port:  local.addr.Port(),
+		})
+	}
+	return remote, nil
 }
 
 // NATTraversalAddresses returns the remote ADD_ADDRESS set known to qng.
@@ -147,6 +162,20 @@ func (c *Conn) qntLocalNATTraversalAddresses() []netip.AddrPort {
 	return addrs
 }
 
+func (c *Conn) qntPendingReachOutFrames() []*wire.ReachOutFrame {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return cloneReachOutFrames(st.pendingReachOut)
+}
+
+func (c *Conn) qntPendingProbeAddresses() []netip.AddrPort {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return slices.Clone(st.pendingProbes)
+}
+
 func (c *Conn) queueLocalAddAddressFrame(seq uint64, addr netip.AddrPort) {
 	if c.framer == nil {
 		return
@@ -163,6 +192,18 @@ func (c *Conn) queueLocalRemoveAddressFrame(seq uint64) {
 		return
 	}
 	c.queueControlFrame(&wire.RemoveAddressFrame{SeqNo: seq})
+}
+
+func cloneReachOutFrames(frames []*wire.ReachOutFrame) []*wire.ReachOutFrame {
+	clones := make([]*wire.ReachOutFrame, len(frames))
+	for i, frame := range frames {
+		if frame == nil {
+			continue
+		}
+		clone := *frame
+		clones[i] = &clone
+	}
+	return clones
 }
 
 func (c *Conn) addRemoteNATTraversalAddress(addr netip.AddrPort) error {
