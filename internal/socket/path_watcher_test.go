@@ -3,6 +3,7 @@ package socket
 import (
 	"net/netip"
 	"testing"
+	"testing/synctest"
 )
 
 func ev(kind PathEventKind, port uint16) PathEvent {
@@ -100,12 +101,32 @@ func TestPathWatcherLag(t *testing.T) {
 // TestPathWatcherCloseEndsSubscribers checks that Close closes every
 // subscriber's channel.
 func TestPathWatcherCloseEndsSubscribers(t *testing.T) {
-	w := NewPathWatcher()
-	ch, _ := w.Subscribe()
-	w.Close()
-	if _, ok := <-ch; ok {
-		t.Error("subscriber channel still open after Close")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		w := NewPathWatcher()
+		ch, _ := w.Subscribe()
+
+		done := make(chan struct{})
+		go func() {
+			for range ch {
+			}
+			close(done)
+		}()
+
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("subscriber ended before Close")
+		default:
+		}
+
+		w.Close()
+		synctest.Wait()
+		select {
+		case <-done:
+		default:
+			t.Fatal("subscriber channel still open after Close")
+		}
+	})
 }
 
 // TestPathWatcherMultipleSubscribers checks each subscriber gets its own copy.
