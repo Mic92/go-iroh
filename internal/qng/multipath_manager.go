@@ -139,9 +139,7 @@ func (m *multipathManager) handleMaxPathID(pid protocol.PathID) {
 }
 
 // peerMax returns the largest PathID the peer will accept and whether the peer
-// has advertised it yet (via a MAX_PATH_ID frame). The send side consults this
-// to gate path opening: until the peer raises its max path id, no non-zero path
-// may be opened.
+// has raised its initial transport-parameter limit with a MAX_PATH_ID frame.
 func (m *multipathManager) peerMax() (protocol.PathID, bool) {
 	return m.peerMaxPathID, m.peerMaxPathIDSet
 }

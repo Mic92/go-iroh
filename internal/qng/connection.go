@@ -1166,8 +1166,8 @@ func (c *Conn) queueMaxPathID() {
 
 // canOpenPath reports whether we may open the path identified by pid. A path may
 // be opened only when multipath was negotiated and pid is within both the peer's
-// advertised max (peerMaxPathID, raised by the peer's MAX_PATH_ID frames,
-// multipath_manager.go) and our own advertised max (ourLocalMaxPathID).
+// advertised max (the initial_max_path_id transport parameter, raised by
+// MAX_PATH_ID frames) and our own advertised max (ourLocalMaxPathID).
 // PathIDZero is the always-present initial path and is never "opened" through
 // this gate. This is a guard only; this sub-increment does not open any path.
 func (c *Conn) canOpenPath(pid protocol.PathID) bool {
@@ -1177,8 +1177,11 @@ func (c *Conn) canOpenPath(pid protocol.PathID) bool {
 	if pid == protocol.PathIDZero {
 		return false
 	}
-	peerMax, ok := c.multipathManager.peerMax()
-	if !ok || pid > peerMax {
+	peerMax := *c.peerParams.InitialMaxPathID
+	if raised, ok := c.multipathManager.peerMax(); ok && raised > peerMax {
+		peerMax = raised
+	}
+	if pid > peerMax {
 		return false
 	}
 	return pid <= c.ourLocalMaxPathID()
@@ -2251,15 +2254,6 @@ func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) erro
 	}
 	pid := *frame.PathID
 	c.perPathDestConnIDs[pid] = frame.ConnectionID
-	// The peer issued a connection ID for path pid, i.e. it opened the path from
-	// its side. If pid is within our own gate, lazily join the path: provision
-	// our per-path send/recv state and reciprocate with our own
-	// PATH_NEW_CONNECTION_ID so the peer can address pid's packets to us. This is
-	// the symmetric path-open for the side that did not call OpenPath (typically
-	// the server). If the gate is not satisfied (e.g. the peer has not raised our
-	// max path id), we only record the DCID, exactly as Stage 4c/5c did — the
-	// join happens later, when a packet actually arrives on the path.
-	c.maybeJoinPath(pid)
 	return nil
 }
 
@@ -2446,7 +2440,18 @@ func (c *Conn) handlePathCIDsBlockedFrame(frame *wire.PathCIDsBlockedFrame) erro
 		return err
 	}
 	c.multipathManager.handlePathCIDsBlocked(frame.PathID, frame.NextSeq)
-	return nil
+	if frame.PathID == protocol.PathIDZero || !c.canOpenPath(frame.PathID) || c.connIDGenerator == nil {
+		return nil
+	}
+	highestNext := uint64(0)
+	if c.connIDGenerator.pathHighestSeq != nil {
+		highestNext = c.connIDGenerator.pathHighestSeq[frame.PathID]
+	}
+	if highestNext > frame.NextSeq {
+		return nil
+	}
+	_, err := c.issuePathConnID(frame.PathID)
+	return err
 }
 
 // handlePacket is called by the server with a new packet

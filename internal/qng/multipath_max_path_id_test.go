@@ -140,18 +140,18 @@ func TestCanOpenPath(t *testing.T) {
 		}
 	})
 
-	// Multipath on, peer has not yet advertised a max: cannot open.
-	t.Run("peer max unset", func(t *testing.T) {
-		c := newMaxPathIDTestConn(&local, &peer)
+	// Multipath off when the peer's transport parameter is absent.
+	t.Run("peer transport parameter unset", func(t *testing.T) {
+		c := newMaxPathIDTestConn(&local, nil)
 		if c.canOpenPath(protocol.PathID(1)) {
-			t.Fatalf("canOpenPath(1) = true before peer MAX_PATH_ID, want false")
+			t.Fatalf("canOpenPath(1) = true without peer initial_max_path_id, want false")
 		}
 	})
 
-	// Multipath on, peer advertised max 3, our local max 4.
-	t.Run("within both maxima", func(t *testing.T) {
-		c := newMaxPathIDTestConn(&local, &peer)
-		c.multipathManager.handleMaxPathID(protocol.PathID(3))
+	// Multipath on, peer initial max 3, our local max 4.
+	t.Run("within initial maxima", func(t *testing.T) {
+		peerInitial := uint32(3)
+		c := newMaxPathIDTestConn(&local, &peerInitial)
 		tests := []struct {
 			pid  protocol.PathID
 			want bool
@@ -169,11 +169,22 @@ func TestCanOpenPath(t *testing.T) {
 		}
 	})
 
+	t.Run("max path id raises peer max", func(t *testing.T) {
+		peerInitial := uint32(1)
+		c := newMaxPathIDTestConn(&local, &peerInitial)
+		if c.canOpenPath(protocol.PathID(2)) {
+			t.Fatal("canOpenPath(2) = true before MAX_PATH_ID, want false")
+		}
+		c.multipathManager.handleMaxPathID(protocol.PathID(3))
+		if !c.canOpenPath(protocol.PathID(3)) {
+			t.Fatal("canOpenPath(3) = false after MAX_PATH_ID, want true")
+		}
+	})
+
 	// Our own local max also clamps: peer is generous (max 8) but we only
 	// advertised 4, so pid 5..8 are rejected by our local cap.
 	t.Run("our local max clamps", func(t *testing.T) {
 		c := newMaxPathIDTestConn(&local, &peer)
-		c.multipathManager.handleMaxPathID(protocol.PathID(8))
 		if !c.canOpenPath(protocol.PathID(4)) {
 			t.Errorf("canOpenPath(4) = false, want true (== our local max, <= peer max)")
 		}

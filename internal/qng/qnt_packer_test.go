@@ -258,6 +258,32 @@ func TestSendPathPacketSkipsInvalidQNTRouteBeforePack(t *testing.T) {
 	}
 }
 
+func TestSendPathPacketSkipsOrdinaryPathWhenSendQueueBlocked(t *testing.T) {
+	s := &qntProbeTestSender{wouldBlock: true, available: make(chan struct{})}
+	c := &Conn{
+		sendQueue:        s,
+		sendingScheduled: make(chan struct{}, 1),
+	}
+	frame := ackhandler.Frame{Frame: &wire.PathChallengeFrame{}}
+
+	err := c.sendPathPacket(
+		protocol.PathID(1),
+		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
+		&pathOpenState{},
+		[]ackhandler.Frame{frame},
+		monotime.Now(),
+	)
+	if err != nil {
+		t.Fatalf("sendPathPacket: %v", err)
+	}
+	if s.sends != 0 {
+		t.Fatalf("Send calls = %d, want 0", s.sends)
+	}
+	if len(c.sendingScheduled) != 1 {
+		t.Fatalf("sendingScheduled length = %d, want 1", len(c.sendingScheduled))
+	}
+}
+
 func TestSendOnPathSkipsInvalidQNTRouteBeforePack(t *testing.T) {
 	data := [][]byte{[]byte("queued")}
 	st := &pathOpenState{
@@ -271,6 +297,53 @@ func TestSendOnPathSkipsInvalidQNTRouteBeforePack(t *testing.T) {
 	}
 	if len(st.sendData) != 1 || string(st.sendData[0]) != "queued" {
 		t.Fatalf("sendData = %q, want queued data preserved", st.sendData)
+	}
+}
+
+func TestSendOnPathSkipsOrdinaryPathWhenSendQueueBlocked(t *testing.T) {
+	s := &qntProbeTestSender{wouldBlock: true, available: make(chan struct{})}
+	c := &Conn{
+		sendQueue:        s,
+		sendingScheduled: make(chan struct{}, 1),
+	}
+	st := &pathOpenState{sendData: [][]byte{[]byte("queued")}}
+
+	if err := c.sendOnPath(protocol.PathID(1), st, monotime.Now()); err != nil {
+		t.Fatalf("sendOnPath: %v", err)
+	}
+	if s.sends != 0 {
+		t.Fatalf("Send calls = %d, want 0", s.sends)
+	}
+	if len(c.sendingScheduled) != 1 {
+		t.Fatalf("sendingScheduled length = %d, want 1", len(c.sendingScheduled))
+	}
+	if len(st.sendData) != 1 || string(st.sendData[0]) != "queued" {
+		t.Fatalf("sendData = %q, want queued data preserved", st.sendData)
+	}
+}
+
+func TestDriveMultipathRequestsPeerCIDWhenMissing(t *testing.T) {
+	c, _ := newQNTRoutePathTestConn(t)
+	c.handshakeConfirmed = true
+	c.multipathOut = newMultipathOutgoing()
+	c.multipathOut.paths[protocol.PathID(1)] = &pathOpenState{id: protocol.PathID(1), validatedChan: make(chan struct{})}
+
+	if err := c.driveMultipath(monotime.Now()); err != nil {
+		t.Fatalf("driveMultipath: %v", err)
+	}
+	frames := queuedPathCIDsBlockedFrames(c)
+	if len(frames) != 1 {
+		t.Fatalf("queued PATH_CIDS_BLOCKED frames = %d, want 1", len(frames))
+	}
+	if frames[0].PathID != protocol.PathID(1) || frames[0].NextSeq != 0 {
+		t.Fatalf("PATH_CIDS_BLOCKED = path %d seq %d, want path 1 seq 0", frames[0].PathID, frames[0].NextSeq)
+	}
+
+	if err := c.driveMultipath(monotime.Now()); err != nil {
+		t.Fatalf("second driveMultipath: %v", err)
+	}
+	if frames := queuedPathCIDsBlockedFrames(c); len(frames) != 1 {
+		t.Fatalf("queued PATH_CIDS_BLOCKED frames after second drive = %d, want 1", len(frames))
 	}
 }
 
@@ -393,12 +466,13 @@ func (m *qntProbePNManager) PopPacketNumberForPath(protocol.PathID) protocol.Pac
 }
 
 type qntProbeTestSender struct {
-	sends     int
-	probes    int
-	data      []byte
-	addr      *net.UDPAddr
-	ecn       protocol.ECN
-	available chan struct{}
+	sends      int
+	probes     int
+	data       []byte
+	addr       *net.UDPAddr
+	ecn        protocol.ECN
+	available  chan struct{}
+	wouldBlock bool
 }
 
 func (s *qntProbeTestSender) Send(buf *packetBuffer, _ uint16, ecn protocol.ECN) {
@@ -416,9 +490,21 @@ func (s *qntProbeTestSender) SendProbe(buf *packetBuffer, addr net.Addr) {
 }
 
 func (s *qntProbeTestSender) Run() error                 { return nil }
-func (s *qntProbeTestSender) WouldBlock() bool           { return false }
+func (s *qntProbeTestSender) WouldBlock() bool           { return s.wouldBlock }
 func (s *qntProbeTestSender) Available() <-chan struct{} { return s.available }
 func (s *qntProbeTestSender) Close()                     {}
+
+func queuedPathCIDsBlockedFrames(c *Conn) []*wire.PathCIDsBlockedFrame {
+	c.framer.controlFrameMutex.Lock()
+	defer c.framer.controlFrameMutex.Unlock()
+	var frames []*wire.PathCIDsBlockedFrame
+	for _, f := range c.framer.controlFrames {
+		if bf, ok := f.(*wire.PathCIDsBlockedFrame); ok {
+			frames = append(frames, bf)
+		}
+	}
+	return frames
+}
 
 type qntProbeSendConn struct{}
 

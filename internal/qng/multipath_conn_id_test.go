@@ -268,6 +268,29 @@ func newMultipathConn(on bool) *Conn {
 	return c
 }
 
+func TestCanOpenPathUsesPeerInitialMaxPathID(t *testing.T) {
+	c := newMultipathConn(true)
+	if !c.canOpenPath(protocol.PathID(1)) {
+		t.Fatal("canOpenPath(1) = false, want true from peer initial_max_path_id")
+	}
+	if c.canOpenPath(protocol.PathIDZero) {
+		t.Fatal("canOpenPath(0) = true, want false")
+	}
+	if c.canOpenPath(protocol.PathID(9)) {
+		t.Fatal("canOpenPath(9) = true, want false above local and peer max")
+	}
+
+	peerInitial := protocol.PathID(1)
+	c.peerParams.InitialMaxPathID = &peerInitial
+	if c.canOpenPath(protocol.PathID(2)) {
+		t.Fatal("canOpenPath(2) = true, want false above peer initial max")
+	}
+	c.multipathManager.handleMaxPathID(protocol.PathID(2))
+	if !c.canOpenPath(protocol.PathID(2)) {
+		t.Fatal("canOpenPath(2) = false, want true after MAX_PATH_ID raises peer max")
+	}
+}
+
 // TestHandlePathNewConnectionIDRecordsDestConnID proves the read side of 5c: an
 // incoming PATH_NEW_CONNECTION_ID{PathID:1} records a distinct DCID for path 1
 // in perPathDestConnIDs, and destConnIDForPath(1) returns it.
@@ -293,6 +316,39 @@ func TestHandlePathNewConnectionIDRecordsDestConnID(t *testing.T) {
 	resolved, ok := c.destConnIDForPath(1)
 	if !ok || resolved != pathCID {
 		t.Fatalf("destConnIDForPath(1) = %s,%v, want %s,true", resolved, ok, pathCID)
+	}
+	if c.multipathOut != nil {
+		t.Fatal("PATH_NEW_CONNECTION_ID recorded a DCID but should not open path state")
+	}
+}
+
+func TestHandlePathCIDsBlockedIssuesPathConnID(t *testing.T) {
+	c := newMultipathConn(true)
+	g, frames, _ := newTestConnIDGenerator(t)
+	c.connIDGenerator = g
+
+	if err := c.handlePathCIDsBlockedFrame(&wire.PathCIDsBlockedFrame{PathID: 1, NextSeq: 0}); err != nil {
+		t.Fatalf("handlePathCIDsBlockedFrame: %v", err)
+	}
+	if len(*frames) != 1 {
+		t.Fatalf("queued %d frames, want 1", len(*frames))
+	}
+	nc, ok := (*frames)[0].(*wire.NewConnectionIDFrame)
+	if !ok {
+		t.Fatalf("queued frame = %T, want *wire.NewConnectionIDFrame", (*frames)[0])
+	}
+	if nc.PathID == nil || *nc.PathID != protocol.PathID(1) || nc.SequenceNumber != 0 {
+		t.Fatalf("queued path CID PathID=%v seq=%d, want path 1 seq 0", nc.PathID, nc.SequenceNumber)
+	}
+	if c.multipathOut != nil {
+		t.Fatal("PATH_CIDS_BLOCKED issued a CID but should not open path state")
+	}
+
+	if err := c.handlePathCIDsBlockedFrame(&wire.PathCIDsBlockedFrame{PathID: 1, NextSeq: 0}); err != nil {
+		t.Fatalf("handle duplicate PATH_CIDS_BLOCKED: %v", err)
+	}
+	if len(*frames) != 1 {
+		t.Fatalf("queued %d frames after duplicate, want 1", len(*frames))
 	}
 }
 

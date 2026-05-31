@@ -82,6 +82,9 @@ type pathOpenState struct {
 	// for this path are sent to this address instead of the connection's
 	// original remote address.
 	qntRoute netip.AddrPort
+
+	// cidBlockedSent is set after we ask the peer for a path connection ID.
+	cidBlockedSent bool
 }
 
 // openPathRequest is the command Conn.OpenPath hands to the run goroutine. The
@@ -419,7 +422,11 @@ func (c *Conn) driveMultipath(now monotime.Time) error {
 		connID, ok := c.destConnIDForPath(pid)
 		if !ok {
 			// The peer has not issued a PATH_NEW_CONNECTION_ID for this path yet;
-			// we cannot address anything to it. Try again next loop.
+			// ask once and try again after it responds.
+			if !st.cidBlockedSent {
+				c.queueControlFrame(&wire.PathCIDsBlockedFrame{PathID: pid, NextSeq: 0})
+				st.cidBlockedSent = true
+			}
 			continue
 		}
 		// Flush any PATH_RESPONSEs we owe on this path first, so the peer can
@@ -535,6 +542,9 @@ func (c *Conn) sendOnPath(pid protocol.PathID, st *pathOpenState, now monotime.T
 	if hasInvalidQNTRoute(st) {
 		return nil
 	}
+	if c.pathSendQueueBlocked(st) {
+		return nil
+	}
 	mode := c.sentPacketHandler.SendModeForPath(now, pid)
 	if mode != ackhandler.SendAny && mode != ackhandler.SendAck {
 		return nil
@@ -581,6 +591,9 @@ func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID,
 	if hasInvalidQNTRoute(st) {
 		return nil
 	}
+	if c.pathSendQueueBlocked(st) {
+		return nil
+	}
 	buf := getPacketBuffer()
 	ecn := c.multipathECNMode()
 	p, err := c.packer.PackPathFramesPacket(buf, pid, connID, frames, c.maxPacketSize(), c.version)
@@ -592,6 +605,17 @@ func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID,
 	c.registerPackedShortHeaderPacket(p, ecn, now)
 	c.sendPathBuffer(buf, ecn, st)
 	return nil
+}
+
+func (c *Conn) pathSendQueueBlocked(st *pathOpenState) bool {
+	if st != nil && st.qntRoute.IsValid() {
+		return false
+	}
+	if c.sendQueue == nil || !c.sendQueue.WouldBlock() {
+		return false
+	}
+	c.scheduleSending()
+	return true
 }
 
 func (c *Conn) sendPathBuffer(buf *packetBuffer, ecn protocol.ECN, st *pathOpenState) {

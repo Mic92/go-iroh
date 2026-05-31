@@ -779,7 +779,6 @@ func TestQNTOpenValidatedPathRollsBackCIDIssueFailure(t *testing.T) {
 
 func TestQNTOpenValidatedPathRequiresCanOpenPath(t *testing.T) {
 	local := uint32(4)
-	peer := uint32(8)
 	addr := netip.MustParseAddrPort("198.51.100.1:1234")
 
 	tests := []struct {
@@ -787,12 +786,8 @@ func TestQNTOpenValidatedPathRequiresCanOpenPath(t *testing.T) {
 		conn *Conn
 	}{
 		{name: "multipath off", conn: newMaxPathIDTestConn(nil, nil)},
-		{name: "peer max unset", conn: newMaxPathIDTestConn(&local, &peer)},
-		{name: "peer max below next path", conn: func() *Conn {
-			c := newMaxPathIDTestConn(&local, &peer)
-			c.multipathManager.handleMaxPathID(protocol.PathIDZero)
-			return c
-		}()},
+		{name: "peer transport parameter unset", conn: newMaxPathIDTestConn(&local, nil)},
+		{name: "peer max below next path", conn: newMaxPathIDTestConn(&local, ptrTo[uint32](0))},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -905,7 +900,7 @@ func TestQNTPathSnapshotReportsRoute(t *testing.T) {
 
 func TestQNTProcessValidatedPathOpenKeepsCandidateAtPathLimit(t *testing.T) {
 	local := uint32(4)
-	peer := uint32(8)
+	peer := uint32(0)
 	c := newMaxPathIDTestConn(&local, &peer)
 	addr := netip.MustParseAddrPort("198.51.100.1:1234")
 
