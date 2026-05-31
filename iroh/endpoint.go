@@ -39,6 +39,7 @@ type Endpoint struct {
 	keyLogWriter io.Writer
 	sessionCache *SessionCache
 	disableIP    bool
+	hooks        []EndpointHooks
 
 	// remotes is the per-remote state registry. The endpoint owns it: it
 	// registers every established connection so the actor for that remote can
@@ -69,6 +70,7 @@ type config struct {
 	netReport       netReportRunner
 	keyLogWriter    io.Writer
 	transportConfig *QuicTransportConfig
+	hooks           []EndpointHooks
 }
 
 // Option configures an [Endpoint] at [Bind] time.
@@ -185,6 +187,17 @@ func WithKeyLogWriter(w io.Writer) Option {
 	}
 }
 
+// WithHooks registers endpoint hooks. Hooks run in registration order and may
+// reject outgoing dials or completed handshakes.
+func WithHooks(h EndpointHooks) Option {
+	return func(c *config) error {
+		if h != nil {
+			c.hooks = append(c.hooks, h)
+		}
+		return nil
+	}
+}
+
 // WithTransportConfig overrides stable QUIC transport settings. Unsupported
 // qng internals remain private to the endpoint.
 func WithTransportConfig(tc *QuicTransportConfig) Option {
@@ -283,6 +296,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		keyLogWriter: c.keyLogWriter,
 		sessionCache: NewSessionCache(),
 		disableIP:    c.disableIP,
+		hooks:        append([]EndpointHooks(nil), c.hooks...),
 		lookup:       c.lookup,
 		closedCh:     make(chan struct{}),
 		netReport:    endpointNetReportRunner(c, relayMap),
@@ -640,6 +654,14 @@ var ErrSelfConnect = errors.New("iroh: cannot connect to self")
 // no direct IP and no relay URL (or relays are disabled on this endpoint).
 var ErrNoAddress = errors.New("iroh: no reachable address for endpoint")
 
+// ErrConnectRejected is returned when an endpoint hook rejects a dial before
+// any packet is sent.
+var ErrConnectRejected = errors.New("iroh: connect rejected by hook")
+
+// ErrHandshakeRejected is returned when an endpoint hook rejects a completed
+// handshake.
+var ErrHandshakeRejected = errors.New("iroh: handshake rejected by hook")
+
 // Connect dials the endpoint identified by addr and negotiates alpn, returning
 // an established [Conn]. It tries the direct IP addresses in addr in order, then
 // (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
@@ -650,6 +672,9 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 	}
 	if addr.Id.Equal(e.ID()) {
 		return nil, ErrSelfConnect
+	}
+	if err := e.beforeConnect(ctx, addr, alpn); err != nil {
+		return nil, err
 	}
 
 	dials := e.dialTargets(addr)
@@ -694,6 +719,10 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 			return nil, err
 		}
 		e.registerConn(addr.Id, qc)
+		if err := e.afterHandshake(ctx, conn); err != nil {
+			conn.CloseWithError(0, "rejected by hook")
+			return nil, err
+		}
 		return conn, nil
 	}
 	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.Id, firstErr)
@@ -771,7 +800,40 @@ func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 		return nil, err
 	}
 	e.registerConn(remote, qc)
+	if err := e.afterHandshake(ctx, conn); err != nil {
+		conn.CloseWithError(0, "rejected by hook")
+		return nil, err
+	}
 	return conn, nil
+}
+
+func (e *Endpoint) beforeConnect(ctx context.Context, addr base.EndpointAddr, alpn []byte) error {
+	for _, h := range e.hooks {
+		outcome, err := h.BeforeConnect(ctx, addr, alpn)
+		if err != nil {
+			return err
+		}
+		if outcome == BeforeConnectReject {
+			return ErrConnectRejected
+		}
+	}
+	return nil
+}
+
+func (e *Endpoint) afterHandshake(ctx context.Context, conn *Conn) error {
+	for _, h := range e.hooks {
+		outcome, err := h.AfterHandshake(ctx, conn)
+		if err != nil {
+			return err
+		}
+		if !outcome.Accept {
+			if err := conn.Close(outcome.ErrorCode, outcome.Reason); err != nil {
+				return err
+			}
+			return ErrHandshakeRejected
+		}
+	}
+	return nil
 }
 
 // registerConn registers an established QUIC connection with the per-remote
