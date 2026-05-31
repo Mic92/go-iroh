@@ -1,9 +1,14 @@
 package quic
 
 import (
+	"context"
 	"testing"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/flowcontrol"
+	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
+	"github.com/tmc/go-iroh/internal/qng/quicvarint"
 )
 
 // TestQNTNegotiated checks the negotiation gate: n0 NAT traversal is negotiated
@@ -72,6 +77,68 @@ func TestQNTConfigClone(t *testing.T) {
 	if *cfg.MaxRemoteNATTraversalAddresses != limit {
 		t.Fatalf("MaxRemoteNATTraversalAddresses = %d, want %d", *cfg.MaxRemoteNATTraversalAddresses, limit)
 	}
+}
+
+func TestQNTApplyTransportParametersDoesNotAdmitFrames(t *testing.T) {
+	const limit = uint8(8)
+	c := newQNTTransportParameterConn(limit, limit)
+	c.applyTransportParameters()
+	if !c.qntNegotiated() {
+		t.Fatal("qntNegotiated() = false, want true")
+	}
+	for _, ft := range []wire.FrameType{
+		wire.FrameTypeAddIPv4Address,
+		wire.FrameTypeAddIPv6Address,
+		wire.FrameTypeReachOutAtIPv4,
+		wire.FrameTypeReachOutAtIPv6,
+		wire.FrameTypeRemoveAddress,
+	} {
+		b := quicvarint.Append(nil, uint64(ft))
+		if _, _, err := c.frameParser.ParseType(b, protocol.Encryption1RTT); err == nil {
+			t.Fatalf("ParseType(%#x) admitted QNT frame after negotiation", uint64(ft))
+		}
+	}
+}
+
+func newQNTTransportParameterConn(local, peer uint8) *Conn {
+	cfg := populateConfig(&Config{MaxRemoteNATTraversalAddresses: &local})
+	c := &Conn{
+		config:     cfg,
+		peerParams: &wire.TransportParameters{MaxRemoteNATTraversalAddresses: &peer},
+		rttStats:   utils.NewRTTStats(),
+		frameParser: *wire.NewFrameParser(
+			cfg.EnableDatagrams,
+			cfg.EnableStreamResetPartialDelivery,
+			false,
+			false,
+		),
+	}
+	c.connFlowController = flowcontrol.NewConnectionFlowController(
+		protocol.ByteCount(cfg.InitialConnectionReceiveWindow),
+		protocol.ByteCount(cfg.MaxConnectionReceiveWindow),
+		nil,
+		c.rttStats,
+		nil,
+	)
+	c.streamsMap = newStreamsMap(
+		context.Background(),
+		c,
+		func(wire.Frame) {},
+		c.newFlowController,
+		uint64(cfg.MaxIncomingStreams),
+		uint64(cfg.MaxIncomingUniStreams),
+		protocol.PerspectiveClient,
+	)
+	c.connIDGenerator = newConnIDGenerator(
+		stubConnRunner{},
+		protocol.ConnectionID{},
+		nil,
+		nil,
+		connRunnerCallbacks{},
+		func(wire.Frame) {},
+		&protocol.DefaultConnectionIDGenerator{ConnLen: 0},
+	)
+	return c
 }
 
 func ptrTo[T any](v T) *T {
