@@ -3,6 +3,7 @@ package quic
 import (
 	"net/netip"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
@@ -161,4 +162,37 @@ func TestQNTPathResponseClearsRetryDeadlineWhenNoRetryableProbesRemain(t *testin
 	if deadline := c.qntNextRetryDeadline(); !deadline.IsZero() {
 		t.Fatalf("retry deadline after successful response = %v, want zero", deadline)
 	}
+}
+
+func TestQNTHandleRetryDeadlineSynctest(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		c := newNegotiatedQNTConn(8, 16)
+		addr := netip.MustParseAddrPort("198.51.100.1:1234")
+		challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+		initialRTT := 100 * time.Millisecond
+		st := c.qntLocalState()
+		st.mu.Lock()
+		st.sentProbes = map[[8]byte]netip.AddrPort{challenge: addr}
+		st.probeAttempts = map[netip.AddrPort]uint8{addr: qntMaxProbeAttempts - 1}
+		st.mu.Unlock()
+
+		now := monotime.Now()
+		if _, ok := c.qntArmNextRetry(now, initialRTT); !ok {
+			t.Fatal("qntArmNextRetry = false, want true")
+		}
+		time.Sleep(qntRetryDelay(0, initialRTT) - time.Nanosecond)
+		if c.qntHandleRetryDeadline(monotime.Now()) {
+			t.Fatal("qntHandleRetryDeadline before deadline = true, want false")
+		}
+		time.Sleep(time.Nanosecond)
+		if !c.qntHandleRetryDeadline(monotime.Now()) {
+			t.Fatal("qntHandleRetryDeadline at deadline = false, want true")
+		}
+		if got := c.qntPendingProbeAddresses(); len(got) != 1 || got[0] != addr {
+			t.Fatalf("pending probes after retry deadline = %v, want [%v]", got, addr)
+		}
+		if got := c.qntNextRetryDeadline(); !got.IsZero() {
+			t.Fatalf("retry deadline after handling = %v, want zero", got)
+		}
+	})
 }

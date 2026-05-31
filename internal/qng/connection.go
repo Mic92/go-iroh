@@ -790,6 +790,9 @@ runLoop:
 				break runLoop
 			}
 		}
+		if c.qntHandleRetryDeadline(now) {
+			c.scheduleSending()
+		}
 
 		if keepAliveTime := c.nextKeepAliveTime(); !keepAliveTime.IsZero() && !now.Before(keepAliveTime) {
 			// send a PING frame since there is no activity in the connection
@@ -1015,6 +1018,9 @@ func (c *Conn) maybeResetTimer() {
 		deadline = t
 	}
 	if t := c.sentPacketHandler.GetLossDetectionTimeout(); !t.IsZero() && t.Before(deadline) {
+		deadline = t
+	}
+	if t := c.qntNextRetryDeadline(); !t.IsZero() && t.Before(deadline) {
 		deadline = t
 	}
 	if c.blocked == blockModeCongestionLimited {
@@ -3189,6 +3195,7 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 				c.logShortHeaderPacket(probe, protocol.ECNNon, buf.Len())
 				c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, now)
 				c.sendQNTProbeBuffer(buf, addr)
+				c.qntArmNextRetry(now, c.rttStats.SmoothedRTT())
 				c.scheduleSending()
 				return nil
 			}

@@ -490,6 +490,25 @@ func (c *Conn) qntNextRetryDeadline() monotime.Time {
 	return st.nextRetry
 }
 
+func (c *Conn) qntHandleRetryDeadline(now monotime.Time) bool {
+	deadline := c.qntNextRetryDeadline()
+	if deadline.IsZero() || now.Before(deadline) {
+		return false
+	}
+	if !c.qntQueueProbeRetries() {
+		c.qntClearNextRetry()
+		return false
+	}
+	return true
+}
+
+func (c *Conn) qntClearNextRetry() {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.nextRetry = 0
+}
+
 func (c *Conn) qntRetryAttempt() uint8 {
 	st := c.qntLocalState()
 	st.mu.Lock()
