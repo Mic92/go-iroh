@@ -61,6 +61,15 @@ const (
 	FrameTypeMaxPathID              FrameType = 0x3e7a
 	FrameTypePathsBlocked           FrameType = 0x3e7b
 	FrameTypePathCIDsBlocked        FrameType = 0x3e7c
+
+	// iroh NAT traversal frame types, as used by iroh's noq QUIC fork. See
+	// internal/qng/n0ext/reference/frame.rs:126-135. These constants are defined
+	// for inert wire codecs only; parser admission is a later QNT slice.
+	FrameTypeAddIPv4Address FrameType = 0x3d7f90
+	FrameTypeAddIPv6Address FrameType = 0x3d7f91
+	FrameTypeReachOutAtIPv4 FrameType = 0x3d7f92
+	FrameTypeReachOutAtIPv6 FrameType = 0x3d7f93
+	FrameTypeRemoveAddress  FrameType = 0x3d7f94
 )
 
 func (t FrameType) IsStreamFrameType() bool {
