@@ -658,6 +658,42 @@ func TestActorMultipathPathsEmitQNGRouteEvents(t *testing.T) {
 	}
 }
 
+func TestActorAddConnectionSeedsExistingNATTraversalAddresses(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+
+	candidates := []netip.AddrPort{
+		netip.MustParseAddrPort("192.0.2.10:1111"),
+		netip.MustParseAddrPort("[2001:db8::10]:2222"),
+	}
+	if err := a.AddNATTraversalAddresses(candidates); !errors.Is(err, ErrExtensionNotNegotiated) {
+		t.Fatalf("AddNATTraversalAddresses without connections = %v, want %v", err, ErrExtensionNotNegotiated)
+	}
+
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	conn.multipathNegotiated = true
+	events, ok := a.AddConnection(conn)
+	if !ok {
+		t.Fatal("AddConnection failed")
+	}
+	select {
+	case <-events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial path event")
+	}
+
+	if len(conn.natAddrs) != len(candidates) {
+		t.Fatalf("seeded addrs = %v, want %v", conn.natAddrs, candidates)
+	}
+	for i := range candidates {
+		if conn.natAddrs[i] != candidates[i] {
+			t.Fatalf("seeded addr %d = %v, want %v", i, conn.natAddrs[i], candidates[i])
+		}
+	}
+}
+
 func TestActorAddNATTraversalAddressesHandoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

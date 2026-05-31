@@ -319,7 +319,10 @@ func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
 	a.paths.SetOpen(addr)
 	opened := a.syncMultipathPathsLocked(cs, paths)
 	a.paths.Prune()
+	localNAT := append([]netip.AddrPort(nil), a.localNAT...)
 	a.mu.Unlock()
+
+	seedNATTraversalAddresses(m.conn, localNAT)
 
 	// Watch the connection's lifetime. One goroutine per connection (single-path:
 	// usually one); it exits when the connection closes or the actor stops.
@@ -570,6 +573,23 @@ func (a *RemoteStateActor) reselect() {
 		a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
 	}
 	a.watcher.Send(PathEvent{Kind: PathEventSelected, Addr: selected})
+}
+
+func seedNATTraversalAddresses(conn Connection, candidates []netip.AddrPort) {
+	if len(candidates) == 0 {
+		return
+	}
+	mp, ok := conn.(multipathConnection)
+	if !ok || !mp.MultipathNegotiated() {
+		return
+	}
+	qnt, ok := conn.(natTraversalAddressConnection)
+	if !ok {
+		return
+	}
+	for _, addr := range candidates {
+		_ = qnt.AddNATTraversalAddress(addr)
+	}
 }
 
 // TriggerHolepunch attempts to open a new direct path by NAT traversal. It is
