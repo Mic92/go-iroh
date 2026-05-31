@@ -2201,7 +2201,7 @@ func (c *Conn) handleFrame(
 	case *wire.NewConnectionIDFrame:
 		err = c.handleNewConnectionIDFrame(frame)
 	case *wire.RetireConnectionIDFrame:
-		err = c.connIDGenerator.Retire(frame.SequenceNumber, destConnID, rcvTime.Add(3*c.rttStats.PTO(false)))
+		err = c.handleRetireConnectionIDFrame(frame, destConnID, rcvTime.Add(3*c.rttStats.PTO(false)))
 	case *wire.HandshakeDoneFrame:
 		err = c.handleHandshakeDoneFrame(rcvTime)
 	case *wire.PathAckFrame:
@@ -2233,13 +2233,12 @@ func (c *Conn) handleFrame(
 }
 
 // handleNewConnectionIDFrame routes a NEW_CONNECTION_ID frame. A plain frame
-// (PathID == nil, the RFC 9000 0x18 form) is handled by connIDManager exactly
-// as before — byte-identical, no multipath involvement. A path-qualified
-// PATH_NEW_CONNECTION_ID (0x3e78, PathID != nil) is the peer issuing a DCID for
-// a non-zero QUIC multipath path; we record it in perPathDestConnIDs for the
-// send side and do NOT feed it to connIDManager (whose sequence-number space is
-// the connection-level / PathID 0 space, conn_id_manager.go:74-130). A
-// path-qualified frame on a single-path connection is a protocol violation.
+// (PathID == nil, the RFC 9000 0x18 form) and a path-qualified PathID 0 frame
+// both feed the connection-level connIDManager. Rust/noq's multipath frame model
+// treats Some(PathID 0) and no path id as the same issued path-zero CID
+// (frame.rs:2005-2012). A path-qualified non-zero frame is the peer issuing a
+// DCID for that QUIC multipath path; we record it in perPathDestConnIDs for the
+// send side and do NOT feed it to connIDManager.
 func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) error {
 	if frame.PathID == nil {
 		return c.connIDManager.Add(frame)
@@ -2248,12 +2247,7 @@ func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) erro
 		return err
 	}
 	if *frame.PathID == protocol.PathIDZero {
-		// PathID 0's connection IDs are carried by the plain NEW_CONNECTION_ID
-		// form; an explicit PATH_NEW_CONNECTION_ID{PathID:0} is malformed.
-		return &qerr.TransportError{
-			ErrorCode:    qerr.ProtocolViolation,
-			ErrorMessage: "received a PATH_NEW_CONNECTION_ID frame for PathID 0",
-		}
+		return c.connIDManager.Add(frame)
 	}
 	pid := *frame.PathID
 	c.perPathDestConnIDs[pid] = frame.ConnectionID
@@ -2267,6 +2261,22 @@ func (c *Conn) handleNewConnectionIDFrame(frame *wire.NewConnectionIDFrame) erro
 	// join happens later, when a packet actually arrives on the path.
 	c.maybeJoinPath(pid)
 	return nil
+}
+
+func (c *Conn) handleRetireConnectionIDFrame(frame *wire.RetireConnectionIDFrame, destConnID protocol.ConnectionID, expiry monotime.Time) error {
+	if frame.PathID == nil {
+		return c.connIDGenerator.Retire(frame.SequenceNumber, destConnID, expiry)
+	}
+	if err := c.rejectIfMultipathOff("PATH_RETIRE_CONNECTION_ID"); err != nil {
+		return err
+	}
+	// Match noq's path-qualified CID model: nil and PathID 0 both address the
+	// connection-level CID sequence space; non-zero path ids address per-path
+	// CID sequence spaces.
+	if *frame.PathID == protocol.PathIDZero {
+		return c.connIDGenerator.Retire(frame.SequenceNumber, destConnID, expiry)
+	}
+	return c.connIDGenerator.RetirePath(*frame.PathID, frame.SequenceNumber, destConnID, expiry)
 }
 
 // maybeJoinPath provisions the local send/recv recovery state for a non-zero

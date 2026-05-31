@@ -135,6 +135,41 @@ func (m *connIDGenerator) Retire(seq uint64, sentWithDestConnID protocol.Connect
 	return m.issueNewConnID()
 }
 
+func (m *connIDGenerator) RetirePath(pid protocol.PathID, seq uint64, sentWithDestConnID protocol.ConnectionID, expiry monotime.Time) error {
+	if pid == protocol.PathIDZero {
+		return m.Retire(seq, sentWithDestConnID, expiry)
+	}
+	highestNext, ok := m.pathHighestSeq[pid]
+	if !ok || seq >= highestNext {
+		highest := uint64(0)
+		if ok && highestNext > 0 {
+			highest = highestNext - 1
+		}
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: fmt.Sprintf("retired connection ID %d on path %d (highest issued: %d)", seq, pid, highest),
+		}
+	}
+	ids := m.pathSrcConnIDs[pid]
+	connID, ok := ids[seq]
+	if !ok {
+		return nil
+	}
+	if connID == sentWithDestConnID {
+		return &qerr.TransportError{
+			ErrorCode:    qerr.ProtocolViolation,
+			ErrorMessage: fmt.Sprintf("retired connection ID %d on path %d (%s), which was used as the Destination Connection ID on this packet", seq, pid, connID),
+		}
+	}
+	m.queueConnIDForRetiring(connID, expiry)
+	delete(ids, seq)
+	if len(ids) == 0 {
+		delete(m.pathSrcConnIDs, pid)
+	}
+	_, err := m.issuePathConnID(pid)
+	return err
+}
+
 func (m *connIDGenerator) queueConnIDForRetiring(connID protocol.ConnectionID, expiry monotime.Time) {
 	idx := slices.IndexFunc(m.connIDsToRetire, func(c connIDToRetire) bool {
 		return c.t.After(expiry)

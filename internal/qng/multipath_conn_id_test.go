@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/qerr"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
@@ -149,6 +150,68 @@ func TestIssuePathConnIDZeroRejected(t *testing.T) {
 	}
 }
 
+func TestRetirePathConnIDIssuesReplacement(t *testing.T) {
+	g, frames, added := newTestConnIDGenerator(t)
+	cid, err := g.issuePathConnID(1)
+	if err != nil {
+		t.Fatalf("issuePathConnID: %v", err)
+	}
+	if len(*frames) != 1 {
+		t.Fatalf("queued frames = %d, want 1", len(*frames))
+	}
+	if err := g.RetirePath(1, 0, protocol.ParseConnectionID([]byte{0xff}), monotime.Now()); err != nil {
+		t.Fatalf("RetirePath: %v", err)
+	}
+	if _, ok := g.pathSrcConnIDs[1][0]; ok {
+		t.Fatalf("retired path CID %s still active", cid)
+	}
+	if len(*frames) != 2 {
+		t.Fatalf("queued frames = %d, want replacement", len(*frames))
+	}
+	nc := (*frames)[1].(*wire.NewConnectionIDFrame)
+	if nc.PathID == nil || *nc.PathID != 1 || nc.SequenceNumber != 1 {
+		t.Fatalf("replacement frame = {PathID:%v Seq:%d}, want {1 1}", nc.PathID, nc.SequenceNumber)
+	}
+	if len(*added) != 2 {
+		t.Fatalf("registered CIDs = %d, want 2", len(*added))
+	}
+}
+
+func TestHandlePathRetireConnectionIDPathZeroUsesConnIDGenerator(t *testing.T) {
+	c := newMultipathConn(true)
+	var queued []wire.Frame
+	c.connIDGenerator = newConnIDGenerator(
+		stubConnRunner{},
+		protocol.ParseConnectionID([]byte{0x01, 0x02, 0x03, 0x04}),
+		nil,
+		newStatelessResetter(nil),
+		connRunnerCallbacks{
+			AddConnectionID:    func(protocol.ConnectionID) {},
+			RemoveConnectionID: func(protocol.ConnectionID) {},
+			ReplaceWithClosed:  func([]protocol.ConnectionID, []byte, time.Duration) {},
+		},
+		func(f wire.Frame) { queued = append(queued, f) },
+		&protocol.DefaultConnectionIDGenerator{ConnLen: 4},
+	)
+	if err := c.connIDGenerator.issueNewConnID(); err != nil {
+		t.Fatalf("issueNewConnID: %v", err)
+	}
+	pid := protocol.PathIDZero
+	frame := &wire.RetireConnectionIDFrame{PathID: &pid, SequenceNumber: 1}
+	if err := c.handleRetireConnectionIDFrame(frame, protocol.ParseConnectionID([]byte{0xff}), monotime.Now()); err != nil {
+		t.Fatalf("handleRetireConnectionIDFrame: %v", err)
+	}
+	if _, ok := c.connIDGenerator.activeSrcConnIDs[1]; ok {
+		t.Fatalf("connection-level CID sequence 1 still active")
+	}
+	if len(queued) != 2 {
+		t.Fatalf("queued frames = %d, want initial CID plus replacement", len(queued))
+	}
+	if nc, ok := queued[1].(*wire.NewConnectionIDFrame); !ok || nc.PathID != nil || nc.SequenceNumber != 2 {
+		t.Fatalf("replacement frame = %#v, want plain NEW_CONNECTION_ID seq 2", queued[1])
+	}
+}
+
 // TestPathNewConnectionIDGoldenFromGenerator pins the on-wire 0x3e78 layout the
 // issuer emits: frame type 0x3e78, then path_id, then sequence (frame.rs:
 // 2015-2026 NewConnectionId::encode writes path_id before sequence). It mirrors
@@ -252,19 +315,34 @@ func TestHandlePathNewConnectionIDRejectedWhenOff(t *testing.T) {
 	}
 }
 
-// TestHandlePathNewConnectionIDPathZeroRejected guards the malformed case of a
-// PATH_NEW_CONNECTION_ID carrying PathID 0 (whose CIDs use the plain form).
-func TestHandlePathNewConnectionIDPathZeroRejected(t *testing.T) {
+// TestHandlePathNewConnectionIDPathZeroUsesConnIDManager proves the noq
+// path-qualified PathID 0 form is accepted as connection-level CID state.
+func TestHandlePathNewConnectionIDPathZeroUsesConnIDManager(t *testing.T) {
 	c := newMultipathConn(true)
+	initial := protocol.ParseConnectionID([]byte{0x0a, 0x0b, 0x0c, 0x0d})
+	c.connIDManager = newConnIDManager(
+		initial,
+		func(protocol.StatelessResetToken) {},
+		func(protocol.StatelessResetToken) {},
+		func(wire.Frame) {},
+	)
 	pid := protocol.PathIDZero
-	frame := &wire.NewConnectionIDFrame{PathID: &pid, ConnectionID: protocol.ParseConnectionID([]byte{1, 2, 3, 4})}
-	err := c.handleNewConnectionIDFrame(frame)
-	if err == nil {
-		t.Fatalf("PATH_NEW_CONNECTION_ID for PathID 0 should error")
+	frame := &wire.NewConnectionIDFrame{
+		PathID:         &pid,
+		SequenceNumber: 1,
+		ConnectionID:   protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
 	}
-	te, ok := err.(*qerr.TransportError)
-	if !ok || te.ErrorCode != qerr.ProtocolViolation {
-		t.Fatalf("error = %v, want ProtocolViolation", err)
+	if err := c.handleNewConnectionIDFrame(frame); err != nil {
+		t.Fatalf("handleNewConnectionIDFrame: %v", err)
+	}
+	if len(c.perPathDestConnIDs) != 0 {
+		t.Fatalf("PathID 0 frame must not touch perPathDestConnIDs, got %v", c.perPathDestConnIDs)
+	}
+	if got := len(c.connIDManager.queue); got != 1 {
+		t.Fatalf("connIDManager queue len = %d, want 1", got)
+	}
+	if got := c.connIDManager.queue[0].ConnectionID; got != frame.ConnectionID {
+		t.Fatalf("queued CID = %s, want %s", got, frame.ConnectionID)
 	}
 }
 
