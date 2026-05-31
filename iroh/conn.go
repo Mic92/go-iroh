@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"time"
 
@@ -66,6 +67,10 @@ type Connecting struct {
 	conn *Conn
 }
 
+// ServerConfig is reserved for per-connection server TLS options in
+// [Incoming.AcceptWith]. The zero value uses the endpoint listener config.
+type ServerConfig struct{}
+
 // ALPN returns the negotiated ALPN protocol.
 func (c *Connecting) ALPN(context.Context) ([]byte, error) {
 	return c.conn.ALPN(), nil
@@ -84,6 +89,176 @@ func (c *Connecting) Into0RTT() (*Conn, bool) {
 // Connection returns the established connection.
 func (c *Connecting) Connection(context.Context) (*Conn, error) {
 	return c.conn, nil
+}
+
+// IncomingAddr is the transport address of an incoming connection attempt.
+type IncomingAddr struct {
+	addr net.Addr
+}
+
+func newIncomingAddr(addr net.Addr) IncomingAddr { return IncomingAddr{addr: addr} }
+
+// Addr returns the underlying network address.
+func (a IncomingAddr) Addr() net.Addr { return a.addr }
+
+// AddrPort returns addr as a UDP address, when it is one.
+func (a IncomingAddr) AddrPort() (netip.AddrPort, bool) {
+	udp, ok := a.addr.(*net.UDPAddr)
+	if !ok {
+		return netip.AddrPort{}, false
+	}
+	return udp.AddrPort(), true
+}
+
+// String returns the address string.
+func (a IncomingAddr) String() string {
+	if a.addr == nil {
+		return ""
+	}
+	return a.addr.String()
+}
+
+// LocalTransportAddr is the local transport address an incoming connection
+// arrived on.
+type LocalTransportAddr struct {
+	addr net.Addr
+}
+
+func newLocalTransportAddr(addr net.Addr) LocalTransportAddr {
+	return LocalTransportAddr{addr: addr}
+}
+
+// Addr returns the underlying network address.
+func (a LocalTransportAddr) Addr() net.Addr { return a.addr }
+
+// AddrPort returns addr as a UDP address, when it is one.
+func (a LocalTransportAddr) AddrPort() (netip.AddrPort, bool) {
+	udp, ok := a.addr.(*net.UDPAddr)
+	if !ok {
+		return netip.AddrPort{}, false
+	}
+	return udp.AddrPort(), true
+}
+
+// String returns the address string.
+func (a LocalTransportAddr) String() string {
+	if a.addr == nil {
+		return ""
+	}
+	return a.addr.String()
+}
+
+// Incoming is an incoming connection attempt accepted by an [Endpoint]. Call
+// Accept to continue the handshake, or Refuse/Ignore to close it.
+type Incoming struct {
+	ep *Endpoint
+	qc *quic.Conn
+}
+
+// Accept accepts the incoming connection and returns an [Accepting] handle.
+func (in *Incoming) Accept() (*Accepting, error) {
+	if in == nil || in.qc == nil {
+		return nil, errors.New("iroh: nil incoming connection")
+	}
+	return &Accepting{ep: in.ep, qc: in.qc}, nil
+}
+
+// AcceptWith accepts the incoming connection. ServerConfig is reserved for the
+// Rust API shape; this build uses the endpoint's listener TLS config.
+func (in *Incoming) AcceptWith(*ServerConfig) (*Accepting, error) {
+	return in.Accept()
+}
+
+// Refuse closes the incoming connection.
+func (in *Incoming) Refuse() {
+	if in != nil && in.qc != nil {
+		in.qc.CloseWithError(0, "refused")
+	}
+}
+
+// Retry is not exposed by qng yet; it closes the connection and reports that
+// retry was unavailable.
+func (in *Incoming) Retry() error {
+	if in != nil && in.qc != nil {
+		in.qc.CloseWithError(0, "retry unavailable")
+	}
+	return errors.New("iroh: incoming retry not supported")
+}
+
+// Ignore closes the incoming connection without waiting for completion.
+func (in *Incoming) Ignore() {
+	if in != nil && in.qc != nil {
+		in.qc.CloseWithError(0, "")
+	}
+}
+
+// RemoteAddr returns the transport address of the incoming connection.
+func (in *Incoming) RemoteAddr() IncomingAddr {
+	if in == nil || in.qc == nil {
+		return IncomingAddr{}
+	}
+	return newIncomingAddr(in.qc.RemoteAddr())
+}
+
+// RemoteAddrValidated reports whether qng has validated the remote address.
+// qng does not expose this pre-handshake bit yet; after Accept returns, the
+// address is considered validated for the established connection path.
+func (in *Incoming) RemoteAddrValidated() bool { return false }
+
+// LocalAddr returns the local transport address the incoming connection used.
+func (in *Incoming) LocalAddr() LocalTransportAddr {
+	if in == nil || in.qc == nil {
+		return LocalTransportAddr{}
+	}
+	return newLocalTransportAddr(in.qc.LocalAddr())
+}
+
+// Accepting is an accepted incoming connection whose handshake may still be in
+// progress. Call Connection to wait for the verified [Conn].
+type Accepting struct {
+	ep *Endpoint
+	qc *quic.Conn
+}
+
+// ALPN waits for the handshake to complete and returns the negotiated ALPN.
+func (a *Accepting) ALPN(ctx context.Context) ([]byte, error) {
+	if a == nil || a.qc == nil {
+		return nil, errors.New("iroh: nil accepting connection")
+	}
+	select {
+	case <-a.qc.HandshakeComplete():
+	case <-ctx.Done():
+		a.qc.CloseWithError(0, "")
+		return nil, ctx.Err()
+	}
+	return []byte(a.qc.ConnectionState().TLS.NegotiatedProtocol), nil
+}
+
+// RemoteAddr returns the transport address of the connection.
+func (a *Accepting) RemoteAddr() IncomingAddr {
+	if a == nil || a.qc == nil {
+		return IncomingAddr{}
+	}
+	return newIncomingAddr(a.qc.RemoteAddr())
+}
+
+// Into0RTT returns a connection handle before handshake completion. The peer id
+// is not authenticated until [Conn.HandshakeComplete] closes.
+func (a *Accepting) Into0RTT() *Conn {
+	if a == nil || a.qc == nil {
+		return nil
+	}
+	return &Conn{qc: a.qc, side: SideServer}
+}
+
+// Connection waits for the handshake, verifies the peer id, registers the
+// connection with the endpoint, runs handshake hooks, and returns an
+// established [Conn].
+func (a *Accepting) Connection(ctx context.Context) (*Conn, error) {
+	if a == nil || a.qc == nil {
+		return nil, errors.New("iroh: nil accepting connection")
+	}
+	return a.ep.finishAccepting(ctx, a.qc)
 }
 
 // RemoteID returns the verified endpoint id of the peer.

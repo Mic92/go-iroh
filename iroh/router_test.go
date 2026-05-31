@@ -65,6 +65,23 @@ func (h blockingShutdown) Shutdown(ctx context.Context) {
 	}
 }
 
+type acceptingEcho struct {
+	echoHandler
+	called chan []byte
+}
+
+func (h acceptingEcho) OnAccepting(ctx context.Context, accepting *Accepting) (*Conn, error) {
+	alpn, err := accepting.ALPN(ctx)
+	if err != nil {
+		return nil, err
+	}
+	select {
+	case h.called <- append([]byte(nil), alpn...):
+	default:
+	}
+	return accepting.Connection(ctx)
+}
+
 // TestRouterEcho is the slice-H Router gate: two endpoints connect over a direct
 // loopback path; the server registers an echo ProtocolHandler via a Router; the
 // client connects and exchanges a stream echo dispatched by ALPN through the
@@ -218,5 +235,60 @@ func TestRouterShutdownHandlersRunConcurrently(t *testing.T) {
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+func TestRouterOnAccepting(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-router-accepting/0"
+
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	called := make(chan []byte, 1)
+	router, err := NewRouter(server).Accept([]byte(alpn), acceptingEcho{called: called}).Spawn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+
+	s, err := conn.OpenStream(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write([]byte("accepting")); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if _, err := io.ReadAll(s); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-called:
+		if string(got) != alpn {
+			t.Fatalf("OnAccepting ALPN = %q, want %q", got, alpn)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
 	}
 }

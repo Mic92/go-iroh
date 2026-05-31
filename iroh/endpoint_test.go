@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 	"testing"
@@ -133,6 +134,70 @@ func TestEndpointDirectEcho(t *testing.T) {
 	}
 	if server.transport.ConnectionIDLength != 8 {
 		t.Errorf("server transport ConnectionIDLength = %d, want 8", server.transport.ConnectionIDLength)
+	}
+}
+
+func TestEndpointAcceptIncoming(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-accept-incoming/0"
+
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	done := make(chan error, 1)
+	go func() {
+		in, err := server.AcceptIncoming(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		if _, ok := in.RemoteAddr().AddrPort(); !ok {
+			done <- errors.New("incoming remote address is not UDP")
+			return
+		}
+		accepting, err := in.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		if got, err := accepting.ALPN(ctx); err != nil || string(got) != alpn {
+			done <- fmt.Errorf("accepting ALPN = %q, %v", got, err)
+			return
+		}
+		conn, err := accepting.Connection(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		if !conn.RemoteID().Equal(client.ID()) {
+			done <- fmt.Errorf("remote id = %s, want %s", conn.RemoteID(), client.ID())
+			return
+		}
+		done <- nil
+	}()
+
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

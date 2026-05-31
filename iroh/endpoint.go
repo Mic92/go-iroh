@@ -853,13 +853,9 @@ func (e *Endpoint) dialTargets(addr base.EndpointAddr) []net.Addr {
 	return targets
 }
 
-// Accept blocks until an incoming connection completes its handshake, then
-// returns it as a [Conn]. It returns an error if the endpoint is closed or has
-// no configured ALPNs. ctx cancels the wait.
-//
-// In this build Accept returns a fully-established connection; the pre-handshake
-// Incoming/Connecting controls in iroh/DESIGN.md arrive with a later slice.
-func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
+// AcceptIncoming blocks until an incoming connection attempt arrives. The
+// returned [Incoming] can be accepted, refused, retried, or ignored.
+func (e *Endpoint) AcceptIncoming(ctx context.Context) (*Incoming, error) {
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
 	}
@@ -870,6 +866,25 @@ func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	return &Incoming{ep: e, qc: qc}, nil
+}
+
+// Accept blocks until an incoming connection completes its handshake, then
+// returns it as a [Conn]. It returns an error if the endpoint is closed or has
+// no configured ALPNs. ctx cancels the wait.
+func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
+	in, err := e.AcceptIncoming(ctx)
+	if err != nil {
+		return nil, err
+	}
+	accepting, err := in.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return accepting.Connection(ctx)
+}
+
+func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, error) {
 	// The early listener returns connections before the handshake completes so
 	// the QUIC stack can buffer 0-RTT early data. The peer's identity is only
 	// authenticated once the handshake finishes, so wait for it before reading

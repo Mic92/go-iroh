@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-
-	"github.com/tmc/go-iroh/base"
 )
 
 // ProtocolHandler handles connections accepted for a single ALPN. A [Router]
@@ -24,6 +22,13 @@ type ProtocolHandler interface {
 	// Accept handles an accepted connection. ctx is cancelled when the router
 	// shuts down.
 	Accept(ctx context.Context, conn *Conn) error
+}
+
+// AcceptingHandler is an optional interface a [ProtocolHandler] may implement
+// to intercept an incoming connection before it is converted to a verified
+// [Conn]. The default behavior is [Accepting.Connection].
+type AcceptingHandler interface {
+	OnAccepting(ctx context.Context, accepting *Accepting) (*Conn, error)
 }
 
 // ShutdownHandler is an optional interface a [ProtocolHandler] may implement to
@@ -45,29 +50,13 @@ const (
 	// FilterAccept accepts the connection and dispatches it to a handler.
 	FilterAccept IncomingFilterOutcome = iota
 	// FilterReject refuses the connection.
-	//
-	// In this build the pre-handshake Incoming controls (Retry/Reject/Ignore)
-	// are not yet exposed by the endpoint, so FilterReject closes the connection
-	// after accept rather than refusing it pre-handshake. FilterRetry and
-	// FilterIgnore degrade to the same close; see iroh/DESIGN.md O6.
 	FilterReject
-	// FilterRetry asks the peer to retry (emit a QUIC Retry packet). Degraded:
-	// see FilterReject.
+	// FilterRetry asks the peer to retry. If the transport cannot emit a QUIC
+	// Retry packet, the connection is closed.
 	FilterRetry
-	// FilterIgnore silently drops the connection. Degraded: see FilterReject.
+	// FilterIgnore closes the incoming connection without dispatching it.
 	FilterIgnore
 )
-
-// Incoming describes an incoming connection to an [IncomingFilter]. In this
-// build it carries only the verified remote id and negotiated ALPN, available
-// after the handshake; the pre-handshake fields of the Rust Incoming arrive with
-// a later slice (iroh/DESIGN.md O6).
-type Incoming struct {
-	// RemoteID is the verified endpoint id of the peer.
-	RemoteID base.EndpointId
-	// ALPN is the negotiated ALPN protocol.
-	ALPN []byte
-}
 
 // IncomingFilter decides whether to accept each incoming connection. It is
 // called synchronously in the accept loop and must be fast and non-blocking. It
@@ -195,7 +184,7 @@ func (r *Router) acceptLoop(ctx context.Context) {
 		default:
 		}
 
-		conn, err := r.ep.Accept(ctx)
+		in, err := r.ep.AcceptIncoming(ctx)
 		if err != nil {
 			// A cancelled context or a closed endpoint ends the loop cleanly.
 			if ctx.Err() != nil || errors.Is(err, ErrEndpointClosed) {
@@ -208,37 +197,63 @@ func (r *Router) acceptLoop(ctx context.Context) {
 			continue
 		}
 
-		handler, ok := r.handlers[string(conn.ALPN())]
-		if !ok {
-			r.logger.Warn("router: no handler for ALPN", "alpn", string(conn.ALPN()))
-			conn.CloseWithError(0, "unsupported ALPN")
-			continue
-		}
-
 		if r.filter != nil {
-			outcome := r.filter(&Incoming{RemoteID: conn.RemoteID(), ALPN: conn.ALPN()})
-			if outcome != FilterAccept {
-				// Degraded: pre-handshake Retry/Reject/Ignore are not exposed yet
-				// (DESIGN.md O6), so any non-accept outcome closes the connection.
-				conn.CloseWithError(0, "rejected by filter")
+			switch r.filter(in) {
+			case FilterAccept:
+			case FilterRetry:
+				_ = in.Retry()
+				continue
+			case FilterReject:
+				in.Refuse()
+				continue
+			case FilterIgnore:
+				in.Ignore()
 				continue
 			}
 		}
 
+		accepting, err := in.Accept()
+		if err != nil {
+			r.logger.Warn("router: incoming accept failed", "err", err)
+			continue
+		}
+
 		r.wg.Add(1)
-		go func(conn *Conn, h ProtocolHandler) {
+		go func(accepting *Accepting) {
 			defer r.wg.Done()
 			defer func() {
 				if v := recover(); v != nil {
-					r.logger.Error("router: handler panicked", "alpn", string(conn.ALPN()), "panic", v)
-					conn.CloseWithError(0, "handler panic")
+					accepting.qc.CloseWithError(0, "handler panic")
+					r.logger.Error("router: handler panicked", "panic", v)
 					panicOnce.Do(func() { close(panicked) })
 				}
 			}()
-			if err := h.Accept(ctx, conn); err != nil {
+
+			alpn, err := accepting.ALPN(ctx)
+			if err != nil {
+				r.logger.Warn("router: accepting ALPN failed", "err", err)
+				return
+			}
+			handler, ok := r.handlers[string(alpn)]
+			if !ok {
+				r.logger.Warn("router: no handler for ALPN", "alpn", string(alpn))
+				accepting.qc.CloseWithError(0, "unsupported ALPN")
+				return
+			}
+			var conn *Conn
+			if h, ok := handler.(AcceptingHandler); ok {
+				conn, err = h.OnAccepting(ctx, accepting)
+			} else {
+				conn, err = accepting.Connection(ctx)
+			}
+			if err != nil {
+				r.logger.Warn("router: on accepting failed", "alpn", string(alpn), "err", err)
+				return
+			}
+			if err := handler.Accept(ctx, conn); err != nil {
 				r.logger.Warn("router: handler returned error", "alpn", string(conn.ALPN()), "err", err)
 			}
-		}(conn, handler)
+		}(accepting)
 	}
 }
 
