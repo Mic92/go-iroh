@@ -67,15 +67,18 @@ type pathOpeningConnection interface {
 	OpenPath(context.Context) error
 }
 
-// PathInfo is address-free qng multipath path state observed through a
-// [Connection]. It intentionally has no [Addr]: socket must not fabricate
-// PathEvent addresses from a qng PathID until qng exposes the address that
-// actually routes that path.
+// PathInfo is qng multipath path state observed through a [Connection]. Addr is
+// set only when qng reports the address that actually routes the path; socket
+// must not fabricate it from the connection's original RemoteAddr.
 type PathInfo struct {
 	// ID is the QUIC multipath PathID.
 	ID uint32
 	// Validated reports whether the path can carry non-probing application data.
 	Validated bool
+	// Addr is the path's transport address, when HasAddr is true.
+	Addr Addr
+	// HasAddr reports whether Addr was observed from qng route metadata.
+	HasAddr bool
 }
 
 type pathObservingConnection interface {
@@ -118,8 +121,9 @@ type resolveMsg struct {
 
 // connState is the actor's per-connection bookkeeping.
 type connState struct {
-	conn Connection
-	addr Addr
+	conn  Connection
+	addr  Addr
+	paths []Addr
 }
 
 // RemoteStateActor manages all connection and path state for a single remote
@@ -305,10 +309,12 @@ func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
 
 	addr := m.conn.RemoteAddr()
 	cs := &connState{conn: m.conn, addr: addr}
+	paths := observeMultipathPaths(m.conn)
 
 	a.mu.Lock()
 	a.conns[m.conn] = cs
 	a.paths.SetOpen(addr)
+	opened := a.syncMultipathPathsLocked(cs, paths)
 	a.paths.Prune()
 	a.mu.Unlock()
 
@@ -326,6 +332,9 @@ func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
 	}(m.conn)
 
 	a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
+	for _, addr := range opened {
+		a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
+	}
 	a.reselect()
 }
 
@@ -372,35 +381,162 @@ func (a *RemoteStateActor) handleConnClosed(conn Connection) {
 		return
 	}
 	delete(a.conns, conn)
-	a.paths.SetClosed(cs.addr, time.Now())
+	now := time.Now()
+	closed := []Addr{cs.addr}
+	a.paths.SetClosed(cs.addr, now)
+	for _, addr := range cs.paths {
+		if a.multipathPathOpenLocked(addr) {
+			continue
+		}
+		a.paths.SetClosed(addr, now)
+		closed = appendUniqueAddr(closed, addr)
+	}
 	if a.selected != nil && a.selected.String() == cs.addr.String() {
 		a.selected = nil
 	}
+	if a.selected != nil {
+		for _, addr := range closed {
+			if a.selected.String() == addr.String() {
+				a.selected = nil
+				break
+			}
+		}
+	}
 	a.mu.Unlock()
-	a.watcher.Send(PathEvent{Kind: PathEventClosed, Addr: cs.addr})
+	for _, addr := range closed {
+		a.watcher.Send(PathEvent{Kind: PathEventClosed, Addr: addr})
+	}
+}
+
+type connPathSnapshot struct {
+	conn  Connection
+	addr  Addr
+	rtt   time.Duration
+	paths []PathInfo
+}
+
+func (a *RemoteStateActor) connectionPathSnapshots() []connPathSnapshot {
+	a.mu.Lock()
+	conns := make([]connPathSnapshot, 0, len(a.conns))
+	for _, cs := range a.conns {
+		conns = append(conns, connPathSnapshot{conn: cs.conn, addr: cs.addr})
+	}
+	a.mu.Unlock()
+
+	for i := range conns {
+		conns[i].rtt = conns[i].conn.SmoothedRTT()
+		conns[i].paths = observeMultipathPaths(conns[i].conn)
+	}
+	return conns
+}
+
+func observeMultipathPaths(conn Connection) []PathInfo {
+	observer, ok := conn.(pathObservingConnection)
+	if !ok {
+		return nil
+	}
+	return observer.Paths()
+}
+
+func appendCandidate(candidates []PathCandidate, seen map[string]struct{}, addr Addr, rtt time.Duration) []PathCandidate {
+	k := addr.String()
+	if _, ok := seen[k]; ok {
+		return candidates
+	}
+	seen[k] = struct{}{}
+	return append(candidates, PathCandidate{Addr: addr, RTT: rtt})
+}
+
+func appendMultipathCandidates(candidates []PathCandidate, seen map[string]struct{}, paths []PathInfo, rtt time.Duration) []PathCandidate {
+	for _, p := range paths {
+		if p.Validated && p.HasAddr {
+			candidates = appendCandidate(candidates, seen, p.Addr, rtt)
+		}
+	}
+	return candidates
+}
+
+// syncMultipathPathsLocked records validated qng paths with explicit route
+// metadata as open socket paths. a.mu must be held.
+func (a *RemoteStateActor) syncMultipathPathsLocked(cs *connState, paths []PathInfo) []Addr {
+	var opened []Addr
+	for _, p := range paths {
+		if !p.Validated || !p.HasAddr {
+			continue
+		}
+		cs.paths = appendUniqueAddr(cs.paths, p.Addr)
+		if status, known := a.paths.Status(p.Addr); known && status == PathStatusOpen {
+			continue
+		}
+		a.paths.SetOpen(p.Addr)
+		opened = appendUniqueAddr(opened, p.Addr)
+	}
+	return opened
+}
+
+// multipathPathOpenLocked reports whether another live connection still owns
+// addr as a qng route path. a.mu must be held.
+func (a *RemoteStateActor) multipathPathOpenLocked(addr Addr) bool {
+	for _, cs := range a.conns {
+		for _, path := range cs.paths {
+			if path.String() == addr.String() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func appendUniqueAddr(addrs []Addr, addr Addr) []Addr {
+	for _, a := range addrs {
+		if a.String() == addr.String() {
+			return addrs
+		}
+	}
+	return append(addrs, addr)
 }
 
 // reselect runs the path selector over the current candidates and, if the
 // selection changes, records it and emits a Selected event.
 func (a *RemoteStateActor) reselect() {
+	snapshots := a.connectionPathSnapshots()
+
 	a.mu.Lock()
-	candidates := make([]PathCandidate, 0, len(a.conns))
-	for _, cs := range a.conns {
-		candidates = append(candidates, PathCandidate{Addr: cs.addr, RTT: cs.conn.SmoothedRTT()})
+	candidates := make([]PathCandidate, 0, len(snapshots))
+	seen := make(map[string]struct{}, len(snapshots))
+	var opened []Addr
+	for _, snap := range snapshots {
+		cs, ok := a.conns[snap.conn]
+		if !ok {
+			continue
+		}
+		candidates = appendCandidate(candidates, seen, snap.addr, snap.rtt)
+		opened = append(opened, a.syncMultipathPathsLocked(cs, snap.paths)...)
+		candidates = appendMultipathCandidates(candidates, seen, snap.paths, snap.rtt)
 	}
+	a.paths.Prune()
 	current := a.selected
 	selected, ok := a.selector.Select(current, candidates)
 	if !ok {
 		a.mu.Unlock()
+		for _, addr := range opened {
+			a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
+		}
 		return
 	}
 	if current != nil && current.String() == selected.String() {
 		a.mu.Unlock()
+		for _, addr := range opened {
+			a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
+		}
 		return
 	}
 	sel := selected
 	a.selected = &sel
 	a.mu.Unlock()
+	for _, addr := range opened {
+		a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
+	}
 	a.watcher.Send(PathEvent{Kind: PathEventSelected, Addr: selected})
 }
 
@@ -451,11 +587,9 @@ func (a *RemoteStateActor) SelectedPath() (Addr, bool) {
 	return *a.selected, true
 }
 
-// MultipathPaths returns address-free qng multipath path state observed from
-// active connections. It is a read-only bridge for tests and future socket
-// integration: it exposes PathID/validation without updating RemotePathState or
-// emitting PathEventOpened, because qng does not yet report the route address
-// for a PathID.
+// MultipathPaths returns qng multipath path state observed from active
+// connections. Paths with explicit qng route metadata are also registered with
+// RemotePathState by the actor loop and can produce path events.
 func (a *RemoteStateActor) MultipathPaths() []PathInfo {
 	a.mu.Lock()
 	conns := make([]Connection, 0, len(a.conns))

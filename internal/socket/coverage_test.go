@@ -534,7 +534,7 @@ func TestTriggerHolepunchAfterMultipathNegotiated(t *testing.T) {
 	}
 }
 
-func TestActorMultipathPathsObserveAddressFreeQNGState(t *testing.T) {
+func TestActorMultipathPathsDoNotFabricateQNGRoute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
@@ -560,8 +560,8 @@ func TestActorMultipathPathsObserveAddressFreeQNGState(t *testing.T) {
 	if len(paths) != 1 {
 		t.Fatalf("MultipathPaths len = %d, want 1; paths=%v", len(paths), paths)
 	}
-	if paths[0] != (PathInfo{ID: 1, Validated: true}) {
-		t.Fatalf("MultipathPaths()[0] = %+v, want path 1 validated", paths[0])
+	if paths[0].ID != 1 || !paths[0].Validated || paths[0].HasAddr {
+		t.Fatalf("MultipathPaths()[0] = %+v, want path 1 validated without addr", paths[0])
 	}
 	a.mu.Lock()
 	if _, known := a.paths.Status(addr); !known {
@@ -572,6 +572,71 @@ func TestActorMultipathPathsObserveAddressFreeQNGState(t *testing.T) {
 	a.mu.Unlock()
 	if len(got) != 1 || got[0].String() != addr.String() {
 		t.Fatalf("RemotePathState addrs = %v, want only original %s", got, addr)
+	}
+}
+
+func TestActorMultipathPathsEmitQNGRouteEvents(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+
+	addr := IPAddr(netip.MustParseAddrPort("192.0.2.1:4433"))
+	route := IPAddr(netip.MustParseAddrPort("[2001:db8::1]:4433"))
+	conn := newFakeConn(addr, time.Millisecond)
+	conn.paths = []PathInfo{{ID: 1, Validated: true, Addr: route, HasAddr: true}}
+	events, ok := a.AddConnection(conn)
+	if !ok {
+		t.Fatal("AddConnection failed")
+	}
+
+	var sawOpened, sawSelected bool
+	deadline := time.After(2 * time.Second)
+	for !sawOpened || !sawSelected {
+		select {
+		case ev := <-events:
+			if ev.Addr.String() != route.String() {
+				continue
+			}
+			switch ev.Kind {
+			case PathEventOpened:
+				sawOpened = true
+			case PathEventSelected:
+				sawSelected = true
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for QNT route events; opened=%v selected=%v", sawOpened, sawSelected)
+		}
+	}
+
+	a.mu.Lock()
+	status, known := a.paths.Status(route)
+	a.mu.Unlock()
+	if !known || status != PathStatusOpen {
+		t.Fatalf("QNT route status = %v, %v, want open true", status, known)
+	}
+
+	conn.Close()
+	deadline = time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Kind == PathEventClosed && ev.Addr.String() == route.String() {
+				a.mu.Lock()
+				status, known := a.paths.Status(route)
+				selected := a.selected
+				a.mu.Unlock()
+				if !known || status != PathStatusInactive {
+					t.Fatalf("QNT route status after close = %v, %v, want inactive true", status, known)
+				}
+				if selected != nil && selected.String() == route.String() {
+					t.Fatalf("selected route = %s after close", route)
+				}
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for QNT route close event")
+		}
 	}
 }
 

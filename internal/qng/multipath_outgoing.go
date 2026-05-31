@@ -78,10 +78,9 @@ type pathOpenState struct {
 	// drained only in the run goroutine.
 	sendData [][]byte
 
-	// qntRoute is the validated remote address for a QNT-opened path. Route
-	// support is not wired into sendPathPacket/sendOnPath yet; while this is set,
-	// driveMultipath must not send the path over the connection's existing
-	// address.
+	// qntRoute is the validated remote address for a QNT-opened path. Packets
+	// for this path are sent to this address instead of the connection's
+	// original remote address.
 	qntRoute netip.AddrPort
 }
 
@@ -231,16 +230,16 @@ func (c *Conn) PathStats(pid protocol.PathID) (ackhandler.PathDebugStats, bool) 
 //
 // Path 0 is the initial path and is not listed here. The entries returned by
 // [Conn.Paths] are real qng non-zero paths provisioned by OpenPath or by a peer
-// packet that caused lazy path join. Remote/local socket addresses are
-// intentionally absent until qng can report the address that actually routes a
-// PathID; socket must not synthesize PathEvent addresses from the connection's
-// original RemoteAddr.
+// packet that caused lazy path join. RemoteAddr is set only when qng has an
+// address that actually routes the path, currently for QNT-opened paths.
 type PathInfo struct {
 	// ID is the QUIC multipath PathID.
 	ID protocol.PathID
 	// Validated reports whether the path completed PATH_CHALLENGE /
 	// PATH_RESPONSE validation and can carry non-probing application data.
 	Validated bool
+	// RemoteAddr is the remote UDP route for this path, when known.
+	RemoteAddr netip.AddrPort
 }
 
 // pathSnapshotRequest is the command Conn.Paths hands to the run goroutine,
@@ -280,8 +279,9 @@ func (c *Conn) processPathSnapshotRequests() {
 				req.paths = make([]PathInfo, 0, len(c.multipathOut.paths))
 				for pid, st := range c.multipathOut.paths {
 					req.paths = append(req.paths, PathInfo{
-						ID:        pid,
-						Validated: st.validated,
+						ID:         pid,
+						Validated:  st.validated,
+						RemoteAddr: st.qntRoute,
 					})
 				}
 				sort.Slice(req.paths, func(i, j int) bool {

@@ -832,6 +832,33 @@ func TestQNTProcessValidatedPathOpenConsumesOneCandidate(t *testing.T) {
 	}
 }
 
+func TestQNTPathSnapshotReportsRoute(t *testing.T) {
+	c, _ := newQNTRoutePathTestConn(t)
+	c.multipathManager.handleMaxPathID(protocol.PathID(4))
+	addr := netip.MustParseAddrPort("198.51.100.1:1234")
+
+	if !c.qntQueueValidatedProbe(addr) {
+		t.Fatal("qntQueueValidatedProbe = false, want true")
+	}
+	if err := c.processQNTValidatedPathOpen(); err != nil {
+		t.Fatalf("processQNTValidatedPathOpen: %v", err)
+	}
+	c.multipathOut.paths[protocol.PathID(1)].validated = true
+
+	c.pathSnapshotQueue = make(chan *pathSnapshotRequest, 1)
+	req := &pathSnapshotRequest{done: make(chan struct{})}
+	c.pathSnapshotQueue <- req
+	c.processPathSnapshotRequests()
+	<-req.done
+
+	if len(req.paths) != 1 {
+		t.Fatalf("paths len = %d, want 1; paths=%v", len(req.paths), req.paths)
+	}
+	if req.paths[0].ID != protocol.PathID(1) || !req.paths[0].Validated || req.paths[0].RemoteAddr != addr {
+		t.Fatalf("path = %+v, want id 1 validated route %v", req.paths[0], addr)
+	}
+}
+
 func TestQNTProcessValidatedPathOpenKeepsCandidateAtPathLimit(t *testing.T) {
 	local := uint32(4)
 	peer := uint32(8)

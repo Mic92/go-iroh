@@ -185,7 +185,7 @@ func (a *connAdapter) MultipathNegotiated() bool {
 	return a.qc.ConnectionState().MultipathNegotiated
 }
 
-// Paths returns address-free qng multipath path state for socket observability.
+// Paths returns qng multipath path state for socket observability.
 func (a *connAdapter) Paths() []socket.PathInfo {
 	qpaths := a.qc.Paths()
 	if len(qpaths) == 0 {
@@ -196,6 +196,10 @@ func (a *connAdapter) Paths() []socket.PathInfo {
 		paths[i] = socket.PathInfo{
 			ID:        uint32(p.ID),
 			Validated: p.Validated,
+		}
+		if p.RemoteAddr.IsValid() {
+			paths[i].Addr = socket.IPAddr(p.RemoteAddr)
+			paths[i].HasAddr = true
 		}
 	}
 	return paths
