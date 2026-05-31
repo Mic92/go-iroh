@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"errors"
 	"net"
 	"testing"
@@ -28,6 +29,7 @@ func TestRawPublicKeyMutualHandshake(t *testing.T) {
 	}
 
 	var gotClientKey ed25519.PublicKey
+	var gotClientSigAlg SignatureScheme
 	serverConf := &Config{
 		Certificates:           []Certificate{serverCert},
 		RawPublicKeys:          true,
@@ -89,6 +91,7 @@ func TestRawPublicKeyMutualHandshake(t *testing.T) {
 			srvErr <- err
 			return
 		}
+		gotClientSigAlg = conn.(*Conn).ConnectionState().testingOnlyPeerSignatureAlgorithm
 		_, err = conn.Write(append([]byte("ack:"), buf...))
 		srvErr <- err
 	}()
@@ -104,6 +107,7 @@ func TestRawPublicKeyMutualHandshake(t *testing.T) {
 		t.Fatalf("client handshake: %v", err)
 	}
 	defer conn.Close()
+	gotServerSigAlg := conn.ConnectionState().testingOnlyPeerSignatureAlgorithm
 
 	if conn.ConnectionState().Version != VersionTLS13 {
 		t.Fatalf("not TLS 1.3")
@@ -126,6 +130,12 @@ func TestRawPublicKeyMutualHandshake(t *testing.T) {
 	}
 	if !bytes.Equal(gotClientKey, clientPub) {
 		t.Error("server did not observe the client's public key")
+	}
+	if gotServerSigAlg != Ed25519 {
+		t.Errorf("server signature scheme = %v, want Ed25519", gotServerSigAlg)
+	}
+	if gotClientSigAlg != Ed25519 {
+		t.Errorf("client signature scheme = %v, want Ed25519", gotClientSigAlg)
 	}
 }
 
@@ -215,5 +225,84 @@ func TestRawPublicKeyRejectsWrongKey(t *testing.T) {
 	conn := Client(raw, clientConf)
 	if err := conn.HandshakeContext(ctx); err == nil {
 		t.Fatal("expected handshake rejection from VerifyConnection")
+	}
+}
+
+func TestRawPublicKeyRejectsCertificateChain(t *testing.T) {
+	serverPub, serverPriv, _ := ed25519.GenerateKey(rand.Reader)
+	serverCert, err := MarshalRawPublicKeyCertificate(serverPub, serverPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extraPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	extraSPKI, err := x509.MarshalPKIXPublicKey(extraPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverCert.Certificate = append(serverCert.Certificate, extraSPKI)
+
+	clientPub, clientPriv, _ := ed25519.GenerateKey(rand.Reader)
+	clientCert, err := MarshalRawPublicKeyCertificate(clientPub, clientPriv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serverConf := &Config{
+		Certificates:           []Certificate{serverCert},
+		RawPublicKeys:          true,
+		SessionTicketsDisabled: true,
+		MinVersion:             VersionTLS13,
+		MaxVersion:             VersionTLS13,
+		ClientAuth:             RequireAnyClientCert,
+		NextProtos:             []string{"iroh-test"},
+		VerifyConnection:       func(ConnectionState) error { return nil },
+	}
+	clientConf := &Config{
+		Certificates:           []Certificate{clientCert},
+		RawPublicKeys:          true,
+		SessionTicketsDisabled: true,
+		MinVersion:             VersionTLS13,
+		MaxVersion:             VersionTLS13,
+		ServerName:             "peer.iroh.invalid",
+		NextProtos:             []string{"iroh-test"},
+		InsecureSkipVerify:     true,
+		VerifyConnection:       func(ConnectionState) error { return nil },
+	}
+
+	ln, err := Listen("tcp", "127.0.0.1:0", serverConf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	srvErr := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			srvErr <- err
+			return
+		}
+		defer conn.Close()
+		var b [1]byte
+		_, err = conn.Read(b[:])
+		srvErr <- err
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := Client(raw, clientConf)
+	err = conn.HandshakeContext(ctx)
+	conn.Close()
+	if err == nil {
+		t.Fatal("expected raw public key chain to be rejected")
+	}
+	select {
+	case <-srvErr:
+	case <-ctx.Done():
+		t.Fatalf("server did not finish after client rejection: %v", ctx.Err())
 	}
 }
