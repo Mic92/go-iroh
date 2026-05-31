@@ -684,7 +684,7 @@ func TestQNTOpenValidatedPathStoresRoute(t *testing.T) {
 		t.Fatalf("qntRoute = %v, want %v", st.qntRoute, want)
 	}
 	if st.validated {
-		t.Fatal("QNT route path is marked validated before route send support exists")
+		t.Fatal("QNT route path is marked validated before PATH_RESPONSE")
 	}
 	if _, ok := c.sentPacketHandler.PathDebugStats(pid); !ok {
 		t.Fatalf("sent recovery state for path %d not allocated", pid)
@@ -821,7 +821,7 @@ func TestQNTProcessValidatedPathOpenConsumesOneCandidate(t *testing.T) {
 		t.Fatalf("QNT path route = %v, want %v", st.qntRoute, addr1)
 	}
 	if st.validated {
-		t.Fatal("QNT path is validated before route send support exists")
+		t.Fatal("QNT path is validated before PATH_RESPONSE")
 	}
 	if c.multipathOut.nextPathID != protocol.PathID(2) {
 		t.Fatalf("nextPathID = %d, want 2", c.multipathOut.nextPathID)

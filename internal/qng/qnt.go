@@ -17,9 +17,7 @@ import (
 )
 
 // ErrNATTraversalNotNegotiated is returned by n0 QUIC NAT traversal operations
-// when the n0_nat_traversal extension has not been negotiated. The current qng
-// build has inert QNT wire codecs only; the operational state machine is not
-// implemented yet, so these APIs fail closed.
+// when the n0_nat_traversal extension has not been negotiated.
 var ErrNATTraversalNotNegotiated = errors.New("quic: n0 nat traversal not negotiated")
 
 // ErrNATTraversalNotEnoughAddresses is returned when QNT is negotiated but a
@@ -27,8 +25,9 @@ var ErrNATTraversalNotNegotiated = errors.New("quic: n0 nat traversal not negoti
 // peer's ADD_ADDRESS set is empty.
 var ErrNATTraversalNotEnoughAddresses = errors.New("quic: not enough nat traversal addresses")
 
-// ErrNATTraversalRoundNotImplemented is returned when QNT preconditions are met
-// but the probe-sending state machine is still absent.
+// ErrNATTraversalRoundNotImplemented is kept for callers that need to
+// distinguish an unavailable traversal driver from negotiation or address-set
+// failures.
 var ErrNATTraversalRoundNotImplemented = errors.New("quic: nat traversal round not implemented")
 
 // ErrNATTraversalTooManyAddresses is returned when a QNT address set is full.
