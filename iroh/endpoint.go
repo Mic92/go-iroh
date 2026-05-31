@@ -140,9 +140,10 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	}
 
 	quicConf := &quic.Config{
-		KeepAlivePeriod: HeartbeatInterval,
-		MaxIdleTimeout:  RelayPathMaxIdleTimeout,
-		EnableDatagrams: true,
+		KeepAlivePeriod:  HeartbeatInterval,
+		MaxIdleTimeout:   RelayPathMaxIdleTimeout,
+		EnableDatagrams:  true,
+		InitialMaxPathID: initialMaxPathID(),
 		// Accept 0-RTT early data on incoming connections that resume a prior
 		// session. Allow0RTT is ignored for dialed connections, so sharing this
 		// config with Connect is safe. Mirrors the Rust server enabling early
@@ -183,7 +184,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		magic:        magic,
 		relay:        magic.Relay(),
 		serveStop:    serveStop,
-		transport:    &quic.Transport{Conn: magic},
+		transport:    &quic.Transport{Conn: magic, ConnectionIDLength: 8},
 		quicConf:     quicConf,
 		sessionCache: NewSessionCache(),
 		lookup:       c.lookup,
@@ -211,6 +212,11 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		}
 	}
 	return ep, nil
+}
+
+func initialMaxPathID() *uint32 {
+	v := uint32(MaxMultipathPaths)
+	return &v
 }
 
 // startListener begins accepting incoming connections with the current ALPNs.

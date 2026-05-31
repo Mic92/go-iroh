@@ -19,8 +19,7 @@ const (
 	RelayPathMaxIdleTimeout = 30 * time.Second
 
 	// MaxMultipathPaths is the QUIC multipath path limit (transport parameter).
-	// iroh/src/socket.rs MAX_MULTIPATH_PATHS. Requires the qng multipath
-	// extension (not yet implemented; see internal/qng/n0ext).
+	// iroh/src/socket.rs MAX_MULTIPATH_PATHS.
 	MaxMultipathPaths = 8
 
 	// MaxQNTAddresses is the maximum number of remote NAT-traversal addresses

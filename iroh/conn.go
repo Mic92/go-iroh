@@ -99,6 +99,12 @@ func (c *Conn) ReadDatagram(ctx context.Context) ([]byte, error) {
 // accepted connections that did not resume a prior session.
 func (c *Conn) Used0RTT() bool { return c.qc.ConnectionState().Used0RTT }
 
+// MultipathNegotiated reports whether both endpoints negotiated the QUIC
+// multipath extension on this connection.
+func (c *Conn) MultipathNegotiated() bool {
+	return c.qc.ConnectionState().MultipathNegotiated
+}
+
 // HandshakeComplete returns a channel closed when the TLS handshake finishes.
 // For a 0-RTT dial, [Endpoint.Connect] may return before this fires; waiting on
 // it and then checking [Conn.Used0RTT] tells whether the 0-RTT attempt was

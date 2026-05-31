@@ -35,6 +35,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 
 	type srvResult struct {
 		peer base.EndpointId
+		mp   bool
 		err  error
 	}
 	done := make(chan srvResult, 1)
@@ -58,7 +59,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 		if err == nil {
 			conn.SendDatagram(dg)
 		}
-		done <- srvResult{peer: conn.RemoteID()}
+		done <- srvResult{peer: conn.RemoteID(), mp: conn.MultipathNegotiated()}
 	}()
 
 	// The server advertises its bound loopback address.
@@ -75,6 +76,9 @@ func TestEndpointDirectEcho(t *testing.T) {
 	}
 	if string(conn.ALPN()) != alpn {
 		t.Errorf("client ALPN = %q, want %q", conn.ALPN(), alpn)
+	}
+	if !conn.MultipathNegotiated() {
+		t.Error("client did not negotiate multipath")
 	}
 
 	s, err := conn.OpenStream(ctx)
@@ -111,6 +115,15 @@ func TestEndpointDirectEcho(t *testing.T) {
 	}
 	if !res.peer.Equal(client.ID()) {
 		t.Errorf("server saw client id %s, want %s", res.peer, client.ID())
+	}
+	if !res.mp {
+		t.Error("server did not negotiate multipath")
+	}
+	if client.transport.ConnectionIDLength != 8 {
+		t.Errorf("client transport ConnectionIDLength = %d, want 8", client.transport.ConnectionIDLength)
+	}
+	if server.transport.ConnectionIDLength != 8 {
+		t.Errorf("server transport ConnectionIDLength = %d, want 8", server.transport.ConnectionIDLength)
 	}
 }
 
