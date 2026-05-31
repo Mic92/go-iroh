@@ -184,6 +184,13 @@ type Config struct {
 	// both peers advertise the parameter.
 	InitialMaxPathID *uint32
 
+	// MaxRemoteNATTraversalAddresses enables n0 QUIC NAT traversal (QNT) by
+	// advertising the n0_nat_traversal transport parameter with the maximum
+	// number of remote NAT-traversal addresses this endpoint will accept. A nil
+	// pointer leaves QNT disabled, and the parameter is not sent. QNT is only
+	// negotiated when both peers advertise a non-zero value.
+	MaxRemoteNATTraversalAddresses *uint8
+
 	// SendObservedAddressReports enables sending QUIC Address Discovery
 	// OBSERVED_ADDRESS frames (draft-seemann-quic-address-discovery): on each
 	// 1-RTT packet received from the peer this endpoint reports the peer's source

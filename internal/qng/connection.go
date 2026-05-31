@@ -424,7 +424,10 @@ var newConnection = func(
 		RetrySourceConnectionID:   retrySrcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
 		InitialMaxPathID:          initialMaxPathIDParam(s.config.InitialMaxPathID),
-		AddressDiscoveryRole:      addressDiscoveryRole(s.config),
+		MaxRemoteNATTraversalAddresses: maxRemoteNATTraversalAddressesParam(
+			s.config.MaxRemoteNATTraversalAddresses,
+		),
+		AddressDiscoveryRole: addressDiscoveryRole(s.config),
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = wire.MaxDatagramSize
@@ -552,7 +555,10 @@ var newClientConnection = func(
 		InitialSourceConnectionID: srcConnID,
 		EnableResetStreamAt:       conf.EnableStreamResetPartialDelivery,
 		InitialMaxPathID:          initialMaxPathIDParam(s.config.InitialMaxPathID),
-		AddressDiscoveryRole:      addressDiscoveryRole(s.config),
+		MaxRemoteNATTraversalAddresses: maxRemoteNATTraversalAddressesParam(
+			s.config.MaxRemoteNATTraversalAddresses,
+		),
+		AddressDiscoveryRole: addressDiscoveryRole(s.config),
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = wire.MaxDatagramSize
@@ -2938,6 +2944,18 @@ func (c *Conn) multipathNegotiated() bool {
 		c.peerParams.InitialMaxPathID != nil
 }
 
+// qntNegotiated reports whether n0 QUIC NAT traversal was negotiated. This is
+// the case only when both peers advertised the n0_nat_traversal transport
+// parameter with a non-zero address limit. It must be called only after the
+// peer's transport parameters have been processed. QNT frame parser admission
+// intentionally remains disabled until the state machine is implemented.
+func (c *Conn) qntNegotiated() bool {
+	return maxRemoteNATTraversalAddressesParam(c.config.MaxRemoteNATTraversalAddresses) != nil &&
+		c.peerParams != nil &&
+		c.peerParams.MaxRemoteNATTraversalAddresses != nil &&
+		*c.peerParams.MaxRemoteNATTraversalAddresses != 0
+}
+
 // initialMaxPathIDParam converts a Config.InitialMaxPathID (*uint32) to the
 // transport parameter representation (*protocol.PathID). A nil value leaves the
 // parameter unset, keeping multipath disabled.
@@ -2947,6 +2965,17 @@ func initialMaxPathIDParam(v *uint32) *protocol.PathID {
 	}
 	id := protocol.PathID(*v)
 	return &id
+}
+
+// maxRemoteNATTraversalAddressesParam converts Config.MaxRemoteNATTraversalAddresses
+// to the n0_nat_traversal transport parameter representation. A nil or zero
+// value leaves the parameter unset, matching the Rust NonZeroU8 requirement.
+func maxRemoteNATTraversalAddressesParam(v *uint8) *uint8 {
+	if v == nil || *v == 0 {
+		return nil
+	}
+	limit := *v
+	return &limit
 }
 
 // addressDiscoveryRole derives the QUIC Address Discovery role to advertise from
