@@ -12,6 +12,8 @@ import (
 )
 
 const liveRustInteropEnv = "GO_IROH_LIVE_RUST_INTEROP"
+const rustIrohBinEnv = "GO_IROH_RUST_IROH_BIN"
+const rustRepoEnv = "IROH_RUST_REPO"
 
 func TestLiveRustInteropGoSidePreconditions(t *testing.T) {
 	maxPathID := uint32(4)
@@ -38,9 +40,61 @@ func TestLiveRustInteropGoSidePreconditions(t *testing.T) {
 	}
 }
 
+func TestRustIrohBin(t *testing.T) {
+	t.Run("explicit", func(t *testing.T) {
+		t.Setenv(rustIrohBinEnv, "/tmp/rust-iroh")
+		t.Setenv(rustRepoEnv, "")
+		bin, checked, ok := rustIrohBin()
+		if !ok {
+			t.Fatal("rustIrohBin ok = false, want true")
+		}
+		if bin != "/tmp/rust-iroh" {
+			t.Fatalf("rustIrohBin bin = %q, want /tmp/rust-iroh", bin)
+		}
+		if len(checked) != 0 {
+			t.Fatalf("rustIrohBin checked = %v, want none", checked)
+		}
+	})
+
+	t.Run("repo", func(t *testing.T) {
+		t.Setenv(rustIrohBinEnv, "")
+		repo := t.TempDir()
+		bin := filepath.Join(repo, "target", "debug", "iroh")
+		if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(rustRepoEnv, repo)
+		got, checked, ok := rustIrohBin()
+		if !ok {
+			t.Fatal("rustIrohBin ok = false, want true")
+		}
+		if got != bin {
+			t.Fatalf("rustIrohBin bin = %q, want %q", got, bin)
+		}
+		if len(checked) != 1 || checked[0] != bin {
+			t.Fatalf("rustIrohBin checked = %v, want [%q]", checked, bin)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv(rustIrohBinEnv, "")
+		t.Setenv(rustRepoEnv, "")
+		bin, checked, ok := rustIrohBin()
+		if ok {
+			t.Fatal("rustIrohBin ok = true, want false")
+		}
+		if bin != "" || len(checked) != 0 {
+			t.Fatalf("rustIrohBin = %q, %v, want empty", bin, checked)
+		}
+	})
+}
+
 func TestLiveRustInteropGate(t *testing.T) {
 	if os.Getenv(liveRustInteropEnv) != "1" {
-		t.Skipf("set %s=1 with GO_IROH_RUST_IROH_BIN pointing at a local Rust iroh binary; this test never downloads or builds Rust dependencies", liveRustInteropEnv)
+		t.Skipf("set %s=1 with %s or %s pointing at a local Rust iroh checkout; this test never downloads or builds Rust dependencies", liveRustInteropEnv, rustIrohBinEnv, rustRepoEnv)
 	}
 
 	rustc, err := exec.LookPath("rustc")
@@ -55,12 +109,12 @@ func TestLiveRustInteropGate(t *testing.T) {
 		t.Skipf("rustc version %q is older than 1.91; live Rust interop requires rustc >= 1.91", string(out))
 	}
 
-	bin := os.Getenv("GO_IROH_RUST_IROH_BIN")
-	if bin == "" {
-		t.Skip("GO_IROH_RUST_IROH_BIN not set; live Rust interop needs an existing Rust iroh binary")
+	bin, checked, ok := rustIrohBin()
+	if !ok {
+		t.Skipf("%s not set and no local Rust iroh artifact found via %s; checked %v", rustIrohBinEnv, rustRepoEnv, checked)
 	}
 	if !filepath.IsAbs(bin) {
-		t.Fatalf("GO_IROH_RUST_IROH_BIN=%q, want absolute path", bin)
+		t.Fatalf("%s=%q, want absolute path", rustIrohBinEnv, bin)
 	}
 	if st, err := os.Stat(bin); err != nil {
 		t.Skipf("Rust iroh binary %s not found: %v", bin, err)
@@ -69,6 +123,26 @@ func TestLiveRustInteropGate(t *testing.T) {
 	}
 
 	t.Skip("live Rust peer orchestration is not implemented; next step is to start this binary and prove multipath, QAD observed-address, and QNT route acceptance against go-iroh")
+}
+
+func rustIrohBin() (bin string, checked []string, ok bool) {
+	if bin := os.Getenv(rustIrohBinEnv); bin != "" {
+		return bin, nil, true
+	}
+	repo := os.Getenv(rustRepoEnv)
+	if repo == "" {
+		return "", nil, false
+	}
+	for _, name := range []string{
+		filepath.Join(repo, "target", "debug", "iroh"),
+		filepath.Join(repo, "target", "release", "iroh"),
+	} {
+		checked = append(checked, name)
+		if st, err := os.Stat(name); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			return name, checked, true
+		}
+	}
+	return "", checked, false
 }
 
 func rustcAtLeast191(version string) bool {
