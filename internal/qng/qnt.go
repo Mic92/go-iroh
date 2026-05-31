@@ -49,6 +49,7 @@ type qntLocalState struct {
 	pendingReachOut       []*wire.ReachOutFrame
 	pendingProbes         []netip.AddrPort
 	sentProbes            map[[8]byte]netip.AddrPort
+	probeAttempts         map[netip.AddrPort]uint8
 	validatedProbes       []netip.AddrPort
 }
 
@@ -56,6 +57,8 @@ type qntLocalAddress struct {
 	addr netip.AddrPort
 	seq  uint64
 }
+
+const qntMaxProbeAttempts = 9
 
 // AddNATTraversalAddress adds a local QNT candidate address.
 func (c *Conn) AddNATTraversalAddress(addr netip.AddrPort) error {
@@ -128,6 +131,10 @@ func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort,
 	st.pendingReachOut = st.pendingReachOut[:0]
 	st.pendingProbes = append(st.pendingProbes[:0], remote...)
 	clear(st.sentProbes)
+	st.probeAttempts = make(map[netip.AddrPort]uint8, len(remote))
+	for _, addr := range remote {
+		st.probeAttempts[addr] = qntMaxProbeAttempts - 1
+	}
 	for _, local := range st.local {
 		st.pendingReachOut = append(st.pendingReachOut, &wire.ReachOutFrame{
 			Round: st.round,
@@ -296,6 +303,10 @@ func (c *Conn) qntConsumePathResponse(frame *wire.PathResponseFrame, source neti
 		return netip.AddrPort{}, false
 	}
 	delete(st.sentProbes, frame.Data)
+	delete(st.probeAttempts, remote)
+	st.pendingProbes = slices.DeleteFunc(st.pendingProbes, func(addr netip.AddrPort) bool {
+		return addr == remote
+	})
 	return remote, true
 }
 
@@ -397,6 +408,7 @@ func (c *Conn) qntQueueReachOutProbe(frame *wire.ReachOutFrame) error {
 		st.round = frame.Round
 		st.pendingProbes = st.pendingProbes[:0]
 		clear(st.sentProbes)
+		clear(st.probeAttempts)
 		st.validatedProbes = st.validatedProbes[:0]
 	}
 	if qntHasProbeLocked(st, addr) {
@@ -406,7 +418,29 @@ func (c *Conn) qntQueueReachOutProbe(frame *wire.ReachOutFrame) error {
 		return ErrNATTraversalTooManyAddresses
 	}
 	st.pendingProbes = append(st.pendingProbes, addr)
+	if st.probeAttempts == nil {
+		st.probeAttempts = make(map[netip.AddrPort]uint8)
+	}
+	st.probeAttempts[addr] = qntMaxProbeAttempts - 1
 	return nil
+}
+
+func (c *Conn) qntQueueProbeRetries() bool {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var queued bool
+	for addr, remaining := range st.probeAttempts {
+		if remaining == 0 {
+			continue
+		}
+		st.probeAttempts[addr] = remaining - 1
+		if !slices.Contains(st.pendingProbes, addr) {
+			st.pendingProbes = append(st.pendingProbes, addr)
+		}
+		queued = true
+	}
+	return queued
 }
 
 func qntHasProbeLocked(st *qntLocalState, addr netip.AddrPort) bool {

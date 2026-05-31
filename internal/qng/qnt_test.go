@@ -577,6 +577,64 @@ func TestQNTNextProbeFrameInvalidState(t *testing.T) {
 	}
 }
 
+func TestQNTProbeRetriesRequeueUntilExhausted(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	addr := netip.MustParseAddrPort("198.51.100.1:1001")
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 1, Addr: addr.Addr(), Port: addr.Port()}); err != nil {
+		t.Fatalf("handle REACH_OUT: %v", err)
+	}
+
+	for attempt := 0; attempt < qntMaxProbeAttempts; attempt++ {
+		got, _, ok, err := c.qntNextProbeFrame()
+		if err != nil {
+			t.Fatalf("qntNextProbeFrame attempt %d: %v", attempt, err)
+		}
+		if !ok || got != addr {
+			t.Fatalf("qntNextProbeFrame attempt %d = %v, %v, want %v true", attempt, got, ok, addr)
+		}
+		if attempt == qntMaxProbeAttempts-1 {
+			break
+		}
+		if !c.qntQueueProbeRetries() {
+			t.Fatalf("qntQueueProbeRetries attempt %d = false, want true", attempt)
+		}
+	}
+	if c.qntQueueProbeRetries() {
+		t.Fatal("qntQueueProbeRetries after exhaustion = true, want false")
+	}
+	if probes := c.qntPendingProbeAddresses(); len(probes) != 0 {
+		t.Fatalf("pending probes after exhaustion = %v, want none", probes)
+	}
+}
+
+func TestQNTProbeRetriesStopAfterPathResponse(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	addr := netip.MustParseAddrPort("198.51.100.1:1001")
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 1, Addr: addr.Addr(), Port: addr.Port()}); err != nil {
+		t.Fatalf("handle REACH_OUT: %v", err)
+	}
+	got, frame, ok, err := c.qntNextProbeFrame()
+	if err != nil {
+		t.Fatalf("qntNextProbeFrame: %v", err)
+	}
+	if !ok || got != addr {
+		t.Fatalf("qntNextProbeFrame = %v, %v, want %v true", got, ok, addr)
+	}
+	challenge, ok := frame.Frame.(*wire.PathChallengeFrame)
+	if !ok {
+		t.Fatalf("qntNextProbeFrame frame = %T, want *wire.PathChallengeFrame", frame.Frame)
+	}
+	if matched, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge.Data}, addr); !ok || matched != addr {
+		t.Fatalf("qntConsumePathResponse = %v, %v, want %v true", matched, ok, addr)
+	}
+	if c.qntQueueProbeRetries() {
+		t.Fatal("qntQueueProbeRetries after PATH_RESPONSE = true, want false")
+	}
+	if probes := c.qntPendingProbeAddresses(); len(probes) != 0 {
+		t.Fatalf("pending probes after PATH_RESPONSE = %v, want none", probes)
+	}
+}
+
 func TestQNTValidatedProbeQueue(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
 	addr := netip.MustParseAddrPort("[::ffff:198.51.100.1]:1234")
