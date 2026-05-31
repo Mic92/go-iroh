@@ -71,6 +71,7 @@ type config struct {
 	lookup          *AddressLookupServices
 	enableNetReport bool
 	netReport       netReportRunner
+	netReportEvery  time.Duration
 	keyLogWriter    io.Writer
 	transportConfig *QuicTransportConfig
 	hooks           []EndpointHooks
@@ -217,9 +218,9 @@ func WithRelayMode(mode relay.Mode) Option {
 	}
 }
 
-// WithNetReport enables one background net_report run after [Bind]. When relays
-// are configured, the report's QAD-derived global addresses are advertised as
-// local QNT candidates for active remotes.
+// WithNetReport enables background net_report refreshes after [Bind]. When
+// relays are configured, the report's QAD-derived global addresses are
+// advertised as local QNT candidates for active remotes.
 func WithNetReport() Option {
 	return func(c *config) error {
 		c.enableNetReport = true
@@ -280,6 +281,9 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		if err := opt(&c); err != nil {
 			return nil, err
 		}
+	}
+	if c.netReportEvery == 0 {
+		c.netReportEvery = 5 * time.Minute
 	}
 	if !c.haveKey {
 		sk, err := base.GenerateSecretKey()
@@ -394,7 +398,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	}
 	ep.addrWatch = watch.NewValue(ep.Addr())
 	if ep.netReport != nil {
-		go func() { _ = ep.refreshNetReport(serveCtx) }()
+		go ep.runNetReport(serveCtx, c.netReportEvery)
 	}
 	return ep, nil
 }
@@ -567,6 +571,23 @@ func (e *Endpoint) refreshNetReport(ctx context.Context) error {
 		return fmt.Errorf("iroh: netreport: %w", err)
 	}
 	return nil
+}
+
+func (e *Endpoint) runNetReport(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Minute
+	}
+	_ = e.refreshNetReport(ctx)
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			_ = e.refreshNetReport(ctx)
+		}
+	}
 }
 
 func (e *Endpoint) advertiseNATTraversalCandidates() {

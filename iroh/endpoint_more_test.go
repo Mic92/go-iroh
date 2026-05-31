@@ -26,6 +26,13 @@ func withNetReportRunner(run netReportRunner) Option {
 	}
 }
 
+func withNetReportInterval(d time.Duration) Option {
+	return func(c *config) error {
+		c.netReportEvery = d
+		return nil
+	}
+}
+
 type endpointFakeCustomTransport struct {
 	mu    sync.Mutex
 	sends []endpointFakeCustomSend
@@ -797,6 +804,42 @@ func TestEndpointWithNetReportAdvertisesCandidates(t *testing.T) {
 		select {
 		case <-deadline:
 			t.Fatalf("current QNT candidates = %v, want %v", conn.currentNATTraversalCandidates(), want)
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func TestEndpointWithNetReportRefreshes(t *testing.T) {
+	ctx := context.Background()
+	first := netip.MustParseAddrPort("203.0.113.10:4444")
+	second := netip.MustParseAddrPort("203.0.113.11:5555")
+	reports := make(chan netreport.Report, 2)
+	reports <- netreport.Report{GlobalV4: first}
+	reports <- netreport.Report{GlobalV4: second}
+
+	ep, err := Bind(ctx,
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		withNetReportInterval(time.Millisecond),
+		withNetReportRunner(func(ctx context.Context) (*netreport.Report, error) {
+			select {
+			case report := <-reports:
+				return &report, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	want := []netip.AddrPort{ep.LocalAddr(), second}
+	deadline := time.After(2 * time.Second)
+	for !equalAddrPorts(ep.localNATTraversalCandidates(), want) {
+		select {
+		case <-deadline:
+			t.Fatalf("local QNT candidates = %v, want %v", ep.localNATTraversalCandidates(), want)
 		case <-time.After(time.Millisecond):
 		}
 	}
