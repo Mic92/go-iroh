@@ -36,6 +36,7 @@ type Endpoint struct {
 	quicConf     *quic.Config
 	keyLogWriter io.Writer
 	sessionCache *SessionCache
+	disableIP    bool
 
 	// remotes is the per-remote state registry. The endpoint owns it: it
 	// registers every established connection so the actor for that remote can
@@ -59,6 +60,7 @@ type config struct {
 	alpns           [][]byte
 	bindAddr        netip.AddrPort
 	haveBindAddr    bool
+	disableIP       bool
 	relayMode       relay.Mode
 	lookup          *AddressLookupServices
 	enableNetReport bool
@@ -96,6 +98,24 @@ func WithBindAddr(addr netip.AddrPort) Option {
 	return func(c *config) error {
 		c.bindAddr = addr
 		c.haveBindAddr = true
+		return nil
+	}
+}
+
+// WithoutIPTransports prevents the endpoint from advertising or dialing direct
+// IP addresses. The endpoint still binds UDP because relay-carried QUIC packets
+// use the same magic connection machinery.
+func WithoutIPTransports() Option {
+	return func(c *config) error {
+		c.disableIP = true
+		return nil
+	}
+}
+
+// WithoutRelayTransports disables relay connectivity.
+func WithoutRelayTransports() Option {
+	return func(c *config) error {
+		c.relayMode = relay.ModeDisabled()
 		return nil
 	}
 }
@@ -223,6 +243,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		quicConf:     quicConf,
 		keyLogWriter: c.keyLogWriter,
 		sessionCache: NewSessionCache(),
+		disableIP:    c.disableIP,
 		lookup:       c.lookup,
 		closedCh:     make(chan struct{}),
 		netReport:    endpointNetReportRunner(c, relayMap),
@@ -342,6 +363,9 @@ func (e *Endpoint) BoundSockets() []netip.AddrPort {
 // and validity checks.
 func (e *Endpoint) localNATTraversalCandidates() []netip.AddrPort {
 	var addrs []netip.AddrPort
+	if e.disableIP {
+		return addrs
+	}
 	if addr, ok := canonicalNATTraversalCandidate(e.LocalAddr()); ok {
 		addrs = appendUniqueNATTraversalCandidate(addrs, addr)
 	}
@@ -379,6 +403,9 @@ func (e *Endpoint) setExternalNATTraversalCandidates(addrs ...netip.AddrPort) bo
 // local update does not block.
 func (e *Endpoint) AddExternalAddr(ctx context.Context, addr netip.AddrPort) {
 	_ = ctx
+	if e.disableIP {
+		return
+	}
 	e.mu.Lock()
 	next := appendUniqueNATTraversalCandidate(append([]netip.AddrPort(nil), e.externalNAT...), addr)
 	if equalAddrPorts(e.externalNAT, next) {
@@ -454,12 +481,17 @@ func equalAddrPorts(a, b []netip.AddrPort) bool {
 // and a home relay is connected) its home relay URL. Later slices add reflexive
 // addresses.
 func (e *Endpoint) Addr() base.EndpointAddr {
-	a := base.NewEndpointAddr(e.ID()).WithIP(e.LocalAddr())
+	a := base.NewEndpointAddr(e.ID())
+	if !e.disableIP {
+		a = a.WithIP(e.LocalAddr())
+	}
 	e.mu.Lock()
 	external := append([]netip.AddrPort(nil), e.externalNAT...)
 	e.mu.Unlock()
-	for _, addr := range external {
-		a = a.WithIP(addr)
+	if !e.disableIP {
+		for _, addr := range external {
+			a = a.WithIP(addr)
+		}
 	}
 	if e.relay != nil {
 		if st := e.relay.HomeRelayStatus().Get(); st != nil {
@@ -489,9 +521,12 @@ func (e *Endpoint) updateAddrWatchLocked() {
 }
 
 func (e *Endpoint) addrLocked() base.EndpointAddr {
-	a := base.NewEndpointAddr(e.ID()).WithIP(e.LocalAddr())
-	for _, addr := range e.externalNAT {
-		a = a.WithIP(addr)
+	a := base.NewEndpointAddr(e.ID())
+	if !e.disableIP {
+		a = a.WithIP(e.LocalAddr())
+		for _, addr := range e.externalNAT {
+			a = a.WithIP(addr)
+		}
 	}
 	if e.relay != nil {
 		if st := e.relay.HomeRelayStatus().Get(); st != nil {
@@ -632,8 +667,10 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 // transport.
 func (e *Endpoint) dialTargets(addr base.EndpointAddr) []net.Addr {
 	var targets []net.Addr
-	for _, ip := range addr.IPAddrs() {
-		targets = append(targets, net.UDPAddrFromAddrPort(ip))
+	if !e.disableIP {
+		for _, ip := range addr.IPAddrs() {
+			targets = append(targets, net.UDPAddrFromAddrPort(ip))
+		}
 	}
 	if e.relay != nil {
 		for _, u := range addr.RelayURLs() {

@@ -3,6 +3,7 @@ package iroh
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/netip"
 	"sync"
 	"testing"
@@ -138,6 +139,50 @@ func TestEndpointWithKeyLogWriter(t *testing.T) {
 	}
 	if serverKeys.Len() == 0 {
 		t.Fatal("server key log writer was not written")
+	}
+}
+
+func TestEndpointTransportModeOptions(t *testing.T) {
+	ctx := context.Background()
+
+	rurl := relayURL(t, "https://relay.example/")
+	ep, err := Bind(ctx,
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		WithRelayMode(relay.ModeCustom(relay.MapFromURLs(rurl))),
+		WithoutIPTransports(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	if got := ep.Addr().IPAddrs(); len(got) != 0 {
+		t.Fatalf("WithoutIPTransports Addr IPs = %v, want none", got)
+	}
+	if got := ep.localNATTraversalCandidates(); len(got) != 0 {
+		t.Fatalf("WithoutIPTransports NAT candidates = %v, want none", got)
+	}
+	ep.AddExternalAddr(ctx, netip.MustParseAddrPort("203.0.113.1:9999"))
+	if got := ep.Addr().IPAddrs(); len(got) != 0 {
+		t.Fatalf("WithoutIPTransports external Addr IPs = %v, want none", got)
+	}
+	remoteKey, _ := base.GenerateSecretKey()
+	addr := base.NewEndpointAddr(remoteKey.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1")).WithRelayURL(rurl)
+	targets := ep.dialTargets(addr)
+	if len(targets) != 1 {
+		t.Fatalf("WithoutIPTransports dialTargets = %v, want relay-only target", targets)
+	}
+
+	noRelay, err := Bind(ctx,
+		WithRelayMode(relay.ModeCustom(relay.MapFromURLs(rurl))),
+		WithoutRelayTransports(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer noRelay.Close(ctx)
+	if err := noRelay.Online(ctx); !errors.Is(err, ErrNoRelay) {
+		t.Fatalf("WithoutRelayTransports Online = %v, want ErrNoRelay", err)
 	}
 }
 
