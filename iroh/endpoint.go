@@ -44,6 +44,8 @@ type Endpoint struct {
 
 	mu          sync.Mutex
 	closed      bool
+	closedCh    chan struct{}
+	addrWatch   *watch.Value[base.EndpointAddr]
 	externalNAT []netip.AddrPort
 	netReport   netReportRunner
 }
@@ -208,6 +210,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		quicConf:     quicConf,
 		sessionCache: NewSessionCache(),
 		lookup:       c.lookup,
+		closedCh:     make(chan struct{}),
 		netReport:    endpointNetReportRunner(c, relayMap),
 	}
 	// The per-remote state registry shares the serve context: its actors stop
@@ -232,6 +235,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 			return nil, err
 		}
 	}
+	ep.addrWatch = watch.NewValue(ep.Addr())
 	if ep.netReport != nil {
 		go func() { _ = ep.refreshNetReport(serveCtx) }()
 	}
@@ -310,6 +314,12 @@ func (e *Endpoint) LocalAddr() netip.AddrPort {
 	return e.udp.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
+// BoundSockets returns the UDP sockets this endpoint is bound to. This build
+// binds one magic socket; the slice form matches Rust's multi-socket API shape.
+func (e *Endpoint) BoundSockets() []netip.AddrPort {
+	return []netip.AddrPort{e.LocalAddr()}
+}
+
 // localNATTraversalCandidates returns concrete local direct addresses this
 // endpoint can hand to qng's QNT state. The default bind address is unspecified
 // ([::]:port), which is not a usable candidate and must not be advertised.
@@ -341,10 +351,29 @@ func (e *Endpoint) setExternalNATTraversalCandidates(addrs ...netip.AddrPort) bo
 		return false
 	}
 	e.externalNAT = next
+	e.updateAddrWatchLocked()
 	e.mu.Unlock()
 
 	e.advertiseNATTraversalCandidates()
 	return true
+}
+
+// AddExternalAddr adds addr to the endpoint's externally reachable addresses
+// and advertises it as a QNT NAT traversal candidate. Invalid, unspecified, or
+// zero-port addresses are ignored. The context is accepted for API parity; this
+// local update does not block.
+func (e *Endpoint) AddExternalAddr(ctx context.Context, addr netip.AddrPort) {
+	_ = ctx
+	e.mu.Lock()
+	next := appendUniqueNATTraversalCandidate(append([]netip.AddrPort(nil), e.externalNAT...), addr)
+	if equalAddrPorts(e.externalNAT, next) {
+		e.mu.Unlock()
+		return
+	}
+	e.externalNAT = next
+	e.updateAddrWatchLocked()
+	e.mu.Unlock()
+	e.advertiseNATTraversalCandidates()
 }
 
 func (e *Endpoint) applyNetReport(report netreport.Report) bool {
@@ -411,12 +440,62 @@ func equalAddrPorts(a, b []netip.AddrPort) bool {
 // addresses.
 func (e *Endpoint) Addr() base.EndpointAddr {
 	a := base.NewEndpointAddr(e.ID()).WithIP(e.LocalAddr())
+	e.mu.Lock()
+	external := append([]netip.AddrPort(nil), e.externalNAT...)
+	e.mu.Unlock()
+	for _, addr := range external {
+		a = a.WithIP(addr)
+	}
 	if e.relay != nil {
 		if st := e.relay.HomeRelayStatus().Get(); st != nil {
 			a = a.WithRelayURL(st.URL)
 		}
 	}
 	return a
+}
+
+// WatchAddr returns a watcher over the endpoint's current advertised address.
+// It updates when local external NAT candidates are added or replaced.
+func (e *Endpoint) WatchAddr() watch.Watcher[base.EndpointAddr] {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.addrWatch == nil {
+		e.addrWatch = watch.NewValue(e.addrLocked())
+	}
+	return e.addrWatch.Watch()
+}
+
+func (e *Endpoint) updateAddrWatchLocked() {
+	if e.addrWatch != nil {
+		e.addrWatch.Set(e.addrLocked(), func(a, b base.EndpointAddr) bool {
+			return a.Id.Equal(b.Id) && equalTransportAddrs(a.Addrs(), b.Addrs())
+		})
+	}
+}
+
+func (e *Endpoint) addrLocked() base.EndpointAddr {
+	a := base.NewEndpointAddr(e.ID()).WithIP(e.LocalAddr())
+	for _, addr := range e.externalNAT {
+		a = a.WithIP(addr)
+	}
+	if e.relay != nil {
+		if st := e.relay.HomeRelayStatus().Get(); st != nil {
+			a = a.WithRelayURL(st.URL)
+		}
+	}
+	return a
+}
+
+func equalTransportAddrs(a, b []base.TransportAddr) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Compare(b[i]) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // RelayStatus is the connection status of the endpoint's home relay, observed
@@ -647,6 +726,7 @@ func (e *Endpoint) Close(ctx context.Context) error {
 		return nil
 	}
 	e.closed = true
+	close(e.closedCh)
 	e.mu.Unlock()
 
 	var firstErr error
@@ -666,6 +746,9 @@ func (e *Endpoint) Close(ctx context.Context) error {
 	}
 	return firstErr
 }
+
+// Closed returns a channel closed when the endpoint is closed.
+func (e *Endpoint) Closed() <-chan struct{} { return e.closedCh }
 
 func (e *Endpoint) isClosed() bool {
 	e.mu.Lock()

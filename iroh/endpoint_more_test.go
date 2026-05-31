@@ -42,6 +42,62 @@ func TestEndpointSecretKey(t *testing.T) {
 	}
 }
 
+func TestEndpointLifecycleAddressSurface(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := ep.BoundSockets(); len(got) != 1 || got[0] != ep.LocalAddr() {
+		t.Fatalf("BoundSockets = %v, want [%v]", got, ep.LocalAddr())
+	}
+	select {
+	case <-ep.Closed():
+		t.Fatal("Closed channel fired before Close")
+	default:
+	}
+
+	w := ep.WatchAddr()
+	if got := w.Get(); len(got.IPAddrs()) != 1 || got.IPAddrs()[0] != ep.LocalAddr() {
+		t.Fatalf("WatchAddr initial = %v, want local %v", got.IPAddrs(), ep.LocalAddr())
+	}
+	if got, err := w.Updated(ctx); err != nil || len(got.IPAddrs()) != 1 || got.IPAddrs()[0] != ep.LocalAddr() {
+		t.Fatalf("WatchAddr first Updated = %v, %v", got.IPAddrs(), err)
+	}
+
+	external := netip.MustParseAddrPort("203.0.113.44:4444")
+	ep.AddExternalAddr(ctx, external)
+	got, err := w.Updated(ctx)
+	if err != nil {
+		t.Fatalf("WatchAddr update: %v", err)
+	}
+	if !containsAddrPort(got.IPAddrs(), external) {
+		t.Fatalf("WatchAddr IPs = %v, want external %v", got.IPAddrs(), external)
+	}
+	if !containsAddrPort(ep.Addr().IPAddrs(), external) {
+		t.Fatalf("Addr IPs = %v, want external %v", ep.Addr().IPAddrs(), external)
+	}
+
+	if err := ep.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case <-ep.Closed():
+	case <-time.After(time.Second):
+		t.Fatal("Closed channel did not fire")
+	}
+}
+
+func containsAddrPort(addrs []netip.AddrPort, want netip.AddrPort) bool {
+	for _, addr := range addrs {
+		if addr == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestEndpointWithAddressLookup verifies the option wires the lookup services
 // into the endpoint's resolve hook: with a lookup configured the hook resolves
 // a registered id to its addresses, and without one no hook is installed.
