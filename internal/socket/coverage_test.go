@@ -534,6 +534,47 @@ func TestTriggerHolepunchAfterMultipathNegotiated(t *testing.T) {
 	}
 }
 
+func TestActorMultipathPathsObserveAddressFreeQNGState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+
+	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
+	conn := newFakeConn(addr, time.Millisecond)
+	conn.paths = []PathInfo{{ID: 1, Validated: true}}
+	events, ok := a.AddConnection(conn)
+	if !ok {
+		t.Fatal("AddConnection failed")
+	}
+	select {
+	case ev := <-events:
+		if ev.Kind != PathEventOpened && ev.Kind != PathEventSelected {
+			t.Fatalf("first path event = %v, want opened or selected", ev.Kind)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for connection path event")
+	}
+
+	paths := a.MultipathPaths()
+	if len(paths) != 1 {
+		t.Fatalf("MultipathPaths len = %d, want 1; paths=%v", len(paths), paths)
+	}
+	if paths[0] != (PathInfo{ID: 1, Validated: true}) {
+		t.Fatalf("MultipathPaths()[0] = %+v, want path 1 validated", paths[0])
+	}
+	a.mu.Lock()
+	if _, known := a.paths.Status(addr); !known {
+		a.mu.Unlock()
+		t.Fatalf("original connection path %s not registered", addr)
+	}
+	got := a.paths.Addrs()
+	a.mu.Unlock()
+	if len(got) != 1 || got[0].String() != addr.String() {
+		t.Fatalf("RemotePathState addrs = %v, want only original %s", got, addr)
+	}
+}
+
 func TestTriggerHolepunchOpenPathError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

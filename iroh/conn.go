@@ -184,6 +184,22 @@ func (a *connAdapter) MultipathNegotiated() bool {
 	return a.qc.ConnectionState().MultipathNegotiated
 }
 
+// Paths returns address-free qng multipath path state for socket observability.
+func (a *connAdapter) Paths() []socket.PathInfo {
+	qpaths := a.qc.Paths()
+	if len(qpaths) == 0 {
+		return nil
+	}
+	paths := make([]socket.PathInfo, len(qpaths))
+	for i, p := range qpaths {
+		paths[i] = socket.PathInfo{
+			ID:        uint32(p.ID),
+			Validated: p.Validated,
+		}
+	}
+	return paths
+}
+
 // OpenPath opens and validates one qng multipath path over the connection's
 // existing MagicConn socket.
 func (a *connAdapter) OpenPath(ctx context.Context) error {

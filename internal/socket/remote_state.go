@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -63,6 +64,21 @@ type multipathConnection interface {
 
 type pathOpeningConnection interface {
 	OpenPath(context.Context) error
+}
+
+// PathInfo is address-free qng multipath path state observed through a
+// [Connection]. It intentionally has no [Addr]: socket must not fabricate
+// PathEvent addresses from a qng PathID until qng exposes the address that
+// actually routes that path.
+type PathInfo struct {
+	// ID is the QUIC multipath PathID.
+	ID uint32
+	// Validated reports whether the path can carry non-probing application data.
+	Validated bool
+}
+
+type pathObservingConnection interface {
+	Paths() []PathInfo
 }
 
 // ResolveFunc resolves additional transport addresses for a remote endpoint. It
@@ -428,6 +444,36 @@ func (a *RemoteStateActor) SelectedPath() (Addr, bool) {
 		return Addr{}, false
 	}
 	return *a.selected, true
+}
+
+// MultipathPaths returns address-free qng multipath path state observed from
+// active connections. It is a read-only bridge for tests and future socket
+// integration: it exposes PathID/validation without updating RemotePathState or
+// emitting PathEventOpened, because qng does not yet report the route address
+// for a PathID.
+func (a *RemoteStateActor) MultipathPaths() []PathInfo {
+	a.mu.Lock()
+	conns := make([]Connection, 0, len(a.conns))
+	for conn := range a.conns {
+		conns = append(conns, conn)
+	}
+	a.mu.Unlock()
+
+	var paths []PathInfo
+	for _, conn := range conns {
+		observer, ok := conn.(pathObservingConnection)
+		if !ok {
+			continue
+		}
+		paths = append(paths, observer.Paths()...)
+	}
+	sort.Slice(paths, func(i, j int) bool {
+		if paths[i].ID != paths[j].ID {
+			return paths[i].ID < paths[j].ID
+		}
+		return !paths[i].Validated && paths[j].Validated
+	})
+	return paths
 }
 
 // SendDatagram routes a datagram toward the remote via send. If a path is
