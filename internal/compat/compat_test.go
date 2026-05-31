@@ -23,8 +23,7 @@ func rustEnv(t *testing.T) (irohBase string) {
 	}
 	repo := os.Getenv("IROH_RUST_REPO")
 	if repo == "" {
-		// Best-effort default: the sibling checkout this port was built from.
-		repo = "/Volumes/tmc/go/src/github.com/n0-computer/iroh"
+		t.Skip("IROH_RUST_REPO not set; skipping Rust parity comparison")
 	}
 	base := filepath.Join(repo, "iroh-base")
 	if _, err := os.Stat(filepath.Join(base, "Cargo.toml")); err != nil {
