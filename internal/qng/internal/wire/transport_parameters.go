@@ -62,6 +62,10 @@ const (
 	// NB: the multipath frame-type id PATH_ACK also uses 0x3e, but frame-type
 	// ids and transport-parameter ids live in separate namespaces.
 	initialMaxPathIDParameterID transportParameterID = 0x3e
+	// n0 QUIC NAT traversal (QNT). The value is a NonZeroU8 carrying the maximum
+	// number of remote NAT-traversal addresses, encoded as exactly one raw byte.
+	// See n0ext/reference/transport_parameters.rs:419-425,549-560,732.
+	n0NATTraversalParameterID transportParameterID = 0x3d7f91120401
 )
 
 // AddressDiscoveryRole is the peer's role in QUIC Address Discovery
@@ -180,6 +184,13 @@ type TransportParameters struct {
 	// largest path id the endpoint is initially willing to use.
 	// See n0ext/reference/transport_parameters.rs:121,537-548.
 	InitialMaxPathID *protocol.PathID
+
+	// MaxRemoteNATTraversalAddresses is the n0_nat_traversal transport
+	// parameter. A nil pointer means QNT was not advertised; a non-nil value is
+	// the maximum number of remote NAT-traversal addresses and must be non-zero.
+	// This is only the inert negotiation codec. QNT frame parsing remains gated
+	// elsewhere until the state machine is implemented.
+	MaxRemoteNATTraversalAddresses *uint8
 
 	// AddressDiscoveryRole is the QUIC Address Discovery role
 	// (draft-seemann-quic-address-discovery) carried in the observed_address
@@ -345,6 +356,22 @@ func (p *TransportParameters) unmarshal(b []byte, sentBy protocol.Perspective, f
 			}
 			b = b[paramLen:]
 			p.InitialMaxPathID = &pathID
+		case n0NATTraversalParameterID:
+			// n0 QUIC NAT traversal. Mirrors transport_parameters.rs:549-560:
+			// reject a duplicate, require exactly one byte, and reject zero
+			// because the Rust type is NonZeroU8.
+			if p.MaxRemoteNATTraversalAddresses != nil {
+				return fmt.Errorf("received duplicate transport parameter %#x", paramID)
+			}
+			if paramLen != 1 {
+				return fmt.Errorf("wrong length for transport parameter %#x: %d (expected 1)", paramID, paramLen)
+			}
+			if b[0] == 0 {
+				return fmt.Errorf("illegal n0_nat_traversal address limit 0")
+			}
+			v := b[0]
+			b = b[paramLen:]
+			p.MaxRemoteNATTraversalAddresses = &v
 		default:
 			b = b[paramLen:]
 		}
@@ -605,6 +632,11 @@ func (p *TransportParameters) Marshal(pers protocol.Perspective) []byte {
 	if p.InitialMaxPathID != nil {
 		b = p.marshalVarintParam(b, initialMaxPathIDParameterID, uint64(*p.InitialMaxPathID))
 	}
+	// n0_nat_traversal (QNT). transport_parameters.rs:419-425 writes the id,
+	// length 1, then the NonZeroU8 value as a raw byte.
+	if p.MaxRemoteNATTraversalAddresses != nil && *p.MaxRemoteNATTraversalAddresses != 0 {
+		b = p.marshalN0NATTraversalParam(b, *p.MaxRemoteNATTraversalAddresses)
+	}
 
 	if pers == protocol.PerspectiveClient && len(AdditionalTransportParametersClient) > 0 {
 		for k, v := range AdditionalTransportParametersClient {
@@ -621,6 +653,12 @@ func (p *TransportParameters) marshalVarintParam(b []byte, id transportParameter
 	b = quicvarint.Append(b, uint64(id))
 	b = quicvarint.Append(b, uint64(quicvarint.Len(val)))
 	return quicvarint.Append(b, val)
+}
+
+func (p *TransportParameters) marshalN0NATTraversalParam(b []byte, val uint8) []byte {
+	b = quicvarint.Append(b, uint64(n0NATTraversalParameterID))
+	b = quicvarint.Append(b, 1)
+	return append(b, val)
 }
 
 // MarshalForSessionTicket marshals the transport parameters we save in the session ticket.
