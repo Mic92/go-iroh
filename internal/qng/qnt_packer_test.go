@@ -2,6 +2,7 @@ package quic
 
 import (
 	"errors"
+	"net"
 	"net/netip"
 	"testing"
 
@@ -146,6 +147,29 @@ func TestQNTPackNextProbeInvalidStateNoop(t *testing.T) {
 	}
 }
 
+func TestQNTSendProbeBufferReleasesPacketBuffer(t *testing.T) {
+	buf := getPacketBuffer()
+	buf.Data = append(buf.Data, 1, 2, 3)
+	s := &qntProbeTestSender{available: make(chan struct{})}
+	c := &Conn{sendQueue: s}
+	addr := &net.UDPAddr{IP: net.ParseIP("198.51.100.7"), Port: 4433}
+
+	c.sendQNTProbeBuffer(buf, addr)
+
+	if s.probes != 1 {
+		t.Fatalf("SendProbe calls = %d, want 1", s.probes)
+	}
+	if !s.addr.IP.Equal(addr.IP) || s.addr.Port != addr.Port {
+		t.Fatalf("SendProbe addr = %v, want %v", s.addr, addr)
+	}
+	if string(s.data) != string([]byte{1, 2, 3}) {
+		t.Fatalf("SendProbe data = %v, want [1 2 3]", s.data)
+	}
+	if buf.refCount != 0 {
+		t.Fatalf("packet buffer refCount = %d, want 0 after synchronous probe send", buf.refCount)
+	}
+}
+
 func newQNTProbeTestPacker() *packetPacker {
 	return &packetPacker{
 		cryptoSetup:         qntProbeCryptoSetup{},
@@ -204,6 +228,28 @@ func (m *qntProbePNManager) PeekPacketNumberForPath(protocol.PathID) (protocol.P
 func (m *qntProbePNManager) PopPacketNumberForPath(protocol.PathID) protocol.PacketNumber {
 	return m.PopPacketNumber(protocol.Encryption1RTT)
 }
+
+type qntProbeTestSender struct {
+	probes    int
+	data      []byte
+	addr      *net.UDPAddr
+	available chan struct{}
+}
+
+func (s *qntProbeTestSender) Send(*packetBuffer, uint16, protocol.ECN) {}
+
+func (s *qntProbeTestSender) SendProbe(buf *packetBuffer, addr net.Addr) {
+	s.probes++
+	s.data = append([]byte(nil), buf.Data...)
+	if udp, ok := addr.(*net.UDPAddr); ok {
+		s.addr = udp
+	}
+}
+
+func (s *qntProbeTestSender) Run() error                 { return nil }
+func (s *qntProbeTestSender) WouldBlock() bool           { return false }
+func (s *qntProbeTestSender) Available() <-chan struct{} { return s.available }
+func (s *qntProbeTestSender) Close()                     {}
 
 type noAckFrameSource struct{}
 

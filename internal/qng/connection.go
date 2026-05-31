@@ -3188,7 +3188,7 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 				c.logger.Debugf("sending QNT probe packet to %s", addr)
 				c.logShortHeaderPacket(probe, protocol.ECNNon, buf.Len())
 				c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, now)
-				c.sendQueue.SendProbe(buf, addr)
+				c.sendQNTProbeBuffer(buf, addr)
 				c.scheduleSending()
 				return nil
 			}
@@ -3244,6 +3244,11 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 		return c.sendPacketsWithGSO(now)
 	}
 	return c.sendPacketsWithoutGSO(now)
+}
+
+func (c *Conn) sendQNTProbeBuffer(buf *packetBuffer, addr net.Addr) {
+	defer buf.Release()
+	c.sendQueue.SendProbe(buf, addr)
 }
 
 func (c *Conn) sendPacketsWithoutGSO(now monotime.Time) error {
