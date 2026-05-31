@@ -379,7 +379,56 @@ func (c *Conn) handleReachOutFrame(frame *wire.ReachOutFrame) error {
 	if frame == nil {
 		return nil
 	}
-	return ErrNATTraversalRoundNotImplemented
+	return c.qntQueueReachOutProbe(frame)
+}
+
+func (c *Conn) qntQueueReachOutProbe(frame *wire.ReachOutFrame) error {
+	addr := canonicalAddrPort(frame.Addr, frame.Port)
+	if !addr.IsValid() || addr.Port() == 0 {
+		return nil
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if frame.Round < st.round {
+		return nil
+	}
+	if frame.Round > st.round {
+		st.round = frame.Round
+		st.pendingProbes = st.pendingProbes[:0]
+		clear(st.sentProbes)
+		st.validatedProbes = st.validatedProbes[:0]
+	}
+	if qntHasProbeLocked(st, addr) {
+		return nil
+	}
+	if qntProbeCountLocked(st) >= int(c.qntRemoteAddressLimit()) {
+		return ErrNATTraversalTooManyAddresses
+	}
+	st.pendingProbes = append(st.pendingProbes, addr)
+	return nil
+}
+
+func qntHasProbeLocked(st *qntLocalState, addr netip.AddrPort) bool {
+	if slices.Contains(st.pendingProbes, addr) || slices.Contains(st.validatedProbes, addr) {
+		return true
+	}
+	for _, sent := range st.sentProbes {
+		if sent == addr {
+			return true
+		}
+	}
+	return false
+}
+
+func qntProbeCountLocked(st *qntLocalState) int {
+	n := len(st.pendingProbes) + len(st.validatedProbes)
+	for _, sent := range st.sentProbes {
+		if !slices.Contains(st.pendingProbes, sent) && !slices.Contains(st.validatedProbes, sent) {
+			n++
+		}
+	}
+	return n
 }
 
 func (c *Conn) handleRemoveAddressFrame(frame *wire.RemoveAddressFrame) error {

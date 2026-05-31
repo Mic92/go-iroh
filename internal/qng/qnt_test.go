@@ -815,7 +815,7 @@ func TestQNTConnectionHandlesAddRemoveAddressFrames(t *testing.T) {
 	}
 }
 
-func TestQNTConnectionHandlesReachOutFrameInert(t *testing.T) {
+func TestQNTConnectionHandlesReachOutFrameQueuesProbe(t *testing.T) {
 	c := newNegotiatedQNTConn(2, 16)
 	addr := netip.MustParseAddrPort("198.51.100.1:1001")
 
@@ -824,11 +824,75 @@ func TestQNTConnectionHandlesReachOutFrameInert(t *testing.T) {
 		Addr:  addr.Addr(),
 		Port:  addr.Port(),
 	})
-	if !errors.Is(err, ErrNATTraversalRoundNotImplemented) {
-		t.Fatalf("handle REACH_OUT err = %v, want ErrNATTraversalRoundNotImplemented", err)
+	if err != nil {
+		t.Fatalf("handle REACH_OUT: %v", err)
+	}
+	if got := c.qntPendingProbeAddresses(); len(got) != 1 || got[0] != addr {
+		t.Fatalf("pending probes after REACH_OUT = %v, want [%v]", got, addr)
 	}
 	if addrs, err := c.NATTraversalAddresses(); err != nil || len(addrs) != 0 {
 		t.Fatalf("NATTraversalAddresses after REACH_OUT = %v, %v, want none, nil", addrs, err)
+	}
+}
+
+func TestQNTConnectionHandlesReachOutFrameRoundsAndDuplicates(t *testing.T) {
+	c := newNegotiatedQNTConn(4, 16)
+	oldAddr := netip.MustParseAddrPort("198.51.100.1:1001")
+	newAddr := netip.MustParseAddrPort("198.51.100.2:1002")
+
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 2, Addr: oldAddr.Addr(), Port: oldAddr.Port()}); err != nil {
+		t.Fatalf("initial REACH_OUT: %v", err)
+	}
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 2, Addr: oldAddr.Addr(), Port: oldAddr.Port()}); err != nil {
+		t.Fatalf("duplicate REACH_OUT: %v", err)
+	}
+	if got := c.qntPendingProbeAddresses(); len(got) != 1 || got[0] != oldAddr {
+		t.Fatalf("pending probes after duplicate = %v, want [%v]", got, oldAddr)
+	}
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 1, Addr: newAddr.Addr(), Port: newAddr.Port()}); err != nil {
+		t.Fatalf("old REACH_OUT: %v", err)
+	}
+	if got := c.qntPendingProbeAddresses(); len(got) != 1 || got[0] != oldAddr {
+		t.Fatalf("pending probes after old round = %v, want [%v]", got, oldAddr)
+	}
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 3, Addr: newAddr.Addr(), Port: newAddr.Port()}); err != nil {
+		t.Fatalf("new REACH_OUT: %v", err)
+	}
+	if got := c.qntPendingProbeAddresses(); len(got) != 1 || got[0] != newAddr {
+		t.Fatalf("pending probes after new round = %v, want [%v]", got, newAddr)
+	}
+}
+
+func TestQNTConnectionHandlesReachOutFrameLimit(t *testing.T) {
+	c := newNegotiatedQNTConn(1, 16)
+	addr1 := netip.MustParseAddrPort("198.51.100.1:1001")
+	addr2 := netip.MustParseAddrPort("198.51.100.2:1002")
+
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 1, Addr: addr1.Addr(), Port: addr1.Port()}); err != nil {
+		t.Fatalf("first REACH_OUT: %v", err)
+	}
+	err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 1, Addr: addr2.Addr(), Port: addr2.Port()})
+	if !errors.Is(err, ErrNATTraversalTooManyAddresses) {
+		t.Fatalf("second REACH_OUT err = %v, want ErrNATTraversalTooManyAddresses", err)
+	}
+	if got := c.qntPendingProbeAddresses(); len(got) != 1 || got[0] != addr1 {
+		t.Fatalf("pending probes after limit = %v, want [%v]", got, addr1)
+	}
+}
+
+func TestQNTConnectionHandlesReachOutFrameInvalid(t *testing.T) {
+	c := newNegotiatedQNTConn(2, 16)
+	if err := c.handleReachOutFrame(nil); err != nil {
+		t.Fatalf("nil REACH_OUT: %v", err)
+	}
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 1, Addr: netip.Addr{}, Port: 1001}); err != nil {
+		t.Fatalf("invalid REACH_OUT: %v", err)
+	}
+	if err := c.handleReachOutFrame(&wire.ReachOutFrame{Round: 1, Addr: netip.MustParseAddr("198.51.100.1")}); err != nil {
+		t.Fatalf("zero-port REACH_OUT: %v", err)
+	}
+	if got := c.qntPendingProbeAddresses(); len(got) != 0 {
+		t.Fatalf("pending probes after invalid REACH_OUT = %v, want none", got)
 	}
 }
 
