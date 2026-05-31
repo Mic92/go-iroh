@@ -17,7 +17,7 @@ Rust→Go idiom conventions used throughout.
 |---|---|---|
 | `base` | `iroh-base` | ported, tested |
 | `internal/pkarr` | `iroh-dns` (pkarr) | ported, tested |
-| `dns` | `iroh-dns` | ported, tested (stdlib DNS, DoH, staggered endpoint lookup) |
+| `dns` | `iroh-dns` | ported, tested (stdlib DNS, DoH, DoT, staggered endpoint lookup) |
 | `internal/relayproto` | `iroh-relay/protos` | ported, tested (golden wire snapshots) |
 | `internal/relayclient` | `iroh-relay/client` | ported, tested (WS/WSS + X.509, wire-compatible) |
 | `internal/relayserver` | `iroh-relay` server | ported, tested (relay datagram forwarding) |
