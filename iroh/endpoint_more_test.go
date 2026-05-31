@@ -845,6 +845,22 @@ func TestEndpointWithNetReportRefreshes(t *testing.T) {
 	}
 }
 
+func TestEndpointSetALPNsCannotReplaceRunningListener(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	if err := ep.SetALPNs([][]byte{[]byte("first/1")}); err != nil {
+		t.Fatalf("SetALPNs first: %v", err)
+	}
+	if err := ep.SetALPNs([][]byte{[]byte("second/1")}); err == nil {
+		t.Fatal("SetALPNs second succeeded, want documented unsupported error")
+	}
+}
+
 func TestEndpointQADCandidatesOpenSelectedQNTRouteDataPath(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
