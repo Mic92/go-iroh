@@ -201,9 +201,12 @@ func (in *Incoming) RemoteAddr() IncomingAddr {
 }
 
 // RemoteAddrValidated reports whether qng has validated the remote address.
-// qng does not expose this pre-handshake bit yet; after Accept returns, the
-// address is considered validated for the established connection path.
-func (in *Incoming) RemoteAddrValidated() bool { return false }
+func (in *Incoming) RemoteAddrValidated() bool {
+	if in == nil || in.qc == nil {
+		return false
+	}
+	return in.qc.RemoteAddrValidated()
+}
 
 // LocalAddr returns the local transport address the incoming connection used.
 func (in *Incoming) LocalAddr() LocalTransportAddr {

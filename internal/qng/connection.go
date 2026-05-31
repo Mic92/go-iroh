@@ -288,6 +288,7 @@ type Conn struct {
 	receivedRetry       bool
 	versionNegotiated   bool
 	receivedFirstPacket bool
+	remoteAddrValidated bool
 
 	blocked blockMode
 
@@ -371,6 +372,7 @@ var newConnection = func(
 		qlogTrace:           qlogTrace,
 		logger:              logger,
 		version:             v,
+		remoteAddrValidated: clientAddressValidated,
 	}
 	if qlogTrace != nil {
 		s.qlogger = qlogTrace.AddProducer()
@@ -3826,6 +3828,11 @@ func (c *Conn) LocalAddr() net.Addr { return c.conn.LocalAddr() }
 
 // RemoteAddr returns the remote address of the QUIC connection.
 func (c *Conn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
+
+// RemoteAddrValidated reports whether the peer's transport address was
+// validated by a QUIC address-validation token before this connection was
+// accepted. It is only meaningful on server-side early connections.
+func (c *Conn) RemoteAddrValidated() bool { return c.remoteAddrValidated }
 
 // getPathManager lazily initializes the Conn's pathManagerOutgoing.
 // May create multiple pathManagerOutgoing objects if called concurrently.

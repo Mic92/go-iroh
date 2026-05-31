@@ -168,6 +168,10 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 			done <- errors.New("incoming remote address is not UDP")
 			return
 		}
+		if in.RemoteAddrValidated() {
+			done <- errors.New("first incoming connection remote address unexpectedly validated")
+			return
+		}
 		accepting, err := in.Accept()
 		if err != nil {
 			done <- err
