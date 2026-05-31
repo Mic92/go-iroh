@@ -2185,6 +2185,8 @@ func (c *Conn) handleFrame(
 		err = c.handleObservedAddrFrame(frame)
 	case *wire.AddAddressFrame:
 		err = c.handleAddAddressFrame(frame)
+	case *wire.ReachOutFrame:
+		err = c.handleReachOutFrame(frame)
 	case *wire.RemoveAddressFrame:
 		err = c.handleRemoveAddressFrame(frame)
 	default:

@@ -36,10 +36,11 @@ type NATTraversalCandidate struct {
 }
 
 type qntLocalState struct {
-	mu         sync.Mutex
-	remoteOnce sync.Once
-	local      []netip.AddrPort
-	remote     *qntRemoteAddressState
+	mu                    sync.Mutex
+	remoteOnce            sync.Once
+	local                 []netip.AddrPort
+	nextLocalAddressSeqNo uint64
+	remote                *qntRemoteAddressState
 }
 
 // AddNATTraversalAddress adds a local QNT candidate address.
@@ -60,7 +61,10 @@ func (c *Conn) AddNATTraversalAddress(addr netip.AddrPort) error {
 	if len(st.local) >= c.qntLocalAddressLimit() {
 		return ErrNATTraversalTooManyAddresses
 	}
+	seq := st.nextLocalAddressSeqNo
+	st.nextLocalAddressSeqNo++
 	st.local = append(st.local, addr)
+	c.queueLocalAddAddressFrame(seq, addr)
 	return nil
 }
 
@@ -125,6 +129,17 @@ func (c *Conn) qntLocalNATTraversalAddresses() []netip.AddrPort {
 	return slices.Clone(st.local)
 }
 
+func (c *Conn) queueLocalAddAddressFrame(seq uint64, addr netip.AddrPort) {
+	if c.framer == nil {
+		return
+	}
+	c.queueControlFrame(&wire.AddAddressFrame{
+		SeqNo: seq,
+		Addr:  addr.Addr(),
+		Port:  addr.Port(),
+	})
+}
+
 func (c *Conn) addRemoteNATTraversalAddress(addr netip.AddrPort) error {
 	addr = canonicalNATTraversalAddr(addr)
 	if !addr.IsValid() {
@@ -139,6 +154,16 @@ func (c *Conn) addRemoteNATTraversalAddress(addr netip.AddrPort) error {
 
 func (c *Conn) handleAddAddressFrame(frame *wire.AddAddressFrame) error {
 	return c.addRemoteNATTraversalAddressFrame(frame)
+}
+
+func (c *Conn) handleReachOutFrame(frame *wire.ReachOutFrame) error {
+	if !c.qntAPINegotiated() {
+		return ErrNATTraversalNotNegotiated
+	}
+	if frame == nil {
+		return nil
+	}
+	return ErrNATTraversalRoundNotImplemented
 }
 
 func (c *Conn) handleRemoveAddressFrame(frame *wire.RemoveAddressFrame) error {

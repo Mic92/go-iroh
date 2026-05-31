@@ -128,6 +128,40 @@ func TestQNTLocalAddressStateLimit(t *testing.T) {
 	}
 }
 
+func TestQNTLocalAddressQueuesAddAddressFrame(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.framer = newFramer(nil)
+	c.sendingScheduled = make(chan struct{}, 1)
+	addr1 := netip.MustParseAddrPort("[::ffff:192.0.2.1]:1234")
+	addr2 := netip.MustParseAddrPort("[2001:db8::1]:4433")
+
+	if err := c.AddNATTraversalAddress(addr1); err != nil {
+		t.Fatalf("first AddNATTraversalAddress: %v", err)
+	}
+	if err := c.AddNATTraversalAddress(addr1); err != nil {
+		t.Fatalf("duplicate AddNATTraversalAddress: %v", err)
+	}
+	if err := c.AddNATTraversalAddress(addr2); err != nil {
+		t.Fatalf("second AddNATTraversalAddress: %v", err)
+	}
+
+	frames := queuedAddAddressFrames(c)
+	if len(frames) != 2 {
+		t.Fatalf("queued %d ADD_ADDRESS frames, want 2", len(frames))
+	}
+	if frames[0].SeqNo != 0 || netip.AddrPortFrom(frames[0].Addr, frames[0].Port) != netip.MustParseAddrPort("192.0.2.1:1234") {
+		t.Fatalf("first ADD_ADDRESS = seq %d %s:%d, want seq 0 192.0.2.1:1234", frames[0].SeqNo, frames[0].Addr, frames[0].Port)
+	}
+	if frames[1].SeqNo != 1 || netip.AddrPortFrom(frames[1].Addr, frames[1].Port) != addr2 {
+		t.Fatalf("second ADD_ADDRESS = seq %d %s:%d, want seq 1 %v", frames[1].SeqNo, frames[1].Addr, frames[1].Port, addr2)
+	}
+	select {
+	case <-c.sendingScheduled:
+	default:
+		t.Fatal("AddNATTraversalAddress did not schedule sending")
+	}
+}
+
 func TestQNTLocalAddressStateFailsClosedWhenNotNegotiated(t *testing.T) {
 	addr := netip.MustParseAddrPort("192.0.2.1:1234")
 	add := &wire.AddAddressFrame{SeqNo: 1, Addr: addr.Addr(), Port: addr.Port()}
@@ -354,6 +388,23 @@ func TestQNTConnectionHandlesAddRemoveAddressFrames(t *testing.T) {
 	}
 }
 
+func TestQNTConnectionHandlesReachOutFrameInert(t *testing.T) {
+	c := newNegotiatedQNTConn(2, 16)
+	addr := netip.MustParseAddrPort("198.51.100.1:1001")
+
+	err := c.handleReachOutFrame(&wire.ReachOutFrame{
+		Round: 1,
+		Addr:  addr.Addr(),
+		Port:  addr.Port(),
+	})
+	if !errors.Is(err, ErrNATTraversalRoundNotImplemented) {
+		t.Fatalf("handle REACH_OUT err = %v, want ErrNATTraversalRoundNotImplemented", err)
+	}
+	if addrs, err := c.NATTraversalAddresses(); err != nil || len(addrs) != 0 {
+		t.Fatalf("NATTraversalAddresses after REACH_OUT = %v, %v, want none, nil", addrs, err)
+	}
+}
+
 func TestQNTConnectionHandlersFailClosedWhenNotNegotiated(t *testing.T) {
 	c := newLocalOnlyQNTConn(2)
 	addr := netip.MustParseAddrPort("198.51.100.1:1001")
@@ -366,9 +417,30 @@ func TestQNTConnectionHandlersFailClosedWhenNotNegotiated(t *testing.T) {
 	if !errors.Is(err, ErrNATTraversalNotNegotiated) {
 		t.Fatalf("handle ADD_ADDRESS err = %v, want ErrNATTraversalNotNegotiated", err)
 	}
+	err = c.handleReachOutFrame(&wire.ReachOutFrame{Round: 1, Addr: addr.Addr(), Port: addr.Port()})
+	if !errors.Is(err, ErrNATTraversalNotNegotiated) {
+		t.Fatalf("handle REACH_OUT err = %v, want ErrNATTraversalNotNegotiated", err)
+	}
 	err = c.handleRemoveAddressFrame(&wire.RemoveAddressFrame{SeqNo: 1})
 	if !errors.Is(err, ErrNATTraversalNotNegotiated) {
 		t.Fatalf("handle REMOVE_ADDRESS err = %v, want ErrNATTraversalNotNegotiated", err)
+	}
+}
+
+func TestQNTConnectionHandlersIgnoreNilFrames(t *testing.T) {
+	c := newNegotiatedQNTConn(2, 16)
+	if err := c.handleAddAddressFrame(nil); err != nil {
+		t.Fatalf("handle nil ADD_ADDRESS: %v", err)
+	}
+	if err := c.handleRemoveAddressFrame(nil); err != nil {
+		t.Fatalf("handle nil REMOVE_ADDRESS: %v", err)
+	}
+	addrs, err := c.NATTraversalAddresses()
+	if err != nil {
+		t.Fatalf("NATTraversalAddresses: %v", err)
+	}
+	if len(addrs) != 0 {
+		t.Fatalf("remote addresses after nil frames = %v, want none", addrs)
 	}
 }
 
@@ -379,6 +451,18 @@ func newNegotiatedQNTConn(local, peer uint8) *Conn {
 			MaxRemoteNATTraversalAddresses: &peer,
 		},
 	}
+}
+
+func queuedAddAddressFrames(c *Conn) []*wire.AddAddressFrame {
+	c.framer.controlFrameMutex.Lock()
+	defer c.framer.controlFrameMutex.Unlock()
+	var frames []*wire.AddAddressFrame
+	for _, f := range c.framer.controlFrames {
+		if af, ok := f.(*wire.AddAddressFrame); ok {
+			frames = append(frames, af)
+		}
+	}
+	return frames
 }
 
 func newLocalOnlyQNTConn(local uint8) *Conn {
