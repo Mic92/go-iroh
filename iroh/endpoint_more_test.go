@@ -14,6 +14,14 @@ import (
 	"github.com/tmc/go-iroh/internal/socket"
 )
 
+func withNetReportRunner(run netReportRunner) Option {
+	return func(c *config) error {
+		c.enableNetReport = true
+		c.netReport = run
+		return nil
+	}
+}
+
 // TestEndpointSecretKey verifies SecretKey returns the configured key and that
 // its public half matches the endpoint id.
 func TestEndpointSecretKey(t *testing.T) {
@@ -290,6 +298,61 @@ func TestEndpointApplyEmptyNetReportClearsExternalNATTraversalCandidates(t *test
 	}
 	if len(conn.removedNAT) != 1 || conn.removedNAT[0] != external {
 		t.Fatalf("removed QNT candidates = %v, want [%v]", conn.removedNAT, external)
+	}
+}
+
+func TestEndpointWithNetReportAdvertisesCandidates(t *testing.T) {
+	ctx := context.Background()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	external := netip.MustParseAddrPort("203.0.113.10:4444")
+	ep, err := Bind(ctx,
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		withNetReportRunner(func(ctx context.Context) (*netreport.Report, error) {
+			close(started)
+			select {
+			case <-release:
+				return &netreport.Report{GlobalV4: external}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("netreport runner did not start")
+	}
+
+	remote, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &endpointQNTFakeConn{
+		addr: socket.IPAddr(netip.MustParseAddrPort("192.0.2.20:5678")),
+		done: make(chan struct{}),
+	}
+	events := ep.remotes.AddConnection(remote.Public(), conn)
+	select {
+	case <-events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial path event")
+	}
+
+	close(release)
+	want := []netip.AddrPort{ep.LocalAddr(), external}
+	deadline := time.After(2 * time.Second)
+	for !equalAddrPorts(conn.currentNAT, want) {
+		select {
+		case <-deadline:
+			t.Fatalf("current QNT candidates = %v, want %v", conn.currentNAT, want)
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 

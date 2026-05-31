@@ -44,21 +44,26 @@ type Endpoint struct {
 	mu          sync.Mutex
 	closed      bool
 	externalNAT []netip.AddrPort
+	netReport   netReportRunner
 }
 
 // config holds the options assembled by [Option] values before [Bind].
 type config struct {
-	secretKey    base.SecretKey
-	haveKey      bool
-	alpns        [][]byte
-	bindAddr     netip.AddrPort
-	haveBindAddr bool
-	relayMode    relay.Mode
-	lookup       *AddressLookupServices
+	secretKey       base.SecretKey
+	haveKey         bool
+	alpns           [][]byte
+	bindAddr        netip.AddrPort
+	haveBindAddr    bool
+	relayMode       relay.Mode
+	lookup          *AddressLookupServices
+	enableNetReport bool
+	netReport       netReportRunner
 }
 
 // Option configures an [Endpoint] at [Bind] time.
 type Option func(*config) error
+
+type netReportRunner func(context.Context) (*netreport.Report, error)
 
 // WithSecretKey sets the endpoint's identity. If unset, [Bind] generates a
 // random key.
@@ -108,6 +113,16 @@ func WithAddressLookup(s *AddressLookupServices) Option {
 func WithRelayMode(mode relay.Mode) Option {
 	return func(c *config) error {
 		c.relayMode = mode
+		return nil
+	}
+}
+
+// WithNetReport enables one background net_report run after [Bind]. When relays
+// are configured, the report's QAD-derived global addresses are advertised as
+// local QNT candidates for active remotes.
+func WithNetReport() Option {
+	return func(c *config) error {
+		c.enableNetReport = true
 		return nil
 	}
 }
@@ -190,6 +205,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		quicConf:     quicConf,
 		sessionCache: NewSessionCache(),
 		lookup:       c.lookup,
+		netReport:    endpointNetReportRunner(c, relayMap),
 	}
 	// The per-remote state registry shares the serve context: its actors stop
 	// when the endpoint's recv loop stops. Its resolve hook is backed by the
@@ -213,7 +229,23 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 			return nil, err
 		}
 	}
+	if ep.netReport != nil {
+		go func() { _ = ep.refreshNetReport(serveCtx) }()
+	}
 	return ep, nil
+}
+
+func endpointNetReportRunner(c config, relayMap *relay.Map) netReportRunner {
+	if c.netReport != nil {
+		return c.netReport
+	}
+	if !c.enableNetReport || relayMap.IsEmpty() {
+		return nil
+	}
+	client := netreport.NewClient(relayMap)
+	return func(ctx context.Context) (*netreport.Report, error) {
+		return client.GetReport(ctx, netreport.IfStateDetails{HaveV4: true, HaveV6: true}, false)
+	}
 }
 
 func initialMaxPathID() *uint32 {
@@ -309,6 +341,20 @@ func (e *Endpoint) setExternalNATTraversalCandidates(addrs ...netip.AddrPort) bo
 
 func (e *Endpoint) applyNetReport(report netreport.Report) bool {
 	return e.setExternalNATTraversalCandidates(report.GlobalV4, report.GlobalV6)
+}
+
+func (e *Endpoint) refreshNetReport(ctx context.Context) error {
+	if e.netReport == nil {
+		return nil
+	}
+	report, err := e.netReport(ctx)
+	if report != nil {
+		e.applyNetReport(*report)
+	}
+	if err != nil {
+		return fmt.Errorf("iroh: netreport: %w", err)
+	}
+	return nil
 }
 
 func (e *Endpoint) advertiseNATTraversalCandidates() {
