@@ -186,6 +186,60 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 	}
 }
 
+func TestEndpointInsertRemoveRelay(t *testing.T) {
+	ctx := context.Background()
+	relayServer := newEchoRelayServer(t)
+	relayURL := relayServer.url(t)
+
+	ep, err := Bind(ctx, WithRelayMode(relay.ModeCustom(relay.MapFromURLs(relayURL))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	cfg := RelayConfig{AuthToken: "token"}
+	prev, err := ep.InsertRelay(ctx, relayURL, &cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prev == nil || !prev.URL.Equal(relayURL) {
+		t.Fatalf("InsertRelay previous = %v, want %v", prev, relayURL)
+	}
+
+	removed := ep.RemoveRelay(ctx, relayURL)
+	if removed == nil || removed.AuthToken != "token" {
+		t.Fatalf("RemoveRelay = %+v, want token config", removed)
+	}
+	if got := ep.RemoveRelay(ctx, relayURL); got != nil {
+		t.Fatalf("second RemoveRelay = %+v, want nil", got)
+	}
+
+	prev, err = ep.InsertRelay(ctx, relayURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prev != nil {
+		t.Fatalf("InsertRelay previous after remove = %+v, want nil", prev)
+	}
+}
+
+func TestEndpointInsertRelayNoRelayTransport(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	relayURL := relay.StagingMap().URLs()[0]
+	if _, err := ep.InsertRelay(ctx, relayURL, nil); !errors.Is(err, ErrNoRelay) {
+		t.Fatalf("InsertRelay error = %v, want ErrNoRelay", err)
+	}
+	if got := ep.RemoveRelay(ctx, relayURL); got != nil {
+		t.Fatalf("RemoveRelay = %+v, want nil", got)
+	}
+}
+
 func TestEndpointWithBindAddrOpts(t *testing.T) {
 	ctx := context.Background()
 	defaultRoute := true

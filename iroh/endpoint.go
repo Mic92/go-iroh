@@ -652,6 +652,9 @@ func equalTransportAddrs(a, b []base.TransportAddr) bool {
 // through [Endpoint.HomeRelayStatus].
 type RelayStatus = socket.RelayStatus
 
+// RelayConfig configures a relay server used by an endpoint.
+type RelayConfig = relay.Config
+
 // HomeRelayStatus returns a watcher over the endpoint's home relay connection
 // status. The watched value is nil until a home relay is selected; it updates
 // whenever the home relay or its connection state changes. When relays are
@@ -689,6 +692,48 @@ func (e *Endpoint) Online(ctx context.Context) error {
 // ErrNoRelay is returned by [Endpoint.Online] when the endpoint has no relays
 // configured (relays disabled), so it can never come online via a relay.
 var ErrNoRelay = errors.New("iroh: no relays configured")
+
+// InsertRelay adds or replaces a relay server configuration. It returns the
+// previous config for url when one existed.
+func (e *Endpoint) InsertRelay(ctx context.Context, url base.RelayUrl, cfg *RelayConfig) (*RelayConfig, error) {
+	_ = ctx
+	if e.isClosed() {
+		return nil, ErrEndpointClosed
+	}
+	if e.relay == nil {
+		return nil, ErrNoRelay
+	}
+	next := RelayConfig{URL: url}
+	if cfg != nil {
+		next = *cfg
+		next.URL = url
+	}
+	prev, ok := e.relay.InsertRelay(url, next)
+	e.mu.Lock()
+	e.updateAddrWatchLocked()
+	e.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	return &prev, nil
+}
+
+// RemoveRelay removes a relay server configuration. It returns the removed
+// config, or nil if url was not configured.
+func (e *Endpoint) RemoveRelay(ctx context.Context, url base.RelayUrl) *RelayConfig {
+	_ = ctx
+	if e.isClosed() || e.relay == nil {
+		return nil
+	}
+	prev, ok := e.relay.RemoveRelay(url)
+	e.mu.Lock()
+	e.updateAddrWatchLocked()
+	e.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	return &prev
+}
 
 // ErrEndpointClosed is returned by operations on a closed [Endpoint].
 var ErrEndpointClosed = errors.New("iroh: endpoint closed")

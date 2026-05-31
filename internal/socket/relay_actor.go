@@ -187,6 +187,11 @@ func NewRelayActor(cfg RelayActorConfig) *RelayActor {
 	if dialer == nil {
 		dialer = defaultRelayDialer
 	}
+	if cfg.Map == nil {
+		cfg.Map = relay.NewMap()
+	} else {
+		cfg.Map = cfg.Map.Clone()
+	}
 	return &RelayActor{
 		cfg:     cfg,
 		dialer:  dialer,
@@ -205,6 +210,57 @@ func (a *RelayActor) Recv() <-chan RelayRecvDatagram { return a.recvCh }
 // value is nil until a home relay is set with [RelayActor.SetHomeRelay].
 func (a *RelayActor) HomeRelayStatus() watch.Watcher[*RelayStatus] {
 	return a.homeURL.Watch()
+}
+
+// InsertRelay adds or replaces url's relay configuration, returning the
+// previous config when one existed. If there is no home relay, url becomes home.
+func (a *RelayActor) InsertRelay(url base.RelayUrl, cfg relay.Config) (relay.Config, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return relay.Config{}, false
+	}
+	cfg.URL = url
+	prev, ok := a.cfg.Map.Insert(cfg)
+	if a.home.IsZero() {
+		a.home = url
+		a.homeURL.Set(&RelayStatus{URL: url, State: RelayConnecting}, statusEqual)
+		a.ensureActiveLocked(url, true)
+	}
+	return prev, ok
+}
+
+// RemoveRelay removes url's configuration, returning it when present. Any live
+// non-home connection to url is stopped. If url was the home relay, the next
+// configured relay (if any) becomes home.
+func (a *RelayActor) RemoveRelay(url base.RelayUrl) (relay.Config, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return relay.Config{}, false
+	}
+	prev, ok := a.cfg.Map.Remove(url)
+	if !ok {
+		return relay.Config{}, false
+	}
+	if ar := a.active[url.String()]; ar != nil {
+		ar.stop()
+	}
+	if !a.home.Equal(url) {
+		return prev, true
+	}
+	a.home = base.RelayUrl{}
+	a.homeURL.Set(nil, statusEqual)
+	for _, next := range a.cfg.Map.URLs() {
+		a.home = next
+		a.homeURL.Set(&RelayStatus{URL: next, State: RelayConnecting}, statusEqual)
+		for key, ar := range a.active {
+			ar.setHome(key == next.String())
+		}
+		a.ensureActiveLocked(next, true)
+		break
+	}
+	return prev, true
 }
 
 // Send queues item for delivery to its relay. It never blocks: if the queue is
@@ -366,6 +422,8 @@ func (a *RelayActor) publishStatus(url base.RelayUrl, state RelayConnState, last
 
 // authTokenFor returns the configured auth token for url, if any.
 func (a *RelayActor) authTokenFor(url base.RelayUrl) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.cfg.Map == nil {
 		return ""
 	}

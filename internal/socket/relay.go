@@ -5,6 +5,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayproto"
+	"github.com/tmc/go-iroh/relay"
 	"github.com/tmc/go-iroh/watch"
 )
 
@@ -113,6 +114,16 @@ func (t *RelayTransport) Send(m RelayMappedAddr, p []byte) bool {
 // SetHomeRelay designates url as the endpoint's home relay. See
 // [RelayActor.SetHomeRelay].
 func (t *RelayTransport) SetHomeRelay(url base.RelayUrl) { t.actor.SetHomeRelay(url) }
+
+// InsertRelay adds or replaces a relay config in the underlying actor.
+func (t *RelayTransport) InsertRelay(url base.RelayUrl, cfg relay.Config) (relay.Config, bool) {
+	return t.actor.InsertRelay(url, cfg)
+}
+
+// RemoveRelay removes a relay config from the underlying actor.
+func (t *RelayTransport) RemoveRelay(url base.RelayUrl) (relay.Config, bool) {
+	return t.actor.RemoveRelay(url)
+}
 
 // HomeRelayStatus returns a watcher over the home relay's connection status. See
 // [RelayActor.HomeRelayStatus].
