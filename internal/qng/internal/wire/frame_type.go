@@ -63,8 +63,7 @@ const (
 	FrameTypePathCIDsBlocked        FrameType = 0x3e7c
 
 	// iroh NAT traversal frame types, as used by iroh's noq QUIC fork. See
-	// internal/qng/n0ext/reference/frame.rs:126-135. These constants are defined
-	// for inert wire codecs only; parser admission is a later QNT slice.
+	// internal/qng/n0ext/reference/frame.rs:126-135.
 	FrameTypeAddIPv4Address FrameType = 0x3d7f90
 	FrameTypeAddIPv6Address FrameType = 0x3d7f91
 	FrameTypeReachOutAtIPv4 FrameType = 0x3d7f92
@@ -110,6 +109,19 @@ func (t FrameType) isAddressDiscoveryFrameType() bool {
 	return t == FrameTypeObservedIPv4Addr || t == FrameTypeObservedIPv6Addr
 }
 
+// isNATTraversalFrameType reports whether t is one of the n0 NAT traversal
+// frame types (frame.rs:126-135).
+func (t FrameType) isNATTraversalFrameType() bool {
+	switch t {
+	case FrameTypeAddIPv4Address, FrameTypeAddIPv6Address,
+		FrameTypeReachOutAtIPv4, FrameTypeReachOutAtIPv6,
+		FrameTypeRemoveAddress:
+		return true
+	default:
+		return false
+	}
+}
+
 func (t FrameType) isAllowedAtEncLevel(encLevel protocol.EncryptionLevel) bool {
 	// All multipath frames MUST only be sent in 1-RTT packets; receiving one in
 	// any other packet type is a PROTOCOL_VIOLATION
@@ -120,6 +132,11 @@ func (t FrameType) isAllowedAtEncLevel(encLevel protocol.EncryptionLevel) bool {
 	// OBSERVED_ADDRESS is likewise 1-RTT only (frame.rs Frame::is_1rtt; the
 	// receive path rejects it outside the data space, mod.rs:5343-5347).
 	if t.isAddressDiscoveryFrameType() {
+		return encLevel == protocol.Encryption1RTT
+	}
+	// QNT frames carry NAT traversal state and are only valid in the 1-RTT
+	// packet space, matching the noq frame parser's 1-RTT-only treatment.
+	if t.isNATTraversalFrameType() {
 		return encLevel == protocol.Encryption1RTT
 	}
 	//nolint:exhaustive

@@ -20,6 +20,7 @@ type FrameParser struct {
 	supportsAckFrequency     bool
 	supportsMultipath        bool
 	supportsAddressDiscovery bool
+	supportsNATTraversal     bool
 
 	// To avoid allocating when parsing, keep a single ACK frame struct.
 	// It is used over and over again.
@@ -62,7 +63,8 @@ func (p *FrameParser) ParseType(b []byte, encLevel protocol.EncryptionLevel) (Fr
 			(p.supportsResetStreamAt && ft == FrameTypeResetStreamAt) ||
 			(p.supportsAckFrequency && (ft == FrameTypeAckFrequency || ft == FrameTypeImmediateAck)) ||
 			(p.supportsMultipath && ft.isMultipathFrameType()) ||
-			(p.supportsAddressDiscovery && ft.isAddressDiscoveryFrameType())
+			(p.supportsAddressDiscovery && ft.isAddressDiscoveryFrameType()) ||
+			(p.supportsNATTraversal && ft.isNATTraversalFrameType())
 		if !valid {
 			return 0, parsed, &qerr.TransportError{
 				ErrorCode:    qerr.FrameEncodingError,
@@ -205,6 +207,19 @@ func (p *FrameParser) ParseLessCommonFrame(frameType FrameType, data []byte, v p
 		frame, l, err = parsePathsBlockedFrame(data, v)
 	case FrameTypePathCIDsBlocked:
 		frame, l, err = parsePathCIDsBlockedFrame(data, v)
+	// n0 NAT traversal frames. ParseType only routes here when
+	// supportsNATTraversal is set, so these cases are inert until QNT is
+	// negotiated. The frame type selects the address family.
+	case FrameTypeAddIPv4Address:
+		frame, l, err = parseAddAddressFrame(data, false, v)
+	case FrameTypeAddIPv6Address:
+		frame, l, err = parseAddAddressFrame(data, true, v)
+	case FrameTypeReachOutAtIPv4:
+		frame, l, err = parseReachOutFrame(data, false, v)
+	case FrameTypeReachOutAtIPv6:
+		frame, l, err = parseReachOutFrame(data, true, v)
+	case FrameTypeRemoveAddress:
+		frame, l, err = parseRemoveAddressFrame(data, v)
 	default:
 		err = errUnknownFrameType
 	}
@@ -240,6 +255,13 @@ func (p *FrameParser) SetSupportsMultipath(supported bool) {
 // un-negotiated connections byte-identical.
 func (p *FrameParser) SetSupportsAddressDiscovery(supported bool) {
 	p.supportsAddressDiscovery = supported
+}
+
+// SetSupportsNATTraversal admits the n0 NAT traversal frame types. It is set
+// after the handshake once both peers negotiated the n0_nat_traversal transport
+// parameter. Before that the parser rejects QNT frames as unknown.
+func (p *FrameParser) SetSupportsNATTraversal(supported bool) {
+	p.supportsNATTraversal = supported
 }
 
 func replaceUnexpectedEOF(e error) error {

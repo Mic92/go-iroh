@@ -182,8 +182,10 @@ func TestQNTAddressFramesMalformed(t *testing.T) {
 	}
 }
 
-func TestQNTFramesNotAdmittedByParser(t *testing.T) {
-	p := NewFrameParser(false, false, false, false)
+func TestQNTFrameParserGate(t *testing.T) {
+	off := NewFrameParser(false, false, false, false)
+	on := NewFrameParser(false, false, false, false)
+	on.SetSupportsNATTraversal(true)
 	for _, ft := range []FrameType{
 		FrameTypeAddIPv4Address,
 		FrameTypeAddIPv6Address,
@@ -191,8 +193,91 @@ func TestQNTFramesNotAdmittedByParser(t *testing.T) {
 		FrameTypeReachOutAtIPv6,
 		FrameTypeRemoveAddress,
 	} {
-		if _, _, err := p.ParseType(quicvarint.Append(nil, uint64(ft)), protocol.Encryption1RTT); err == nil {
-			t.Errorf("ParseType admitted QNT frame %#x", uint64(ft))
+		typeBytes := quicvarint.Append(nil, uint64(ft))
+		if _, _, err := off.ParseType(typeBytes, protocol.Encryption1RTT); err == nil {
+			t.Errorf("gate off: ParseType admitted QNT frame %#x", uint64(ft))
+		}
+		got, _, err := on.ParseType(typeBytes, protocol.Encryption1RTT)
+		if err != nil {
+			t.Errorf("gate on: ParseType rejected QNT frame %#x: %v", uint64(ft), err)
+			continue
+		}
+		if got != ft {
+			t.Errorf("gate on: ParseType = %#x, want %#x", uint64(got), uint64(ft))
+		}
+		if _, _, err := on.ParseType(typeBytes, protocol.EncryptionHandshake); err == nil {
+			t.Errorf("gate on: ParseType admitted QNT frame %#x outside 1-RTT", uint64(ft))
+		}
+	}
+}
+
+func TestQNTFrameParserDispatch(t *testing.T) {
+	p := NewFrameParser(false, false, false, false)
+	p.SetSupportsNATTraversal(true)
+	tests := []struct {
+		name string
+		f    Frame
+		ok   func(Frame) bool
+	}{
+		{
+			name: "add v4",
+			f:    &AddAddressFrame{SeqNo: 1, Addr: netip.MustParseAddr("192.0.2.1"), Port: 1000},
+			ok: func(f Frame) bool {
+				g, ok := f.(*AddAddressFrame)
+				return ok && g.SeqNo == 1 && g.Addr == netip.MustParseAddr("192.0.2.1") && g.Port == 1000
+			},
+		},
+		{
+			name: "add v6",
+			f:    &AddAddressFrame{SeqNo: 2, Addr: netip.MustParseAddr("2001:db8::1"), Port: 1001},
+			ok: func(f Frame) bool {
+				g, ok := f.(*AddAddressFrame)
+				return ok && g.SeqNo == 2 && g.Addr == netip.MustParseAddr("2001:db8::1") && g.Port == 1001
+			},
+		},
+		{
+			name: "reach out v4",
+			f:    &ReachOutFrame{Round: 3, Addr: netip.MustParseAddr("198.51.100.7"), Port: 4433},
+			ok: func(f Frame) bool {
+				g, ok := f.(*ReachOutFrame)
+				return ok && g.Round == 3 && g.Addr == netip.MustParseAddr("198.51.100.7") && g.Port == 4433
+			},
+		},
+		{
+			name: "reach out v6",
+			f:    &ReachOutFrame{Round: 4, Addr: netip.MustParseAddr("2001:db8::2"), Port: 4434},
+			ok: func(f Frame) bool {
+				g, ok := f.(*ReachOutFrame)
+				return ok && g.Round == 4 && g.Addr == netip.MustParseAddr("2001:db8::2") && g.Port == 4434
+			},
+		},
+		{
+			name: "remove",
+			f:    &RemoveAddressFrame{SeqNo: 5},
+			ok: func(f Frame) bool {
+				g, ok := f.(*RemoveAddressFrame)
+				return ok && g.SeqNo == 5
+			},
+		},
+	}
+	for _, tt := range tests {
+		b, err := tt.f.Append(nil, protocol.Version1)
+		if err != nil {
+			t.Fatalf("%s: Append: %v", tt.name, err)
+		}
+		ft, n, err := p.ParseType(b, protocol.Encryption1RTT)
+		if err != nil {
+			t.Fatalf("%s: ParseType: %v", tt.name, err)
+		}
+		got, m, err := p.ParseLessCommonFrame(ft, b[n:], protocol.Version1)
+		if err != nil {
+			t.Fatalf("%s: ParseLessCommonFrame: %v", tt.name, err)
+		}
+		if n+m != len(b) {
+			t.Fatalf("%s: consumed %d bytes, want %d", tt.name, n+m, len(b))
+		}
+		if !tt.ok(got) {
+			t.Fatalf("%s: parsed %#v", tt.name, got)
 		}
 	}
 }
