@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/base"
+	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
 )
 
@@ -82,7 +83,9 @@ func TestEndpointDirectEcho(t *testing.T) {
 	if !conn.MultipathNegotiated() {
 		t.Error("client did not negotiate multipath")
 	}
-	if err := client.remotes.Actor(server.ID()).TriggerHolepunch(); err != nil && !errors.Is(err, socket.ErrExtensionNotNegotiated) {
+	if err := client.remotes.Actor(server.ID()).TriggerHolepunch(); err != nil &&
+		!errors.Is(err, socket.ErrExtensionNotNegotiated) &&
+		!errors.Is(err, quic.ErrNATTraversalNotEnoughAddresses) {
 		t.Fatalf("TriggerHolepunch: %v", err)
 	}
 

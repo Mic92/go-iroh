@@ -2,8 +2,8 @@ package iroh
 
 import (
 	"context"
-	"errors"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +12,7 @@ import (
 	"github.com/tmc/go-iroh/internal/netreport"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
+	"github.com/tmc/go-iroh/relay"
 )
 
 func withNetReportRunner(run netReportRunner) Option {
@@ -347,11 +348,165 @@ func TestEndpointWithNetReportAdvertisesCandidates(t *testing.T) {
 	close(release)
 	want := []netip.AddrPort{ep.LocalAddr(), external}
 	deadline := time.After(2 * time.Second)
-	for !equalAddrPorts(conn.currentNAT, want) {
+	for !equalAddrPorts(conn.currentNATTraversalCandidates(), want) {
 		select {
 		case <-deadline:
-			t.Fatalf("current QNT candidates = %v, want %v", conn.currentNAT, want)
+			t.Fatalf("current QNT candidates = %v, want %v", conn.currentNATTraversalCandidates(), want)
 		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func TestEndpointQADCandidatesOpenSelectedQNTRouteDataPath(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	relayServer := newEchoRelayServer(t)
+	relayURL := relayServer.url(t)
+	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
+
+	const alpn = "iroh-qad-qnt-data-path/0"
+	server, err := Bind(ctx, WithALPNs([]byte(alpn)), WithRelayMode(mode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+	client, err := Bind(ctx, WithRelayMode(mode))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	if err := server.Online(ctx); err != nil {
+		t.Fatalf("server online: %v", err)
+	}
+	if err := client.Online(ctx); err != nil {
+		t.Fatalf("client online: %v", err)
+	}
+
+	serverQAD := loopbackQADCandidate(server)
+	clientQAD := loopbackQADCandidate(client)
+	if !server.applyNetReport(netreport.Report{GlobalV6: serverQAD}) {
+		t.Fatal("server applyNetReport = false, want QAD candidate change")
+	}
+	if !client.applyNetReport(netreport.Report{GlobalV6: clientQAD}) {
+		t.Fatal("client applyNetReport = false, want QAD candidate change")
+	}
+	if got, want := server.localNATTraversalCandidates(), []netip.AddrPort{serverQAD}; !equalAddrPorts(got, want) {
+		t.Fatalf("server localNATTraversalCandidates = %v, want QAD-only %v", got, want)
+	}
+	if got, want := client.localNATTraversalCandidates(), []netip.AddrPort{clientQAD}; !equalAddrPorts(got, want) {
+		t.Fatalf("client localNATTraversalCandidates = %v, want QAD-only %v", got, want)
+	}
+
+	type acceptResult struct {
+		conn *Conn
+		err  error
+	}
+	accepted := make(chan acceptResult, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		accepted <- acceptResult{conn: conn, err: err}
+	}()
+
+	conn, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()).WithRelayURL(relayURL), []byte(alpn))
+	if err != nil {
+		t.Fatalf("relay Connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+	res := <-accepted
+	if res.err != nil {
+		t.Fatalf("server Accept: %v", res.err)
+	}
+	serverConn := res.conn
+	defer serverConn.CloseWithError(0, "")
+
+	if !conn.MultipathNegotiated() || !serverConn.MultipathNegotiated() {
+		t.Fatalf("MultipathNegotiated client=%v server=%v, want both true", conn.MultipathNegotiated(), serverConn.MultipathNegotiated())
+	}
+
+	clientActor := client.remotes.Actor(server.ID())
+	waitForSelectedPath(t, ctx, clientActor, socket.RelayAddr(relayURL, server.ID()))
+	waitForConnNATAddress(t, ctx, conn.qc, serverQAD)
+	waitForConnNATAddress(t, ctx, serverConn.qc, clientQAD)
+
+	if err := clientActor.TriggerHolepunch(); err != nil {
+		t.Fatalf("TriggerHolepunch: %v", err)
+	}
+	path := waitForQNTRoutePath(t, ctx, conn.qc, serverQAD)
+	waitForSelectedPath(t, ctx, clientActor, socket.IPAddr(serverQAD))
+
+	const msg = "qad-qnt-route-datagram"
+	if err := conn.qc.SendDatagramOnPath(path.ID, []byte(msg)); err != nil {
+		t.Fatalf("SendDatagramOnPath(%d): %v", path.ID, err)
+	}
+	got, err := serverConn.ReadDatagram(ctx)
+	if err != nil {
+		t.Fatalf("server ReadDatagram: %v", err)
+	}
+	if string(got) != msg {
+		t.Fatalf("server datagram = %q, want %q", got, msg)
+	}
+}
+
+func loopbackQADCandidate(e *Endpoint) netip.AddrPort {
+	return netip.AddrPortFrom(netip.IPv6Loopback(), e.LocalAddr().Port())
+}
+
+func waitForConnNATAddress(t *testing.T, ctx context.Context, c *quic.Conn, want netip.AddrPort) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		addrs, err := c.NATTraversalAddresses()
+		if err != nil {
+			t.Fatalf("NATTraversalAddresses: %v", err)
+		}
+		for _, addr := range addrs {
+			if addr == want {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for remote NAT address %v; last addrs=%v", want, addrs)
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForQNTRoutePath(t *testing.T, ctx context.Context, c *quic.Conn, want netip.AddrPort) quic.PathInfo {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		paths := c.Paths()
+		for _, p := range paths {
+			if p.ID != 0 && p.Validated && p.RemoteAddr == want {
+				return p
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for validated QNT route path %v; last paths=%v closeCause=%v", want, paths, context.Cause(c.Context()))
+		case <-ticker.C:
+		}
+	}
+}
+
+func waitForSelectedPath(t *testing.T, ctx context.Context, a *socket.RemoteStateActor, want socket.Addr) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if got, ok := a.SelectedPath(); ok && got.String() == want.String() {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			got, ok := a.SelectedPath()
+			t.Fatalf("timed out waiting for selected path %s; last selected=%v ok=%v", want, got, ok)
+		case <-ticker.C:
 		}
 	}
 }
@@ -359,6 +514,7 @@ func TestEndpointWithNetReportAdvertisesCandidates(t *testing.T) {
 type endpointQNTFakeConn struct {
 	addr       socket.Addr
 	done       chan struct{}
+	mu         sync.Mutex
 	natAddrs   []netip.AddrPort
 	removedNAT []netip.AddrPort
 	currentNAT []netip.AddrPort
@@ -369,11 +525,15 @@ func (c *endpointQNTFakeConn) Done() <-chan struct{}      { return c.done }
 func (c *endpointQNTFakeConn) RemoteAddr() socket.Addr    { return c.addr }
 func (c *endpointQNTFakeConn) MultipathNegotiated() bool  { return true }
 func (c *endpointQNTFakeConn) AddNATTraversalAddress(addr netip.AddrPort) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.natAddrs = append(c.natAddrs, addr)
 	c.currentNAT = appendUniqueNATTraversalCandidate(c.currentNAT, addr)
 	return nil
 }
 func (c *endpointQNTFakeConn) RemoveNATTraversalAddress(addr netip.AddrPort) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.removedNAT = append(c.removedNAT, addr)
 	var next []netip.AddrPort
 	for _, cur := range c.currentNAT {
@@ -383,6 +543,11 @@ func (c *endpointQNTFakeConn) RemoveNATTraversalAddress(addr netip.AddrPort) err
 	}
 	c.currentNAT = next
 	return nil
+}
+func (c *endpointQNTFakeConn) currentNATTraversalCandidates() []netip.AddrPort {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]netip.AddrPort(nil), c.currentNAT...)
 }
 
 func TestEndpointRegisterConnSeedsQNTCandidatesOpportunistically(t *testing.T) {
@@ -429,8 +594,8 @@ func TestEndpointRegisterConnSeedsQNTCandidatesOpportunistically(t *testing.T) {
 	if !conn.MultipathNegotiated() {
 		t.Fatal("MultipathNegotiated = false, want true so registerConn attempts QNT handoff")
 	}
-	if err := conn.qc.AddNATTraversalAddress(candidates[0]); !errors.Is(err, quic.ErrNATTraversalNotNegotiated) {
-		t.Fatalf("AddNATTraversalAddress = %v, want %v", err, quic.ErrNATTraversalNotNegotiated)
+	if err := conn.qc.AddNATTraversalAddress(candidates[0]); err != nil {
+		t.Fatalf("AddNATTraversalAddress: %v", err)
 	}
 
 	select {

@@ -157,10 +157,11 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	}
 
 	quicConf := &quic.Config{
-		KeepAlivePeriod:  HeartbeatInterval,
-		MaxIdleTimeout:   RelayPathMaxIdleTimeout,
-		EnableDatagrams:  true,
-		InitialMaxPathID: initialMaxPathID(),
+		KeepAlivePeriod:                HeartbeatInterval,
+		MaxIdleTimeout:                 RelayPathMaxIdleTimeout,
+		EnableDatagrams:                true,
+		InitialMaxPathID:               initialMaxPathID(),
+		MaxRemoteNATTraversalAddresses: maxRemoteNATTraversalAddresses(),
 		// Accept 0-RTT early data on incoming connections that resume a prior
 		// session. Allow0RTT is ignored for dialed connections, so sharing this
 		// config with Connect is safe. Mirrors the Rust server enabling early
@@ -250,6 +251,11 @@ func endpointNetReportRunner(c config, relayMap *relay.Map) netReportRunner {
 
 func initialMaxPathID() *uint32 {
 	v := uint32(MaxMultipathPaths)
+	return &v
+}
+
+func maxRemoteNATTraversalAddresses() *uint8 {
+	v := uint8(MaxQNTAddresses)
 	return &v
 }
 
