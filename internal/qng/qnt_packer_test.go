@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"testing"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/handshake"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
@@ -235,6 +236,39 @@ func TestSendPathBufferDropsInvalidQNTRoute(t *testing.T) {
 	}
 	if buf.refCount != 0 {
 		t.Fatalf("packet buffer refCount = %d, want 0 after invalid route drop", buf.refCount)
+	}
+}
+
+func TestSendPathPacketSkipsInvalidQNTRouteBeforePack(t *testing.T) {
+	c := &Conn{}
+	st := &pathOpenState{qntRoute: netip.MustParseAddrPort("198.51.100.7:0")}
+	frame := ackhandler.Frame{Frame: &wire.PathChallengeFrame{}}
+
+	err := c.sendPathPacket(
+		protocol.PathID(1),
+		protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
+		st,
+		[]ackhandler.Frame{frame},
+		monotime.Now(),
+	)
+	if err != nil {
+		t.Fatalf("sendPathPacket: %v", err)
+	}
+}
+
+func TestSendOnPathSkipsInvalidQNTRouteBeforePack(t *testing.T) {
+	data := [][]byte{[]byte("queued")}
+	st := &pathOpenState{
+		qntRoute: netip.MustParseAddrPort("198.51.100.7:0"),
+		sendData: data,
+	}
+
+	err := (&Conn{}).sendOnPath(protocol.PathID(1), st, monotime.Now())
+	if err != nil {
+		t.Fatalf("sendOnPath: %v", err)
+	}
+	if len(st.sendData) != 1 || string(st.sendData[0]) != "queued" {
+		t.Fatalf("sendData = %q, want queued data preserved", st.sendData)
 	}
 }
 

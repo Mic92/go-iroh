@@ -529,6 +529,9 @@ func (c *Conn) sendPathChallenge(pid protocol.PathID, connID protocol.Connection
 // nothing to pack. Application data riding pid carries its bytes-in-flight on
 // pid's own controller, so it is driven down by the peer's PATH_ACK{pid}.
 func (c *Conn) sendOnPath(pid protocol.PathID, st *pathOpenState, now monotime.Time) error {
+	if hasInvalidQNTRoute(st) {
+		return nil
+	}
 	mode := c.sentPacketHandler.SendModeForPath(now, pid)
 	if mode != ackhandler.SendAny && mode != ackhandler.SendAck {
 		return nil
@@ -572,6 +575,9 @@ func (c *Conn) sendOnPath(pid protocol.PathID, st *pathOpenState, now monotime.T
 // must not be coalesced with path-0 data because it has to ride the new path's
 // connection ID so the peer attributes the validation to pid.
 func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID, st *pathOpenState, frames []ackhandler.Frame, now monotime.Time) error {
+	if hasInvalidQNTRoute(st) {
+		return nil
+	}
 	buf := getPacketBuffer()
 	ecn := c.multipathECNMode()
 	p, err := c.packer.PackPathFramesPacket(buf, pid, connID, frames, c.maxPacketSize(), c.version)
@@ -596,6 +602,10 @@ func (c *Conn) sendPathBuffer(buf *packetBuffer, ecn protocol.ECN, st *pathOpenS
 		return
 	}
 	c.sendQueue.Send(buf, 0, ecn)
+}
+
+func hasInvalidQNTRoute(st *pathOpenState) bool {
+	return st != nil && st.qntRoute.IsValid() && qntProbeUDPAddr(st.qntRoute) == nil
 }
 
 func (c *Conn) multipathECNMode() protocol.ECN {
