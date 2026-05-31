@@ -2553,12 +2553,12 @@ func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame, source netip.A
 	}
 	switch c.perspective {
 	case protocol.PerspectiveClient:
-		if c.qntNegotiated() && c.pathManagerOutgoing.Load() == nil {
+		if c.qntNegotiated() && c.pathManagerOutgoing.Load() == nil && c.qntAcceptsUnmatchedPathResponse(source) {
 			return nil
 		}
 		return c.handlePathResponseFrameClient(f)
 	case protocol.PerspectiveServer:
-		if c.qntNegotiated() && c.pathManager == nil {
+		if c.qntNegotiated() && c.pathManager == nil && c.qntAcceptsUnmatchedPathResponse(source) {
 			return nil
 		}
 		return c.handlePathResponseFrameServer(f)

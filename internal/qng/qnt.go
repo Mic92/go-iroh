@@ -333,6 +333,32 @@ func (c *Conn) qntQueueValidatedProbe(addr netip.AddrPort) bool {
 	return true
 }
 
+func (c *Conn) qntAcceptsUnmatchedPathResponse(source netip.AddrPort) bool {
+	source = canonicalNATTraversalAddr(source)
+	if !source.IsValid() {
+		return false
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if slices.Contains(st.pendingProbes, source) || slices.Contains(st.validatedProbes, source) {
+		return true
+	}
+	for _, addr := range st.sentProbes {
+		if addr == source {
+			return true
+		}
+	}
+	if c.multipathOut != nil {
+		for _, path := range c.multipathOut.paths {
+			if path.qntRoute == source {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Conn) qntPopValidatedProbe() (netip.AddrPort, bool) {
 	st := c.qntLocalState()
 	st.mu.Lock()

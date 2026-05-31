@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
@@ -982,6 +983,39 @@ func TestQNTPathResponseHandlerReceivesSourceAddress(t *testing.T) {
 	}
 	if _, ok := c.qntConsumePathResponse(frame, source); ok {
 		t.Fatal("PATH_RESPONSE from matching source was not consumed by QNT hook")
+	}
+}
+
+func TestQNTUnmatchedPathResponseRequiresQNTSource(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.perspective = protocol.PerspectiveClient
+	frame := &wire.PathResponseFrame{Data: [8]byte{1, 2, 3, 4, 5, 6, 7, 8}}
+	source := netip.MustParseAddrPort("198.51.100.1:1234")
+
+	err := c.handlePathResponseFrame(frame, source)
+	if err == nil || !strings.Contains(err.Error(), "unexpected PATH_RESPONSE frame") {
+		t.Fatalf("unmatched PATH_RESPONSE err = %v, want unexpected PATH_RESPONSE", err)
+	}
+}
+
+func TestQNTUnmatchedPathResponseAllowsQNTDuplicateSource(t *testing.T) {
+	c, _ := newQNTRoutePathTestConn(t)
+	c.perspective = protocol.PerspectiveClient
+	limit := uint8(8)
+	c.config.MaxRemoteNATTraversalAddresses = &limit
+	c.peerParams.MaxRemoteNATTraversalAddresses = &limit
+	c.multipathManager.handleMaxPathID(protocol.PathID(4))
+	source := netip.MustParseAddrPort("198.51.100.1:1234")
+
+	if !c.qntQueueValidatedProbe(source) {
+		t.Fatal("qntQueueValidatedProbe = false, want true")
+	}
+	if _, _, ok, err := c.qntOpenValidatedPathLocked(); err != nil || !ok {
+		t.Fatalf("qntOpenValidatedPathLocked = %v, %v, want opened path", ok, err)
+	}
+	frame := &wire.PathResponseFrame{Data: [8]byte{1, 2, 3, 4, 5, 6, 7, 8}}
+	if err := c.handlePathResponseFrame(frame, source); err != nil {
+		t.Fatalf("duplicate QNT PATH_RESPONSE err = %v, want nil", err)
 	}
 }
 
