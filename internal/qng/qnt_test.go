@@ -162,6 +162,51 @@ func TestQNTLocalAddressQueuesAddAddressFrame(t *testing.T) {
 	}
 }
 
+func TestQNTLocalAddressQueuesRemoveAddressFrame(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.framer = newFramer(nil)
+	c.sendingScheduled = make(chan struct{}, 1)
+	addr1 := netip.MustParseAddrPort("[::ffff:192.0.2.1]:1234")
+	addr2 := netip.MustParseAddrPort("192.0.2.2:4321")
+	absent := netip.MustParseAddrPort("192.0.2.3:4321")
+
+	if err := c.AddNATTraversalAddress(addr1); err != nil {
+		t.Fatalf("first AddNATTraversalAddress: %v", err)
+	}
+	if err := c.AddNATTraversalAddress(addr2); err != nil {
+		t.Fatalf("second AddNATTraversalAddress: %v", err)
+	}
+	select {
+	case <-c.sendingScheduled:
+	default:
+	}
+	if err := c.RemoveNATTraversalAddress(addr1); err != nil {
+		t.Fatalf("RemoveNATTraversalAddress: %v", err)
+	}
+	if err := c.RemoveNATTraversalAddress(addr1); err != nil {
+		t.Fatalf("duplicate RemoveNATTraversalAddress: %v", err)
+	}
+	if err := c.RemoveNATTraversalAddress(absent); err != nil {
+		t.Fatalf("absent RemoveNATTraversalAddress: %v", err)
+	}
+
+	frames := queuedRemoveAddressFrames(c)
+	if len(frames) != 1 {
+		t.Fatalf("queued %d REMOVE_ADDRESS frames, want 1", len(frames))
+	}
+	if frames[0].SeqNo != 0 {
+		t.Fatalf("REMOVE_ADDRESS seq = %d, want 0", frames[0].SeqNo)
+	}
+	if got := c.qntLocalNATTraversalAddresses(); !slices.Equal(got, []netip.AddrPort{addr2}) {
+		t.Fatalf("local addresses after remove = %v, want [%v]", got, addr2)
+	}
+	select {
+	case <-c.sendingScheduled:
+	default:
+		t.Fatal("RemoveNATTraversalAddress did not schedule sending")
+	}
+}
+
 func TestQNTLocalAddressStateFailsClosedWhenNotNegotiated(t *testing.T) {
 	addr := netip.MustParseAddrPort("192.0.2.1:1234")
 	add := &wire.AddAddressFrame{SeqNo: 1, Addr: addr.Addr(), Port: addr.Port()}
@@ -460,6 +505,18 @@ func queuedAddAddressFrames(c *Conn) []*wire.AddAddressFrame {
 	for _, f := range c.framer.controlFrames {
 		if af, ok := f.(*wire.AddAddressFrame); ok {
 			frames = append(frames, af)
+		}
+	}
+	return frames
+}
+
+func queuedRemoveAddressFrames(c *Conn) []*wire.RemoveAddressFrame {
+	c.framer.controlFrameMutex.Lock()
+	defer c.framer.controlFrameMutex.Unlock()
+	var frames []*wire.RemoveAddressFrame
+	for _, f := range c.framer.controlFrames {
+		if rf, ok := f.(*wire.RemoveAddressFrame); ok {
+			frames = append(frames, rf)
 		}
 	}
 	return frames

@@ -38,9 +38,14 @@ type NATTraversalCandidate struct {
 type qntLocalState struct {
 	mu                    sync.Mutex
 	remoteOnce            sync.Once
-	local                 []netip.AddrPort
+	local                 []qntLocalAddress
 	nextLocalAddressSeqNo uint64
 	remote                *qntRemoteAddressState
+}
+
+type qntLocalAddress struct {
+	addr netip.AddrPort
+	seq  uint64
 }
 
 // AddNATTraversalAddress adds a local QNT candidate address.
@@ -55,7 +60,9 @@ func (c *Conn) AddNATTraversalAddress(addr netip.AddrPort) error {
 	st := c.qntLocalState()
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if slices.Contains(st.local, addr) {
+	if slices.ContainsFunc(st.local, func(a qntLocalAddress) bool {
+		return a.addr == addr
+	}) {
 		return nil
 	}
 	if len(st.local) >= c.qntLocalAddressLimit() {
@@ -63,7 +70,7 @@ func (c *Conn) AddNATTraversalAddress(addr netip.AddrPort) error {
 	}
 	seq := st.nextLocalAddressSeqNo
 	st.nextLocalAddressSeqNo++
-	st.local = append(st.local, addr)
+	st.local = append(st.local, qntLocalAddress{addr: addr, seq: seq})
 	c.queueLocalAddAddressFrame(seq, addr)
 	return nil
 }
@@ -79,10 +86,17 @@ func (c *Conn) RemoveNATTraversalAddress(addr netip.AddrPort) error {
 	}
 	st := c.qntLocalState()
 	st.mu.Lock()
-	defer st.mu.Unlock()
-	st.local = slices.DeleteFunc(st.local, func(a netip.AddrPort) bool {
-		return a == addr
+	i := slices.IndexFunc(st.local, func(a qntLocalAddress) bool {
+		return a.addr == addr
 	})
+	if i < 0 {
+		st.mu.Unlock()
+		return nil
+	}
+	seq := st.local[i].seq
+	st.local = slices.Delete(st.local, i, i+1)
+	st.mu.Unlock()
+	c.queueLocalRemoveAddressFrame(seq)
 	return nil
 }
 
@@ -126,7 +140,11 @@ func (c *Conn) qntLocalNATTraversalAddresses() []netip.AddrPort {
 	st := c.qntLocalState()
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	return slices.Clone(st.local)
+	addrs := make([]netip.AddrPort, 0, len(st.local))
+	for _, a := range st.local {
+		addrs = append(addrs, a.addr)
+	}
+	return addrs
 }
 
 func (c *Conn) queueLocalAddAddressFrame(seq uint64, addr netip.AddrPort) {
@@ -138,6 +156,13 @@ func (c *Conn) queueLocalAddAddressFrame(seq uint64, addr netip.AddrPort) {
 		Addr:  addr.Addr(),
 		Port:  addr.Port(),
 	})
+}
+
+func (c *Conn) queueLocalRemoveAddressFrame(seq uint64) {
+	if c.framer == nil {
+		return
+	}
+	c.queueControlFrame(&wire.RemoveAddressFrame{SeqNo: seq})
 }
 
 func (c *Conn) addRemoteNATTraversalAddress(addr netip.AddrPort) error {
