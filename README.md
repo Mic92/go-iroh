@@ -19,22 +19,25 @@ Rust→Go idiom conventions used throughout.
 | `internal/pkarr` | `iroh-dns` (pkarr) | ported, tested |
 | `dns` | `iroh-dns` | ported, tested (DoH/DoT, staggered resolution deferred) |
 | `internal/relayproto` | `iroh-relay/protos` | ported, tested (golden wire snapshots) |
-| `internal/relayclient` | `iroh-relay/client` | ported, tested (WSS + X.509, wire-compatible) |
+| `internal/relayclient` | `iroh-relay/client` | ported, tested (WS/WSS + X.509, wire-compatible) |
+| `internal/relayserver` | `iroh-relay` server | ported, tested (relay datagram forwarding) |
 | `relay` | `iroh-relay` (public) | ported, tested |
 | `watch` | `n0_watcher` | ported, tested |
-| `internal/itls` | `iroh/src/tls` | vendored crypto/tls compiles + handshakes; RFC 7250 patch in progress |
-| `iroh` (root) | `iroh` | planned (after RFC 7250 TLS) |
+| `internal/itls` | `iroh/src/tls` | RFC 7250 raw-public-key TLS ported, tested |
+| `internal/qng` | `noq` / quic-go | forked for RFC 7250, multipath, QNT, QAD; tested |
+| `iroh` (root) | `iroh` | Endpoint/Conn/Router APIs ported, tested |
+| `cmd/iroh-relay` | `iroh-relay` binary | minimal relay server |
+| `cmd/iroh-dns-server` | `iroh-dns-server` binary | minimal pkarr HTTP server |
 
 ## Wire compatibility
 
-Connections to relays, pkarr, and DNS use standard WebPKI TLS and are
-wire-compatible with upstream iroh today. The direct peer-to-peer QUIC handshake
-uses TLS 1.3 Raw Public Keys (RFC 7250) with **mutual** authentication, which
-Go's `crypto/tls` does not support and quic-go drives directly with no pluggable
-seam. The approach (see `internal/itls/`): vendor `crypto/tls` out-of-tree
-(done — it compiles via small shims for the GOROOT-private dependencies and
-completes a TLS 1.3 handshake), patch it for RFC 7250 (in progress), and drive
-it from a thin quic-go fork. See `package-spec.md` and `internal/itls/DESIGN.md`.
+Connections to relays, pkarr, and DNS use standard WebPKI TLS. Direct
+peer-to-peer QUIC uses TLS 1.3 Raw Public Keys (RFC 7250) with mutual
+authentication. Go's `crypto/tls` does not support RFC 7250, so go-iroh carries
+`internal/itls/tls` and drives it from the `internal/qng` quic-go fork.
+
+The main local gates are in `go test ./...`. Live Rust interop gates are opt-in
+because they require a checked-out and built Rust iroh tree.
 
 ## License
 
