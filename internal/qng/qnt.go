@@ -6,6 +6,8 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+
+	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
 // ErrNATTraversalNotNegotiated is returned by n0 QUIC NAT traversal operations
@@ -23,6 +25,9 @@ var ErrNATTraversalNotEnoughAddresses = errors.New("quic: not enough nat travers
 // but the probe-sending state machine is still absent.
 var ErrNATTraversalRoundNotImplemented = errors.New("quic: nat traversal round not implemented")
 
+// ErrNATTraversalTooManyAddresses is returned when a QNT address set is full.
+var ErrNATTraversalTooManyAddresses = errors.New("quic: too many nat traversal addresses")
+
 // NATTraversalCandidate is a local address the application believes is worth
 // advertising to the peer for n0 QUIC NAT traversal. qng owns address-family
 // canonicalization before any address is put on the wire.
@@ -31,12 +36,11 @@ type NATTraversalCandidate struct {
 }
 
 type qntLocalState struct {
-	mu     sync.Mutex
-	local  []netip.AddrPort
-	remote []netip.AddrPort
+	mu         sync.Mutex
+	remoteOnce sync.Once
+	local      []netip.AddrPort
+	remote     *qntRemoteAddressState
 }
-
-var qntLocalStates sync.Map // map[*Conn]*qntLocalState
 
 // AddNATTraversalAddress adds a local QNT candidate address.
 func (c *Conn) AddNATTraversalAddress(addr netip.AddrPort) error {
@@ -52,6 +56,9 @@ func (c *Conn) AddNATTraversalAddress(addr netip.AddrPort) error {
 	defer st.mu.Unlock()
 	if slices.Contains(st.local, addr) {
 		return nil
+	}
+	if len(st.local) >= c.qntLocalAddressLimit() {
+		return ErrNATTraversalTooManyAddresses
 	}
 	st.local = append(st.local, addr)
 	return nil
@@ -86,10 +93,11 @@ func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort,
 	st := c.qntLocalState()
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if len(st.local) == 0 || len(st.remote) == 0 {
+	remote := st.remote.addresses()
+	if len(st.local) == 0 || len(remote) == 0 {
 		return nil, ErrNATTraversalNotEnoughAddresses
 	}
-	return slices.Clone(st.remote), ErrNATTraversalRoundNotImplemented
+	return remote, ErrNATTraversalRoundNotImplemented
 }
 
 // NATTraversalAddresses returns the remote ADD_ADDRESS set known to qng.
@@ -100,12 +108,14 @@ func (c *Conn) NATTraversalAddresses() ([]netip.AddrPort, error) {
 	st := c.qntLocalState()
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	return slices.Clone(st.remote), nil
+	return st.remote.addresses(), nil
 }
 
 func (c *Conn) qntLocalState() *qntLocalState {
-	st, _ := qntLocalStates.LoadOrStore(c, &qntLocalState{})
-	return st.(*qntLocalState)
+	c.qnt.remoteOnce.Do(func() {
+		c.qnt.remote = newQNTRemoteAddressState(c.qntRemoteAddressLimit())
+	})
+	return &c.qnt
 }
 
 func (c *Conn) qntLocalNATTraversalAddresses() []netip.AddrPort {
@@ -116,20 +126,50 @@ func (c *Conn) qntLocalNATTraversalAddresses() []netip.AddrPort {
 }
 
 func (c *Conn) addRemoteNATTraversalAddress(addr netip.AddrPort) error {
+	addr = canonicalNATTraversalAddr(addr)
+	if !addr.IsValid() {
+		return nil
+	}
+	return c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 0,
+		Addr:  addr.Addr(),
+		Port:  addr.Port(),
+	})
+}
+
+func (c *Conn) handleAddAddressFrame(frame *wire.AddAddressFrame) error {
+	return c.addRemoteNATTraversalAddressFrame(frame)
+}
+
+func (c *Conn) handleRemoveAddressFrame(frame *wire.RemoveAddressFrame) error {
+	return c.removeRemoteNATTraversalAddressFrame(frame)
+}
+
+func (c *Conn) addRemoteNATTraversalAddressFrame(frame *wire.AddAddressFrame) error {
 	if !c.qntAPINegotiated() {
 		return ErrNATTraversalNotNegotiated
 	}
-	addr = canonicalNATTraversalAddr(addr)
-	if !addr.IsValid() {
+	if frame == nil {
 		return nil
 	}
 	st := c.qntLocalState()
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if slices.Contains(st.remote, addr) {
+	_, _, err := st.remote.add(frame)
+	return err
+}
+
+func (c *Conn) removeRemoteNATTraversalAddressFrame(frame *wire.RemoveAddressFrame) error {
+	if !c.qntAPINegotiated() {
+		return ErrNATTraversalNotNegotiated
+	}
+	if frame == nil {
 		return nil
 	}
-	st.remote = append(st.remote, addr)
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	st.remote.remove(frame)
 	return nil
 }
 
@@ -145,4 +185,21 @@ func (c *Conn) qntAPINegotiated() bool {
 		return false
 	}
 	return c.qntNegotiated()
+}
+
+func (c *Conn) qntRemoteAddressLimit() uint8 {
+	if c == nil || c.config == nil {
+		return 0
+	}
+	if p := maxRemoteNATTraversalAddressesParam(c.config.MaxRemoteNATTraversalAddresses); p != nil {
+		return *p
+	}
+	return 0
+}
+
+func (c *Conn) qntLocalAddressLimit() int {
+	if c == nil || c.peerParams == nil || c.peerParams.MaxRemoteNATTraversalAddresses == nil {
+		return 0
+	}
+	return int(*c.peerParams.MaxRemoteNATTraversalAddresses)
 }

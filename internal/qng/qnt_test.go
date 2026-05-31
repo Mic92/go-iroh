@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 	"testing"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
@@ -98,8 +99,39 @@ func TestQNTLocalAddressState(t *testing.T) {
 	}
 }
 
+func TestQNTLocalAddressStatePerConnection(t *testing.T) {
+	c1 := newNegotiatedQNTConn(8, 16)
+	c2 := newNegotiatedQNTConn(8, 16)
+	addr := netip.MustParseAddrPort("192.0.2.1:1234")
+	if err := c1.AddNATTraversalAddress(addr); err != nil {
+		t.Fatalf("AddNATTraversalAddress: %v", err)
+	}
+	if got := c2.qntLocalNATTraversalAddresses(); len(got) != 0 {
+		t.Fatalf("second connection local addresses = %v, want none", got)
+	}
+}
+
+func TestQNTLocalAddressStateLimit(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 1)
+	if err := c.AddNATTraversalAddress(netip.MustParseAddrPort("192.0.2.1:1234")); err != nil {
+		t.Fatalf("first AddNATTraversalAddress: %v", err)
+	}
+	if err := c.AddNATTraversalAddress(netip.MustParseAddrPort("192.0.2.1:1234")); err != nil {
+		t.Fatalf("duplicate AddNATTraversalAddress: %v", err)
+	}
+	err := c.AddNATTraversalAddress(netip.MustParseAddrPort("192.0.2.2:1234"))
+	if !errors.Is(err, ErrNATTraversalTooManyAddresses) {
+		t.Fatalf("second distinct AddNATTraversalAddress err = %v, want ErrNATTraversalTooManyAddresses", err)
+	}
+	if got := c.qntLocalNATTraversalAddresses(); len(got) != 1 || got[0] != netip.MustParseAddrPort("192.0.2.1:1234") {
+		t.Fatalf("local addresses after limit = %v, want [192.0.2.1:1234]", got)
+	}
+}
+
 func TestQNTLocalAddressStateFailsClosedWhenNotNegotiated(t *testing.T) {
 	addr := netip.MustParseAddrPort("192.0.2.1:1234")
+	add := &wire.AddAddressFrame{SeqNo: 1, Addr: addr.Addr(), Port: addr.Port()}
+	remove := &wire.RemoveAddressFrame{SeqNo: 1}
 	cases := []struct {
 		name string
 		c    *Conn
@@ -115,6 +147,12 @@ func TestQNTLocalAddressStateFailsClosedWhenNotNegotiated(t *testing.T) {
 			}
 			if err := tc.c.RemoveNATTraversalAddress(addr); !errors.Is(err, ErrNATTraversalNotNegotiated) {
 				t.Fatalf("RemoveNATTraversalAddress err = %v, want ErrNATTraversalNotNegotiated", err)
+			}
+			if err := tc.c.addRemoteNATTraversalAddressFrame(add); !errors.Is(err, ErrNATTraversalNotNegotiated) {
+				t.Fatalf("addRemoteNATTraversalAddressFrame err = %v, want ErrNATTraversalNotNegotiated", err)
+			}
+			if err := tc.c.removeRemoteNATTraversalAddressFrame(remove); !errors.Is(err, ErrNATTraversalNotNegotiated) {
+				t.Fatalf("removeRemoteNATTraversalAddressFrame err = %v, want ErrNATTraversalNotNegotiated", err)
 			}
 			if got := tc.c.qntLocalNATTraversalAddresses(); len(got) != 0 {
 				t.Fatalf("local addresses after failed operations = %v, want none", got)
@@ -147,8 +185,12 @@ func TestQNTRoundPreconditions(t *testing.T) {
 		t.Fatalf("InitiateNATTraversalRound without remote candidates addresses = %v, want none", addrs)
 	}
 
-	if err := c.addRemoteNATTraversalAddress(remote); err != nil {
-		t.Fatalf("addRemoteNATTraversalAddress: %v", err)
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 1,
+		Addr:  remote.Addr(),
+		Port:  remote.Port(),
+	}); err != nil {
+		t.Fatalf("addRemoteNATTraversalAddressFrame: %v", err)
 	}
 	addrs, err = c.InitiateNATTraversalRound(context.Background())
 	if !errors.Is(err, ErrNATTraversalRoundNotImplemented) {
@@ -164,11 +206,19 @@ func TestQNTRemoteAddressState(t *testing.T) {
 	mapped := netip.MustParseAddrPort("[::ffff:198.51.100.2]:5678")
 	canon := netip.MustParseAddrPort("198.51.100.2:5678")
 
-	if err := c.addRemoteNATTraversalAddress(mapped); err != nil {
-		t.Fatalf("addRemoteNATTraversalAddress(mapped): %v", err)
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 1,
+		Addr:  mapped.Addr(),
+		Port:  mapped.Port(),
+	}); err != nil {
+		t.Fatalf("addRemoteNATTraversalAddressFrame(mapped): %v", err)
 	}
-	if err := c.addRemoteNATTraversalAddress(canon); err != nil {
-		t.Fatalf("addRemoteNATTraversalAddress(duplicate): %v", err)
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 1,
+		Addr:  canon.Addr(),
+		Port:  canon.Port(),
+	}); err != nil {
+		t.Fatalf("addRemoteNATTraversalAddressFrame(duplicate): %v", err)
 	}
 
 	addrs, err := c.NATTraversalAddresses()
@@ -186,6 +236,139 @@ func TestQNTRemoteAddressState(t *testing.T) {
 	}
 	if len(addrs) != 1 || addrs[0] != canon {
 		t.Fatalf("remote addresses after caller mutation = %v, want [%v]", addrs, canon)
+	}
+}
+
+func TestQNTRemoteAddressStateUsesSeqNumbers(t *testing.T) {
+	c := newNegotiatedQNTConn(2, 16)
+	addr1 := netip.MustParseAddrPort("198.51.100.1:1001")
+	addr2 := netip.MustParseAddrPort("198.51.100.2:1002")
+	addr3 := netip.MustParseAddrPort("198.51.100.3:1003")
+
+	for seq, addr := range map[uint64]netip.AddrPort{1: addr1, 2: addr2} {
+		if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+			SeqNo: seq,
+			Addr:  addr.Addr(),
+			Port:  addr.Port(),
+		}); err != nil {
+			t.Fatalf("add seq %d: %v", seq, err)
+		}
+	}
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 3,
+		Addr:  addr3.Addr(),
+		Port:  addr3.Port(),
+	}); !errors.Is(err, errQNTTooManyRemoteAddresses) {
+		t.Fatalf("add over limit err = %v, want errQNTTooManyRemoteAddresses", err)
+	}
+
+	if err := c.removeRemoteNATTraversalAddressFrame(&wire.RemoveAddressFrame{SeqNo: 99}); err != nil {
+		t.Fatalf("remove absent seq: %v", err)
+	}
+	addrs, err := c.NATTraversalAddresses()
+	if err != nil {
+		t.Fatalf("NATTraversalAddresses after absent remove: %v", err)
+	}
+	if len(addrs) != 2 || !slices.Contains(addrs, addr1) || !slices.Contains(addrs, addr2) {
+		t.Fatalf("remote addresses after absent remove = %v, want %v and %v", addrs, addr1, addr2)
+	}
+
+	if err := c.removeRemoteNATTraversalAddressFrame(&wire.RemoveAddressFrame{SeqNo: 1}); err != nil {
+		t.Fatalf("remove seq 1: %v", err)
+	}
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 3,
+		Addr:  addr3.Addr(),
+		Port:  addr3.Port(),
+	}); err != nil {
+		t.Fatalf("add seq 3 after remove: %v", err)
+	}
+
+	addrs, err = c.NATTraversalAddresses()
+	if err != nil {
+		t.Fatalf("NATTraversalAddresses: %v", err)
+	}
+	if len(addrs) != 2 || !slices.Contains(addrs, addr2) || !slices.Contains(addrs, addr3) {
+		t.Fatalf("remote addresses = %v, want %v and %v", addrs, addr2, addr3)
+	}
+}
+
+func TestQNTRemoteAddressStateLimitOnConn(t *testing.T) {
+	c := newNegotiatedQNTConn(1, 16)
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 1,
+		Addr:  netip.MustParseAddr("198.51.100.1"),
+		Port:  1234,
+	}); err != nil {
+		t.Fatalf("first addRemoteNATTraversalAddress: %v", err)
+	}
+	err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 2,
+		Addr:  netip.MustParseAddr("198.51.100.2"),
+		Port:  1234,
+	})
+	if !errors.Is(err, ErrNATTraversalTooManyAddresses) {
+		t.Fatalf("second addRemoteNATTraversalAddress err = %v, want ErrNATTraversalTooManyAddresses", err)
+	}
+	addrs, err := c.NATTraversalAddresses()
+	if err != nil {
+		t.Fatalf("NATTraversalAddresses: %v", err)
+	}
+	if len(addrs) != 1 || addrs[0] != netip.MustParseAddrPort("198.51.100.1:1234") {
+		t.Fatalf("remote addresses after limit = %v, want [198.51.100.1:1234]", addrs)
+	}
+}
+
+func TestQNTConnectionHandlesAddRemoveAddressFrames(t *testing.T) {
+	c := newNegotiatedQNTConn(2, 16)
+	addr1 := netip.MustParseAddrPort("198.51.100.1:1001")
+	addr2 := netip.MustParseAddrPort("198.51.100.2:1002")
+
+	err := c.handleAddAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 1,
+		Addr:  addr1.Addr(),
+		Port:  addr1.Port(),
+	})
+	if err != nil {
+		t.Fatalf("handle ADD_ADDRESS seq 1: %v", err)
+	}
+	err = c.handleAddAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 2,
+		Addr:  addr2.Addr(),
+		Port:  addr2.Port(),
+	})
+	if err != nil {
+		t.Fatalf("handle ADD_ADDRESS seq 2: %v", err)
+	}
+	err = c.handleRemoveAddressFrame(&wire.RemoveAddressFrame{SeqNo: 1})
+	if err != nil {
+		t.Fatalf("handle REMOVE_ADDRESS seq 1: %v", err)
+	}
+
+	addrs, err := c.NATTraversalAddresses()
+	if err != nil {
+		t.Fatalf("NATTraversalAddresses: %v", err)
+	}
+	if len(addrs) != 1 || addrs[0] != addr2 {
+		t.Fatalf("remote addresses = %v, want [%v]", addrs, addr2)
+	}
+}
+
+func TestQNTConnectionHandlersFailClosedWhenNotNegotiated(t *testing.T) {
+	c := newLocalOnlyQNTConn(2)
+	addr := netip.MustParseAddrPort("198.51.100.1:1001")
+
+	err := c.handleAddAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 1,
+		Addr:  addr.Addr(),
+		Port:  addr.Port(),
+	})
+	if !errors.Is(err, ErrNATTraversalNotNegotiated) {
+		t.Fatalf("handle ADD_ADDRESS err = %v, want ErrNATTraversalNotNegotiated", err)
+	}
+	err = c.handleRemoveAddressFrame(&wire.RemoveAddressFrame{SeqNo: 1})
+	if !errors.Is(err, ErrNATTraversalNotNegotiated) {
+		t.Fatalf("handle REMOVE_ADDRESS err = %v, want ErrNATTraversalNotNegotiated", err)
 	}
 }
 

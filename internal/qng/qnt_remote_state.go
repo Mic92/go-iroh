@@ -1,13 +1,12 @@
 package quic
 
 import (
-	"errors"
 	"net/netip"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
-var errQNTTooManyRemoteAddresses = errors.New("quic: too many remote nat traversal addresses")
+var errQNTTooManyRemoteAddresses = ErrNATTraversalTooManyAddresses
 
 type qntRemoteAddressState struct {
 	max   int

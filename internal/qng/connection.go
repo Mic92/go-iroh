@@ -204,6 +204,12 @@ type Conn struct {
 	// later address-bearing adapter instead of fabricated RemoteAddr values.
 	pathSnapshotQueue chan *pathSnapshotRequest
 
+	// qnt holds local and remote n0 NAT traversal candidate addresses. It is
+	// mutex-protected because socket can hand candidates to qng from application
+	// goroutines while the eventual QNT receive path will run on the connection
+	// goroutine.
+	qnt qntLocalState
+
 	// nextObservedAddrSeqNo is the sequence number for the next OBSERVED_ADDRESS
 	// frame this endpoint emits (QUIC Address Discovery). It increments once per
 	// emitted frame, mirroring next_observed_addr_seq_no (mod.rs:238,6196-6197).
@@ -2177,6 +2183,10 @@ func (c *Conn) handleFrame(
 		err = c.handlePathCIDsBlockedFrame(frame)
 	case *wire.ObservedAddrFrame:
 		err = c.handleObservedAddrFrame(frame)
+	case *wire.AddAddressFrame:
+		err = c.handleAddAddressFrame(frame)
+	case *wire.RemoveAddressFrame:
+		err = c.handleRemoveAddressFrame(frame)
 	default:
 		err = fmt.Errorf("unexpected frame type: %s", reflect.ValueOf(&frame).Elem().Type().Name())
 	}
