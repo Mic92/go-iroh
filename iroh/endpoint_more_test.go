@@ -1,6 +1,7 @@
 package iroh
 
 import (
+	"bytes"
 	"context"
 	"net/netip"
 	"sync"
@@ -86,6 +87,57 @@ func TestEndpointLifecycleAddressSurface(t *testing.T) {
 	case <-ep.Closed():
 	case <-time.After(time.Second):
 		t.Fatal("Closed channel did not fire")
+	}
+}
+
+func TestEndpointWithKeyLogWriter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-keylog/0"
+	var serverKeys bytes.Buffer
+	server, err := Bind(ctx,
+		WithALPNs([]byte(alpn)),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		WithKeyLogWriter(&serverKeys),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	accepted := make(chan error, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err == nil {
+			err = conn.CloseWithError(0, "")
+		}
+		accepted <- err
+	}()
+
+	var clientKeys bytes.Buffer
+	client, err := Bind(ctx,
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		WithKeyLogWriter(&clientKeys),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	conn, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn.CloseWithError(0, "")
+	if err := <-accepted; err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if clientKeys.Len() == 0 {
+		t.Fatal("client key log writer was not written")
+	}
+	if serverKeys.Len() == 0 {
+		t.Fatal("server key log writer was not written")
 	}
 }
 

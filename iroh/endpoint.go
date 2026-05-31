@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"sync"
@@ -33,6 +34,7 @@ type Endpoint struct {
 	transport    *quic.Transport
 	listener     *quic.EarlyListener
 	quicConf     *quic.Config
+	keyLogWriter io.Writer
 	sessionCache *SessionCache
 
 	// remotes is the per-remote state registry. The endpoint owns it: it
@@ -61,6 +63,7 @@ type config struct {
 	lookup          *AddressLookupServices
 	enableNetReport bool
 	netReport       netReportRunner
+	keyLogWriter    io.Writer
 }
 
 // Option configures an [Endpoint] at [Bind] time.
@@ -126,6 +129,16 @@ func WithRelayMode(mode relay.Mode) Option {
 func WithNetReport() Option {
 	return func(c *config) error {
 		c.enableNetReport = true
+		return nil
+	}
+}
+
+// WithKeyLogWriter writes TLS traffic secrets for direct peer QUIC handshakes
+// in NSS SSLKEYLOGFILE format. It is for debugging only; writing these secrets
+// compromises connection confidentiality.
+func WithKeyLogWriter(w io.Writer) Option {
+	return func(c *config) error {
+		c.keyLogWriter = w
 		return nil
 	}
 }
@@ -208,6 +221,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		serveStop:    serveStop,
 		transport:    &quic.Transport{Conn: magic, ConnectionIDLength: 8},
 		quicConf:     quicConf,
+		keyLogWriter: c.keyLogWriter,
 		sessionCache: NewSessionCache(),
 		lookup:       c.lookup,
 		closedCh:     make(chan struct{}),
@@ -273,6 +287,7 @@ func (e *Endpoint) startListener() error {
 	if err != nil {
 		return err
 	}
+	serverTLS.KeyLogWriter = e.keyLogWriter
 	ln, err := e.transport.ListenEarly(serverTLS, e.quicConf)
 	if err != nil {
 		return fmt.Errorf("iroh: listen: %w", err)
@@ -572,6 +587,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 	if err != nil {
 		return nil, err
 	}
+	clientTLS.KeyLogWriter = e.keyLogWriter
 
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
