@@ -120,8 +120,8 @@ func (qad *qadConn) rtt(pathID uint64) time.Duration {
 // negotiated and the relay has reported an address, it returns that address.
 // Otherwise it returns [ErrExtensionNotNegotiated] rather than fabricate an
 // address: QAD reports arrive asynchronously, so a probe that completes before
-// any report is treated as degraded (latency-only), as is a connection where
-// QAD was not negotiated. See the package doc.
+// any report is treated as latency-only, as is a connection where QAD was not
+// negotiated. See the package doc.
 func (qad *qadConn) observedAddr(ctx context.Context) (netip.AddrPort, error) {
 	if qad.conn == nil {
 		return netip.AddrPort{}, ErrExtensionNotNegotiated

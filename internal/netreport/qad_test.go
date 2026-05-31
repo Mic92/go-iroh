@@ -43,7 +43,7 @@ func TestQADWireConstants(t *testing.T) {
 	}
 }
 
-func TestObservedAddrDegraded(t *testing.T) {
+func TestObservedAddrNoConnectionFallback(t *testing.T) {
 	// With no connection, observedAddr must report ErrExtensionNotNegotiated
 	// rather than fabricate an address.
 	qad := &qadConn{}

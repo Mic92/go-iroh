@@ -96,7 +96,7 @@ func TestReportUpdateProbeShape(t *testing.T) {
 			},
 		},
 		{
-			name: "qad without observed addr is latency only (degraded)",
+			name: "qad without observed addr is latency only",
 			probes: []*probeReport{
 				{probe: ProbeQADv4, relay: urlA, latency: ms(20)}, // addr zero
 			},

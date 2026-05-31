@@ -212,9 +212,9 @@ func (c *Client) runProbes(ctx context.Context, relayMap *relay.Map, report *Rep
 }
 
 // runQADProbe resolves the relay's QUIC address for the given family, opens a
-// QAD connection, records its RTT, and gracefully closes it. It yields latency
-// only; reflexive-address discovery is gated on the qng observed-address
-// extension (see the package doc).
+// QAD connection, records its RTT, captures any observed-address report that has
+// already arrived, and gracefully closes it. If no report is available yet, the
+// probe is latency-only (see the package doc).
 func (c *Client) runQADProbe(ctx context.Context, cfg relay.Config, probe Probe) *probeReport {
 	host := cfg.URL.Host()
 	if host == "" {
