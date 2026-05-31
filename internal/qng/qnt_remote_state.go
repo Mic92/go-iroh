@@ -20,6 +20,9 @@ func newQNTRemoteAddressState(max uint8) *qntRemoteAddressState {
 
 func (s *qntRemoteAddressState) add(frame *wire.AddAddressFrame) (netip.AddrPort, bool, error) {
 	addr := canonicalAddrPort(frame.Addr, frame.Port)
+	if !addr.IsValid() || addr.Port() == 0 {
+		return netip.AddrPort{}, false, nil
+	}
 	if old, ok := s.addrs[frame.SeqNo]; ok {
 		if old == addr {
 			return netip.AddrPort{}, false, nil

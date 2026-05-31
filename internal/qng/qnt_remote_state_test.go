@@ -81,6 +81,28 @@ func TestQNTRemoteAddressStateLimit(t *testing.T) {
 	}
 }
 
+func TestQNTRemoteAddressStateIgnoresInvalidAddress(t *testing.T) {
+	s := newQNTRemoteAddressState(1)
+	for _, f := range []*wire.AddAddressFrame{
+		{SeqNo: 1, Addr: netip.Addr{}, Port: 1000},
+		{SeqNo: 2, Addr: netip.MustParseAddr("192.0.2.1"), Port: 0},
+	} {
+		addr, changed, err := s.add(f)
+		if err != nil {
+			t.Fatalf("add invalid address: %v", err)
+		}
+		if changed || addr.IsValid() {
+			t.Fatalf("add invalid address = %v, %v, want zero false", addr, changed)
+		}
+	}
+	if got := s.addresses(); len(got) != 0 {
+		t.Fatalf("addresses after invalid adds = %v, want none", got)
+	}
+	if _, _, err := s.add(&wire.AddAddressFrame{SeqNo: 3, Addr: netip.MustParseAddr("192.0.2.2"), Port: 1002}); err != nil {
+		t.Fatalf("valid add after invalid addresses: %v", err)
+	}
+}
+
 func TestQNTRemoteAddressStateCanonicalizesIPv4Mapped(t *testing.T) {
 	s := newQNTRemoteAddressState(1)
 	if _, _, err := s.add(&wire.AddAddressFrame{SeqNo: 1, Addr: netip.MustParseAddr("::ffff:192.0.2.1"), Port: 1000}); err != nil {

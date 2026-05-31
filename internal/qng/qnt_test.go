@@ -1111,6 +1111,27 @@ func TestQNTRemoteAddressStateUsesSeqNumbers(t *testing.T) {
 	}
 }
 
+func TestQNTInvalidRemoteAddressDoesNotStartRound(t *testing.T) {
+	c := newNegotiatedQNTConn(2, 16)
+	local := netip.MustParseAddrPort("198.51.100.10:1000")
+	if err := c.AddNATTraversalAddress(local); err != nil {
+		t.Fatalf("AddNATTraversalAddress: %v", err)
+	}
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
+		SeqNo: 1,
+		Addr:  netip.MustParseAddr("198.51.100.1"),
+		Port:  0,
+	}); err != nil {
+		t.Fatalf("add invalid remote address: %v", err)
+	}
+	if addrs, err := c.NATTraversalAddresses(); err != nil || len(addrs) != 0 {
+		t.Fatalf("NATTraversalAddresses after invalid ADD_ADDRESS = %v, %v, want none, nil", addrs, err)
+	}
+	if _, err := c.InitiateNATTraversalRound(context.Background()); !errors.Is(err, ErrNATTraversalNotEnoughAddresses) {
+		t.Fatalf("InitiateNATTraversalRound after invalid ADD_ADDRESS = %v, want %v", err, ErrNATTraversalNotEnoughAddresses)
+	}
+}
+
 func TestQNTRemoteAddressStateLimitOnConn(t *testing.T) {
 	c := newNegotiatedQNTConn(1, 16)
 	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{
