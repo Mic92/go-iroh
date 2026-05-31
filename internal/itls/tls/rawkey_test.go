@@ -129,6 +129,57 @@ func TestRawPublicKeyMutualHandshake(t *testing.T) {
 	}
 }
 
+func TestServerRawPublicKeyNegotiationRequiresMutualRawKeyOffers(t *testing.T) {
+	conf := &Config{RawPublicKeys: true}
+	hello := &clientHelloMsg{
+		clientCertificateTypes: []uint8{certTypeRawPublicKey},
+		serverCertificateTypes: []uint8{certTypeRawPublicKey},
+	}
+	if !serverNegotiatesRawPublicKeys(conf, hello) {
+		t.Fatal("server raw public key negotiation rejected mutual raw-key offers")
+	}
+
+	hello = &clientHelloMsg{
+		serverCertificateTypes: []uint8{certTypeRawPublicKey},
+	}
+	if serverNegotiatesRawPublicKeys(conf, hello) {
+		t.Fatal("server raw public key negotiation accepted a missing client certificate type offer")
+	}
+	hello = &clientHelloMsg{
+		clientCertificateTypes: []uint8{certTypeRawPublicKey},
+	}
+	if serverNegotiatesRawPublicKeys(conf, hello) {
+		t.Fatal("server raw public key negotiation accepted a missing server certificate type offer")
+	}
+	if serverNegotiatesRawPublicKeys(&Config{}, &clientHelloMsg{serverCertificateTypes: []uint8{certTypeRawPublicKey}}) {
+		t.Fatal("server raw public key negotiation ignored config opt-in")
+	}
+}
+
+func TestEncryptedExtensionsRawPublicKeyCertificateTypes(t *testing.T) {
+	msg := &encryptedExtensionsMsg{
+		clientCertificateType:    certTypeRawPublicKey,
+		clientCertificateTypeSet: true,
+		serverCertificateType:    certTypeRawPublicKey,
+		serverCertificateTypeSet: true,
+	}
+	data, err := msg.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got encryptedExtensionsMsg
+	if !got.unmarshal(data) {
+		t.Fatal("unmarshal encrypted extensions failed")
+	}
+	if !got.clientCertificateTypeSet || got.clientCertificateType != certTypeRawPublicKey {
+		t.Fatalf("client certificate type = set:%t value:%d, want raw public key", got.clientCertificateTypeSet, got.clientCertificateType)
+	}
+	if !got.serverCertificateTypeSet || got.serverCertificateType != certTypeRawPublicKey {
+		t.Fatalf("server certificate type = set:%t value:%d, want raw public key", got.serverCertificateTypeSet, got.serverCertificateType)
+	}
+}
+
 // TestRawPublicKeyRejectsWrongKey ensures VerifyConnection can reject a peer.
 func TestRawPublicKeyRejectsWrongKey(t *testing.T) {
 	serverPub, serverPriv, _ := ed25519.GenerateKey(rand.Reader)

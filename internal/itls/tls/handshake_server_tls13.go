@@ -290,11 +290,9 @@ func (hs *serverHandshakeStateTLS13) processClientHello() error {
 
 	c.serverName = hs.clientHello.serverName
 
-	// RFC 7250: negotiate raw public keys if the server opted in and the client
-	// offered the raw-public-key type for both directions (iroh uses mutual auth).
-	if c.config.rawPublicKeysEnabled() &&
-		containsCertType(hs.clientHello.serverCertificateTypes, certTypeRawPublicKey) &&
-		containsCertType(hs.clientHello.clientCertificateTypes, certTypeRawPublicKey) {
+	// RFC 7250: iroh uses mutual raw public keys, so negotiate raw public keys
+	// only when the client offered that certificate type for both directions.
+	if serverNegotiatesRawPublicKeys(c.config, hs.clientHello) {
 		hs.rawPublicKeys = true
 		c.rawPublicKeys = true
 	}
@@ -310,6 +308,12 @@ func containsCertType(types []uint8, t uint8) bool {
 		}
 	}
 	return false
+}
+
+func serverNegotiatesRawPublicKeys(config *Config, hello *clientHelloMsg) bool {
+	return config.rawPublicKeysEnabled() &&
+		containsCertType(hello.serverCertificateTypes, certTypeRawPublicKey) &&
+		containsCertType(hello.clientCertificateTypes, certTypeRawPublicKey)
 }
 
 func (hs *serverHandshakeStateTLS13) checkForResumption() error {
@@ -816,6 +820,8 @@ func (hs *serverHandshakeStateTLS13) sendServerParameters() error {
 	if hs.rawPublicKeys { // RFC 7250: confirm the server certificate type.
 		encryptedExtensions.serverCertificateType = certTypeRawPublicKey
 		encryptedExtensions.serverCertificateTypeSet = true
+		encryptedExtensions.clientCertificateType = certTypeRawPublicKey
+		encryptedExtensions.clientCertificateTypeSet = true
 	}
 
 	// If client sent ECH extension, but we didn't accept it,

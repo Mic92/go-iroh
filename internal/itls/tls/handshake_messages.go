@@ -1044,6 +1044,10 @@ type encryptedExtensionsMsg struct {
 	earlyData               bool
 	echRetryConfigs         []byte
 	serverNameAck           bool
+	// clientCertificateType is the negotiated client certificate type (RFC 7250),
+	// set when clientCertificateTypeSet is true.
+	clientCertificateType    uint8
+	clientCertificateTypeSet bool
 	// serverCertificateType is the negotiated server certificate type (RFC 7250),
 	// set when serverCertificateTypeSet is true.
 	serverCertificateType    uint8
@@ -1086,6 +1090,12 @@ func (m *encryptedExtensionsMsg) marshal() ([]byte, error) {
 			if m.serverNameAck {
 				b.AddUint16(extensionServerName)
 				b.AddUint16(0) // empty extension_data
+			}
+			if m.clientCertificateTypeSet { // RFC 7250: single negotiated value
+				b.AddUint16(extensionClientCertificateType)
+				b.AddUint16LengthPrefixed(func(b *cryptobyte.Builder) {
+					b.AddUint8(m.clientCertificateType)
+				})
 			}
 			if m.serverCertificateTypeSet { // RFC 7250: single negotiated value
 				b.AddUint16(extensionServerCertificateType)
@@ -1153,6 +1163,11 @@ func (m *encryptedExtensionsMsg) unmarshal(data []byte) bool {
 				return false
 			}
 			m.serverNameAck = true
+		case extensionClientCertificateType: // RFC 7250
+			if !extData.ReadUint8(&m.clientCertificateType) {
+				return false
+			}
+			m.clientCertificateTypeSet = true
 		case extensionServerCertificateType: // RFC 7250
 			if !extData.ReadUint8(&m.serverCertificateType) {
 				return false
