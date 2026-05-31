@@ -67,7 +67,7 @@ func endpointIdFromTxtName(name string) (base.EndpointId, error) {
 func txtAttrsFromStrings(id base.EndpointId, values []string) (*txtAttrs, error) {
 	attrs := map[irohAttr][]string{}
 	for _, s := range values {
-		key, value, ok := strings.Cut(s, "=")
+		key, value, ok := splitAttr(s)
 		if !ok {
 			return nil, fmt.Errorf("%w, received %q", ErrUnexpectedFormat, s)
 		}
@@ -78,6 +78,14 @@ func txtAttrsFromStrings(id base.EndpointId, values []string) (*txtAttrs, error)
 		attrs[attr] = append(attrs[attr], value)
 	}
 	return &txtAttrs{endpointId: id, attrs: attrs}, nil
+}
+
+func splitAttr(s string) (key, value string, ok bool) {
+	parts := strings.SplitN(s, "=", 3)
+	if len(parts) < 2 {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func txtAttrsFromTxtLookup(name string, values []string) (*txtAttrs, error) {

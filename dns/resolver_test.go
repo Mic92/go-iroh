@@ -45,3 +45,20 @@ func TestLookupEndpointById(t *testing.T) {
 		t.Errorf("RelayURLs = %v", got)
 	}
 }
+
+func TestLookupEndpointByIdUsesZBase32Name(t *testing.T) {
+	id := testID(t)
+	const wantZ32 = "dgjpkxyn3zyrk3zfads5duwdgbqpkwbjxfj4yt7rezidr3fijccy"
+	if got := id.Z32(); got != wantZ32 {
+		t.Fatalf("Z32 = %q, want %q", got, wantZ32)
+	}
+	wantName := IrohTxtName + "." + wantZ32 + "." + N0DNSEndpointOriginProd
+	r := &Resolver{Lookuper: fakeLookuper{
+		wantName: wantName,
+		values:   []string{"relay=https://r.example.com/"},
+		t:        t,
+	}}
+	if _, err := r.LookupEndpointById(context.Background(), id, N0DNSEndpointOriginProd); err != nil {
+		t.Fatalf("LookupEndpointById: %v", err)
+	}
+}

@@ -1,10 +1,13 @@
 package pkarr
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
 	"testing"
 
 	"github.com/tmc/go-iroh/base"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 func TestSignedPacketRoundTrip(t *testing.T) {
@@ -39,6 +42,67 @@ func TestSignedPacketRoundTrip(t *testing.T) {
 		if got[i] != values[i] {
 			t.Errorf("TxtRecords[%d] = %q, want %q", i, got[i], values[i])
 		}
+	}
+}
+
+func TestSignedPacketWireLayout(t *testing.T) {
+	sk, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const value = "relay=https://example.com/"
+	pkt, err := FromTxtStrings(sk, "_iroh", []string{value}, 30)
+	if err != nil {
+		t.Fatalf("FromTxtStrings: %v", err)
+	}
+	b := pkt.Bytes()
+	if MaxBytes != 1104 {
+		t.Fatalf("MaxBytes = %d, want 1104", MaxBytes)
+	}
+	if len(b) != headerSize+len(pkt.EncodedPacket()) {
+		t.Fatalf("wire len = %d, want header %d + dns %d", len(b), headerSize, len(pkt.EncodedPacket()))
+	}
+	pub := sk.Public().Bytes()
+	if !bytes.Equal(b[:32], pub[:]) {
+		t.Fatal("public key is not the first 32 wire bytes")
+	}
+	sig := pkt.Signature().Bytes()
+	if !bytes.Equal(sig[:], b[32:96]) {
+		t.Fatal("signature is not stored at wire bytes 32:96")
+	}
+	if got := binary.BigEndian.Uint64(b[96:104]); got != pkt.Timestamp().Micros() {
+		t.Fatalf("timestamp bytes = %d, want %d", got, pkt.Timestamp().Micros())
+	}
+	if !bytes.Equal(pkt.RelayPayload(), b[32:]) {
+		t.Fatal("relay payload is not wire bytes after the public key")
+	}
+
+	var p dnsmessage.Parser
+	if _, err := p.Start(pkt.EncodedPacket()); err != nil {
+		t.Fatalf("parse DNS header: %v", err)
+	}
+	if err := p.SkipAllQuestions(); err != nil {
+		t.Fatalf("skip questions: %v", err)
+	}
+	h, err := p.AnswerHeader()
+	if err != nil {
+		t.Fatalf("answer header: %v", err)
+	}
+	if h.Type != dnsmessage.TypeTXT {
+		t.Fatalf("answer type = %v, want TXT", h.Type)
+	}
+	if h.TTL != 30 {
+		t.Fatalf("answer TTL = %d, want 30", h.TTL)
+	}
+	if got, want := h.Name.String(), "_iroh."+sk.Public().Z32()+"."; got != want {
+		t.Fatalf("answer name = %q, want %q", got, want)
+	}
+	txt, err := p.TXTResource()
+	if err != nil {
+		t.Fatalf("TXT resource: %v", err)
+	}
+	if got := joinTxt(txt.TXT); got != value {
+		t.Fatalf("TXT value = %q, want %q", got, value)
 	}
 }
 

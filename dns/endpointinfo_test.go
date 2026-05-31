@@ -145,6 +145,37 @@ func TestTxtStringsOrder(t *testing.T) {
 	}
 }
 
+func TestTxtStringsGolden(t *testing.T) {
+	ud, _ := NewUserData("foobar")
+	info := EndpointInfoFromParts(testID(t), NewEndpointData(
+		base.RelayAddr{URL: mustRelay(t, "https://example.com/")},
+		base.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
+		base.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6}),
+	).WithUserData(ud))
+	got := info.ToTxtStrings()
+	want := []string{
+		"relay=https://example.com/",
+		"addr=127.0.0.1:1234",
+		"addr=1_a1b2c3d4e5f6",
+		"user-data=foobar",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("ToTxtStrings = %v, want %v", got, want)
+	}
+}
+
+func TestTxtAttrsSplitLikeRust(t *testing.T) {
+	id := testID(t)
+	name := "_iroh." + id.Z32() + ".dns.iroh.link."
+	got, err := EndpointInfoFromTxtLookup(name, []string{"user-data=a=b"})
+	if err != nil {
+		t.Fatalf("EndpointInfoFromTxtLookup: %v", err)
+	}
+	if got.UserData() == nil || got.UserData().String() != "a" {
+		t.Fatalf("UserData = %v, want a", got.UserData())
+	}
+}
+
 func TestUserDataTooLong(t *testing.T) {
 	long := make([]byte, UserDataMaxLength+1)
 	if _, err := NewUserData(string(long)); err == nil {

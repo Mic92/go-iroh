@@ -223,6 +223,35 @@ func TestN0PkarrConstructors(t *testing.T) {
 	res.Publish(dns.NewEndpointData(base.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
 }
 
+func TestPkarrDefaults(t *testing.T) {
+	if N0DNSPkarrRelayProd != "https://dns.iroh.link/pkarr" {
+		t.Fatalf("prod relay = %q", N0DNSPkarrRelayProd)
+	}
+	if N0DNSPkarrRelayStaging != "https://staging-dns.iroh.link/pkarr" {
+		t.Fatalf("staging relay = %q", N0DNSPkarrRelayStaging)
+	}
+	if DefaultPkarrTTL != 30 {
+		t.Fatalf("DefaultPkarrTTL = %d, want 30", DefaultPkarrTTL)
+	}
+	if DefaultRepublishInterval != 5*time.Minute {
+		t.Fatalf("DefaultRepublishInterval = %v, want 5m", DefaultRepublishInterval)
+	}
+	pub := NewPkarrPublisher(N0DNSPkarrRelayProd)
+	if pub.relayURL != N0DNSPkarrRelayProd {
+		t.Fatalf("publisher relay = %q, want %q", pub.relayURL, N0DNSPkarrRelayProd)
+	}
+	if pub.ttl != DefaultPkarrTTL {
+		t.Fatalf("publisher ttl = %d, want %d", pub.ttl, DefaultPkarrTTL)
+	}
+	if pub.republishInterval != DefaultRepublishInterval {
+		t.Fatalf("publisher republish = %v, want %v", pub.republishInterval, DefaultRepublishInterval)
+	}
+	res := NewPkarrResolver(N0DNSPkarrRelayStaging)
+	if res.relayURL != N0DNSPkarrRelayStaging {
+		t.Fatalf("resolver relay = %q, want %q", res.relayURL, N0DNSPkarrRelayStaging)
+	}
+}
+
 // TestN0DnsAddressLookup smoke-tests the number0 production DNS constructor and
 // its no-op Publish.
 func TestN0DnsAddressLookup(t *testing.T) {
