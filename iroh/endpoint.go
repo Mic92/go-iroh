@@ -11,6 +11,7 @@ import (
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/netreport"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/internal/qng/qlog"
 	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/relay"
 	"github.com/tmc/go-iroh/watch"
@@ -162,6 +163,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		EnableDatagrams:                true,
 		InitialMaxPathID:               initialMaxPathID(),
 		MaxRemoteNATTraversalAddresses: maxRemoteNATTraversalAddresses(),
+		Tracer:                         qlog.DefaultConnectionTracer,
 		// Accept 0-RTT early data on incoming connections that resume a prior
 		// session. Allow0RTT is ignored for dialed connections, so sharing this
 		// config with Connect is safe. Mirrors the Rust server enabling early
