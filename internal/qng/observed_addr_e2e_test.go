@@ -222,6 +222,18 @@ func TestObservedAddrStaleSeqNoIgnored(t *testing.T) {
 	if !ok || got != want {
 		t.Fatalf("ObservedAddr = %v, %v, want %v, true", got, ok, want)
 	}
+	if err := c.handleObservedAddrFrame(&wire.ObservedAddrFrame{
+		SeqNo: 12,
+		Addr:  netip.MustParseAddr("::ffff:192.0.2.12"),
+		Port:  1200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, ok = c.ObservedAddr()
+	want = netip.MustParseAddrPort("192.0.2.12:1200")
+	if !ok || got != want {
+		t.Fatalf("ObservedAddr mapped IPv4 = %v, %v, want %v, true", got, ok, want)
+	}
 }
 
 func TestObservedAddrQueueReportFromUDPSource(t *testing.T) {

@@ -3110,7 +3110,7 @@ func (c *Conn) handleObservedAddrFrame(frame *wire.ObservedAddrFrame) error {
 	}
 	c.observedAddrSeqNo = frame.SeqNo
 	c.observedAddrSeqSet = true
-	c.observedAddr = netip.AddrPortFrom(frame.Addr, frame.Port)
+	c.observedAddr = netip.AddrPortFrom(frame.Addr.Unmap(), frame.Port)
 	c.observedAddrValid = true
 	return nil
 }
