@@ -1,0 +1,485 @@
+package compat
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/tmc/go-iroh/base"
+)
+
+const rustTransferBinEnv = "GO_IROH_RUST_TRANSFER_BIN"
+
+func TestRustTransferExampleBin(t *testing.T) {
+	t.Run("explicit", func(t *testing.T) {
+		t.Setenv(rustTransferBinEnv, "/tmp/rust-transfer")
+		t.Setenv(rustRepoEnv, "")
+		bin, checked, ok := rustTransferExampleBin()
+		if !ok {
+			t.Fatal("rustTransferExampleBin ok = false, want true")
+		}
+		if bin != "/tmp/rust-transfer" {
+			t.Fatalf("rustTransferExampleBin bin = %q, want /tmp/rust-transfer", bin)
+		}
+		if len(checked) != 0 {
+			t.Fatalf("rustTransferExampleBin checked = %v, want none", checked)
+		}
+	})
+
+	t.Run("repo debug", func(t *testing.T) {
+		t.Setenv(rustTransferBinEnv, "")
+		repo := t.TempDir()
+		bin := filepath.Join(repo, "target", "debug", "examples", "transfer")
+		if err := os.MkdirAll(filepath.Dir(bin), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(rustRepoEnv, repo)
+		got, checked, ok := rustTransferExampleBin()
+		if !ok {
+			t.Fatal("rustTransferExampleBin ok = false, want true")
+		}
+		if got != bin {
+			t.Fatalf("rustTransferExampleBin bin = %q, want %q", got, bin)
+		}
+		if len(checked) != 1 || checked[0] != bin {
+			t.Fatalf("rustTransferExampleBin checked = %v, want [%q]", checked, bin)
+		}
+	})
+
+	t.Run("repo release", func(t *testing.T) {
+		t.Setenv(rustTransferBinEnv, "")
+		repo := t.TempDir()
+		debug := filepath.Join(repo, "target", "debug", "examples", "transfer")
+		release := filepath.Join(repo, "target", "release", "examples", "transfer")
+		if err := os.MkdirAll(filepath.Dir(release), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(release, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(rustRepoEnv, repo)
+		got, checked, ok := rustTransferExampleBin()
+		if !ok {
+			t.Fatal("rustTransferExampleBin ok = false, want true")
+		}
+		if got != release {
+			t.Fatalf("rustTransferExampleBin bin = %q, want %q", got, release)
+		}
+		if len(checked) != 2 || checked[0] != debug || checked[1] != release {
+			t.Fatalf("rustTransferExampleBin checked = %v, want [%q %q]", checked, debug, release)
+		}
+	})
+
+	t.Run("unset", func(t *testing.T) {
+		t.Setenv(rustTransferBinEnv, "")
+		t.Setenv(rustRepoEnv, "")
+		bin, checked, ok := rustTransferExampleBin()
+		if ok {
+			t.Fatal("rustTransferExampleBin ok = true, want false")
+		}
+		if bin != "" || len(checked) != 0 {
+			t.Fatalf("rustTransferExampleBin = %q, %v, want empty", bin, checked)
+		}
+	})
+}
+
+func TestParseRustTransferEndpointBoundJSON(t *testing.T) {
+	sk, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public()
+
+	line := fmt.Sprintf(`{"timestamp":"2026-05-31T00:00:00Z","kind":"EndpointBound","endpoint_id":%q,"direct_addresses":["127.0.0.1:1234","[::1]:5678"],"relay_url":"https://relay.example.com/"}`, id.String())
+	ready, ok, err := parseRustTransferEndpointBound(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("parseRustTransferEndpointBound ok = false, want true")
+	}
+	if !ready.EndpointID.Equal(id) {
+		t.Fatalf("endpoint id = %s, want %s", ready.EndpointID, id)
+	}
+	if ready.EndpointIDText != id.String() {
+		t.Fatalf("endpoint id text = %q, want %q", ready.EndpointIDText, id.String())
+	}
+	wantAddrs := []netip.AddrPort{
+		netip.MustParseAddrPort("127.0.0.1:1234"),
+		netip.MustParseAddrPort("[::1]:5678"),
+	}
+	if fmt.Sprint(ready.DirectAddrs) != fmt.Sprint(wantAddrs) {
+		t.Fatalf("direct addrs = %v, want %v", ready.DirectAddrs, wantAddrs)
+	}
+	if !ready.HasRelayURL {
+		t.Fatal("relay URL missing")
+	}
+	if ready.RelayURL.String() != "https://relay.example.com/" {
+		t.Fatalf("relay URL = %q, want https://relay.example.com/", ready.RelayURL)
+	}
+	if ready.Line != line {
+		t.Fatalf("line = %q, want %q", ready.Line, line)
+	}
+
+	_, ok, err = parseRustTransferEndpointBound(`{"timestamp":"2026-05-31T00:00:00Z","kind":"SecretGenerated","secret_key":"abc"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("parseRustTransferEndpointBound ok = true for other event")
+	}
+
+	_, ok, err = parseRustTransferEndpointBound(`{"timestamp":"2026-05-31T00:00:00Z","kind":"EndpointArgs","relay_url":[]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("parseRustTransferEndpointBound ok = true for EndpointArgs")
+	}
+}
+
+func TestStartRustTransferProviderReadsEndpointBound(t *testing.T) {
+	sk, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public()
+	line := fmt.Sprintf(`{"timestamp":"2026-05-31T00:00:00Z","kind":"EndpointBound","endpoint_id":%q,"direct_addresses":["127.0.0.1:1234"],"relay_url":"https://relay.example.com/"}`, id.String())
+
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "transfer")
+	script := fmt.Sprintf(`#!/bin/sh
+test "$1" = "--output" || exit 3
+test "$2" = "json" || exit 3
+test "$3" = "--logs-path" || exit 3
+test -d "$4" || exit 3
+test "$5" = "provide" || exit 3
+test "$6" = "--env" || exit 3
+test "$7" = "prod" || exit 3
+test -d "$HOME" || exit 3
+test -d "$XDG_CONFIG_HOME" || exit 3
+test -d "$XDG_CACHE_HOME" || exit 3
+test -d "$XDG_DATA_HOME" || exit 3
+test -d "$QLOGDIR" || exit 3
+trap 'exit 0' INT TERM
+printf '%%s\n' '%s'
+while :; do sleep 1; done
+`, line)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	provider, err := startRustTransferProvider(t, bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !provider.Ready.EndpointID.Equal(id) {
+		t.Fatalf("endpoint id = %s, want %s", provider.Ready.EndpointID, id)
+	}
+	if len(provider.Ready.DirectAddrs) != 1 || provider.Ready.DirectAddrs[0] != netip.MustParseAddrPort("127.0.0.1:1234") {
+		t.Fatalf("direct addrs = %v, want [127.0.0.1:1234]", provider.Ready.DirectAddrs)
+	}
+	if !strings.Contains(provider.Output(), line) {
+		t.Fatalf("output = %q, want EndpointBound line", provider.Output())
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatalf("stop fake transfer provider: %v\n%s", err, provider.Output())
+	}
+}
+
+func TestLiveRustTransferExampleStarts(t *testing.T) {
+	bin := requireRustTransferExample(t)
+
+	provider, err := startRustTransferProvider(t, bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !provider.Ready.HasRelayURL {
+		t.Fatalf("Rust transfer example EndpointBound has no relay URL\n%s", provider.Output())
+	}
+	t.Logf("Rust transfer example ready: id=%s direct=%v relay=%s", provider.Ready.EndpointIDText, provider.Ready.DirectAddrs, provider.Ready.RelayURL)
+	if err := provider.Close(); err != nil {
+		t.Fatalf("stop Rust transfer provider: %v\n%s", err, provider.Output())
+	}
+}
+
+func requireRustTransferExample(t *testing.T) string {
+	t.Helper()
+	if os.Getenv(liveRustInteropEnv) != "1" {
+		t.Skipf("set %s=1 with %s or %s pointing at a built Rust transfer example; this test never downloads or builds Rust dependencies", liveRustInteropEnv, rustTransferBinEnv, rustRepoEnv)
+	}
+
+	bin, checked, ok := rustTransferExampleBin()
+	if !ok {
+		t.Skipf("%s not set and no local Rust transfer example found via %s; checked %v", rustTransferBinEnv, rustRepoEnv, checked)
+	}
+	if !filepath.IsAbs(bin) {
+		t.Fatalf("%s=%q, want absolute path", rustTransferBinEnv, bin)
+	}
+	if st, err := os.Stat(bin); err != nil {
+		t.Skipf("Rust transfer example %s not found: %v", bin, err)
+	} else if st.IsDir() || st.Mode()&0o111 == 0 {
+		t.Fatalf("Rust transfer example %s is not executable", bin)
+	}
+	t.Logf("using Rust transfer example: %s", bin)
+	return bin
+}
+
+func rustTransferExampleBin() (bin string, checked []string, ok bool) {
+	return rustBinFromEnvOrRepo(rustTransferBinEnv,
+		filepath.Join("target", "debug", "examples", "transfer"),
+		filepath.Join("target", "release", "examples", "transfer"),
+	)
+}
+
+type rustTransferReady struct {
+	EndpointID     base.EndpointId
+	EndpointIDText string
+	DirectAddrs    []netip.AddrPort
+	RelayURL       base.RelayUrl
+	HasRelayURL    bool
+	Line           string
+}
+
+func parseRustTransferEndpointBound(line string) (rustTransferReady, bool, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return rustTransferReady{}, false, nil
+	}
+
+	var kind struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(line), &kind); err != nil {
+		return rustTransferReady{}, false, fmt.Errorf("json: %w", err)
+	}
+	if kind.Kind != "EndpointBound" {
+		return rustTransferReady{}, false, nil
+	}
+
+	var event struct {
+		EndpointID      string   `json:"endpoint_id"`
+		DirectAddresses []string `json:"direct_addresses"`
+		RelayURL        *string  `json:"relay_url"`
+	}
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return rustTransferReady{}, true, fmt.Errorf("EndpointBound json: %w", err)
+	}
+	if event.EndpointID == "" {
+		return rustTransferReady{}, true, fmt.Errorf("missing endpoint_id")
+	}
+
+	id, err := parseRustEndpointID(event.EndpointID)
+	if err != nil {
+		return rustTransferReady{}, true, err
+	}
+	addrs := make([]netip.AddrPort, 0, len(event.DirectAddresses))
+	for _, text := range event.DirectAddresses {
+		addr, err := netip.ParseAddrPort(text)
+		if err != nil {
+			return rustTransferReady{}, true, fmt.Errorf("direct address %q: %w", text, err)
+		}
+		addrs = append(addrs, addr)
+	}
+	ready := rustTransferReady{
+		EndpointID:     id,
+		EndpointIDText: event.EndpointID,
+		DirectAddrs:    addrs,
+		Line:           line,
+	}
+	if event.RelayURL != nil {
+		if *event.RelayURL == "" {
+			return rustTransferReady{}, true, fmt.Errorf("empty relay_url")
+		}
+		relayURL, err := base.ParseRelayUrl(*event.RelayURL)
+		if err != nil {
+			return rustTransferReady{}, true, fmt.Errorf("relay URL %q: %w", *event.RelayURL, err)
+		}
+		ready.RelayURL = relayURL
+		ready.HasRelayURL = true
+	}
+	return ready, true, nil
+}
+
+type rustTransferProvider struct {
+	Ready rustTransferReady
+
+	cmd     *exec.Cmd
+	done    chan error
+	out     *rustTransferOutput
+	once    sync.Once
+	waitErr error
+}
+
+func (p *rustTransferProvider) Close() error {
+	p.once.Do(func() {
+		var signalErr error
+		if p.cmd.Process != nil {
+			if err := p.cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				signalErr = err
+			}
+		}
+		select {
+		case err := <-p.done:
+			if err != nil {
+				p.waitErr = err
+			} else if signalErr != nil {
+				p.waitErr = fmt.Errorf("%s interrupt: %w", p.cmd.Path, signalErr)
+			}
+		case <-time.After(5 * time.Second):
+			if p.cmd.Process != nil {
+				_ = p.cmd.Process.Kill()
+			}
+			select {
+			case p.waitErr = <-p.done:
+			case <-time.After(time.Second):
+				p.waitErr = fmt.Errorf("%s did not stop after interrupt", p.cmd.Path)
+				return
+			}
+			if p.waitErr == nil {
+				p.waitErr = fmt.Errorf("%s did not stop after interrupt", p.cmd.Path)
+			}
+		}
+	})
+	return p.waitErr
+}
+
+func (p *rustTransferProvider) Output() string {
+	return p.out.String()
+}
+
+type rustTransferOutput struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (o *rustTransferOutput) AppendLine(line string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.buf.WriteString(line)
+	o.buf.WriteByte('\n')
+}
+
+func (o *rustTransferOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
+}
+
+func startRustTransferProvider(t *testing.T, bin string) (*rustTransferProvider, error) {
+	t.Helper()
+	dir := t.TempDir()
+	for _, name := range []string{"home", "config", "cache", "data", "logs", "qlog"} {
+		if err := os.MkdirAll(filepath.Join(dir, name), 0o755); err != nil {
+			return nil, err
+		}
+	}
+
+	cmd := exec.Command(bin,
+		"--output", "json",
+		"--logs-path", filepath.Join(dir, "logs"),
+		"provide",
+		"--env", "prod",
+	)
+	cmd.Env = append(os.Environ(),
+		"HOME="+filepath.Join(dir, "home"),
+		"XDG_CONFIG_HOME="+filepath.Join(dir, "config"),
+		"XDG_CACHE_HOME="+filepath.Join(dir, "cache"),
+		"XDG_DATA_HOME="+filepath.Join(dir, "data"),
+		"QLOGDIR="+filepath.Join(dir, "qlog"),
+	)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("%s stdout: %w", bin, err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("%s stderr: %w", bin, err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("%s: %w", bin, err)
+	}
+
+	out := new(rustTransferOutput)
+	lines := make(chan string)
+	readyDone := make(chan struct{})
+	var scans sync.WaitGroup
+	scans.Add(2)
+	go scanRustTransferOutput(stdout, out, lines, readyDone, &scans)
+	go scanRustTransferOutput(stderr, out, nil, readyDone, &scans)
+	scanDone := make(chan struct{})
+	go func() {
+		scans.Wait()
+		close(scanDone)
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+	provider := &rustTransferProvider{cmd: cmd, done: done, out: out}
+
+	timer := time.NewTimer(30 * time.Second)
+	defer timer.Stop()
+	defer close(readyDone)
+	for {
+		select {
+		case line := <-lines:
+			ready, ok, err := parseRustTransferEndpointBound(line)
+			if err != nil {
+				_ = provider.Close()
+				return nil, fmt.Errorf("%s EndpointBound: %w\n%s", bin, err, out.String())
+			}
+			if !ok {
+				continue
+			}
+			provider.Ready = ready
+			t.Cleanup(func() {
+				if err := provider.Close(); err != nil {
+					t.Logf("stopping Rust transfer example: %v", err)
+				}
+			})
+			return provider, nil
+		case err := <-done:
+			waitScan(scanDone)
+			if err == nil {
+				return nil, fmt.Errorf("%s exited during startup\n%s", bin, out.String())
+			}
+			return nil, fmt.Errorf("%s exited during startup: %w\n%s", bin, err, out.String())
+		case <-timer.C:
+			_ = provider.Close()
+			return nil, fmt.Errorf("%s did not print EndpointBound within 30s\n%s", bin, out.String())
+		}
+	}
+}
+
+func scanRustTransferOutput(r io.Reader, out *rustTransferOutput, lines chan<- string, done <-chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		out.AppendLine(line)
+		if lines == nil {
+			continue
+		}
+		select {
+		case lines <- line:
+		case <-done:
+		}
+	}
+}
