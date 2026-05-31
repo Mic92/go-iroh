@@ -1135,7 +1135,9 @@ func (h *sentPacketHandler) detectLostPathProbes(now monotime.Time) {
 	}
 	for _, p := range lostPathProbes {
 		for _, f := range p.Frames {
-			f.Handler.OnLost(f.Frame)
+			if f.Handler != nil {
+				f.Handler.OnLost(f.Frame)
+			}
 		}
 		appData.history.RemovePathProbe(p.PacketNumber)
 	}

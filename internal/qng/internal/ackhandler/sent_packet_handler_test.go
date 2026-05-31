@@ -285,6 +285,33 @@ func TestSentPacketHandlerPTOCountReset(t *testing.T) {
 	}
 }
 
+func TestSentPacketHandlerLostPathProbeWithoutHandler(t *testing.T) {
+	h, _ := newOracleSentHandler(t)
+	now := monotime.Now()
+	pn := h.PopPacketNumber(protocol.Encryption1RTT)
+	h.SentPacket(
+		now,
+		pn,
+		protocol.InvalidPacketNumber,
+		nil,
+		[]Frame{{Frame: &wire.PathChallengeFrame{Data: [8]byte{1}}}},
+		protocol.Encryption1RTT,
+		protocol.ECNNon,
+		oracleInitialMaxDatagramSize,
+		false,
+		true,
+	)
+
+	space := h.getAppDataPath(protocol.PathIDZero).space
+	if !space.history.HasOutstandingPathProbes() {
+		t.Fatal("path probe not tracked")
+	}
+	h.detectLostPathProbes(now.Add(pathProbePacketLossTimeout + time.Millisecond))
+	if space.history.HasOutstandingPathProbes() {
+		t.Fatal("lost path probe still tracked")
+	}
+}
+
 // TestSentPacketHandlerLossTimerArmed pins that sending an ack-eliciting 1-RTT
 // packet arms a PTO loss-detection timer in the 1-RTT space and that delivering
 // an ACK that leaves nothing outstanding cancels it.
