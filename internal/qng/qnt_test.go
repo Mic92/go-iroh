@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -371,7 +372,7 @@ func TestQNTRoundClearsPreviousPendingState(t *testing.T) {
 	}
 	st := c.qntLocalState()
 	st.mu.Lock()
-	st.sentProbes = map[uint64]netip.AddrPort{1234: remote1}
+	st.sentProbes = map[[8]byte]netip.AddrPort{{1, 2, 3, 4, 5, 6, 7, 8}: remote1}
 	st.mu.Unlock()
 
 	if err := c.RemoveNATTraversalAddress(local1); err != nil {
@@ -399,6 +400,80 @@ func TestQNTRoundClearsPreviousPendingState(t *testing.T) {
 	defer st.mu.Unlock()
 	if len(st.sentProbes) != 0 {
 		t.Fatalf("sent probes after second round = %v, want none", st.sentProbes)
+	}
+}
+
+func TestQNTSentProbeConsumesMatchingPathResponse(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	remote := netip.MustParseAddrPort("198.51.100.1:1234")
+	mapped := netip.MustParseAddrPort("[::ffff:198.51.100.1]:1234")
+
+	c.qntRecordSentProbe(challenge, remote)
+	got, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge}, mapped)
+	if !ok || got != remote {
+		t.Fatalf("qntConsumePathResponse = %v, %v, want %v, true", got, ok, remote)
+	}
+	if got, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge}, remote); ok || got.IsValid() {
+		t.Fatalf("duplicate qntConsumePathResponse = %v, %v, want zero, false", got, ok)
+	}
+}
+
+func TestQNTSentProbeRequiresChallengeAndSource(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	otherChallenge := [8]byte{8, 7, 6, 5, 4, 3, 2, 1}
+	remote := netip.MustParseAddrPort("198.51.100.1:1234")
+	otherRemote := netip.MustParseAddrPort("198.51.100.2:1234")
+
+	c.qntRecordSentProbe(challenge, remote)
+	if got, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge}, otherRemote); ok || got.IsValid() {
+		t.Fatalf("wrong source qntConsumePathResponse = %v, %v, want zero, false", got, ok)
+	}
+	if got, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: otherChallenge}, remote); ok || got.IsValid() {
+		t.Fatalf("wrong challenge qntConsumePathResponse = %v, %v, want zero, false", got, ok)
+	}
+	if got, ok := c.qntConsumePathResponse(nil, remote); ok || got.IsValid() {
+		t.Fatalf("nil frame qntConsumePathResponse = %v, %v, want zero, false", got, ok)
+	}
+	if got, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge}, netip.AddrPort{}); ok || got.IsValid() {
+		t.Fatalf("invalid source qntConsumePathResponse = %v, %v, want zero, false", got, ok)
+	}
+	got, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge}, remote)
+	if !ok || got != remote {
+		t.Fatalf("matching response after misses = %v, %v, want %v, true", got, ok, remote)
+	}
+}
+
+func TestQNTSentProbeIgnoresInvalidRemote(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	remote := netip.MustParseAddrPort("198.51.100.1:1234")
+
+	c.qntRecordSentProbe(challenge, netip.AddrPort{})
+	if got, ok := c.qntConsumePathResponse(&wire.PathResponseFrame{Data: challenge}, remote); ok || got.IsValid() {
+		t.Fatalf("invalid remote qntConsumePathResponse = %v, %v, want zero, false", got, ok)
+	}
+}
+
+func TestQNTPathResponseHandlerReceivesSourceAddress(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.perspective = protocol.PerspectiveClient
+	challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
+	frame := &wire.PathResponseFrame{Data: challenge}
+	source := netip.MustParseAddrPort("198.51.100.1:1234")
+	otherSource := netip.MustParseAddrPort("198.51.100.2:1234")
+
+	c.qntRecordSentProbe(challenge, source)
+	_ = c.handlePathResponseFrame(frame, otherSource)
+	if _, ok := c.qntConsumePathResponse(frame, source); !ok {
+		t.Fatal("PATH_RESPONSE from wrong source consumed QNT probe")
+	}
+
+	c.qntRecordSentProbe(challenge, source)
+	_ = c.handlePathResponseFrame(frame, source)
+	if _, ok := c.qntConsumePathResponse(frame, source); ok {
+		t.Fatal("PATH_RESPONSE from matching source was not passed to QNT hook")
 	}
 }
 

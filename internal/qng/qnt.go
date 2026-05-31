@@ -44,7 +44,7 @@ type qntLocalState struct {
 	round                 uint64
 	pendingReachOut       []*wire.ReachOutFrame
 	pendingProbes         []netip.AddrPort
-	sentProbes            map[uint64]netip.AddrPort
+	sentProbes            map[[8]byte]netip.AddrPort
 }
 
 type qntLocalAddress struct {
@@ -174,6 +174,39 @@ func (c *Conn) qntPendingProbeAddresses() []netip.AddrPort {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return slices.Clone(st.pendingProbes)
+}
+
+func (c *Conn) qntRecordSentProbe(challenge [8]byte, remote netip.AddrPort) {
+	remote = canonicalNATTraversalAddr(remote)
+	if !remote.IsValid() {
+		return
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.sentProbes == nil {
+		st.sentProbes = make(map[[8]byte]netip.AddrPort)
+	}
+	st.sentProbes[challenge] = remote
+}
+
+func (c *Conn) qntConsumePathResponse(frame *wire.PathResponseFrame, source netip.AddrPort) (netip.AddrPort, bool) {
+	if frame == nil {
+		return netip.AddrPort{}, false
+	}
+	source = canonicalNATTraversalAddr(source)
+	if !source.IsValid() {
+		return netip.AddrPort{}, false
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	remote, ok := st.sentProbes[frame.Data]
+	if !ok || remote != source {
+		return netip.AddrPort{}, false
+	}
+	delete(st.sentProbes, frame.Data)
+	return remote, true
 }
 
 func (c *Conn) queueLocalAddAddressFrame(seq uint64, addr netip.AddrPort) {

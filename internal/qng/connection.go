@@ -65,6 +65,14 @@ type receivedPacketWithDatagramID struct {
 
 func (p *receivedPacket) Size() protocol.ByteCount { return protocol.ByteCount(len(p.data)) }
 
+func packetSourceAddrPort(addr net.Addr) netip.AddrPort {
+	udp, ok := addr.(*net.UDPAddr)
+	if !ok {
+		return netip.AddrPort{}
+	}
+	return canonicalNATTraversalAddr(udp.AddrPort())
+}
+
 func (p *receivedPacket) Clone() *receivedPacket {
 	return &receivedPacket{
 		remoteAddr: p.remoteAddr,
@@ -1426,7 +1434,7 @@ func (c *Conn) handleShortHeaderPacket(
 			})
 		}
 	}
-	isNonProbing, pathChallenge, err := c.handleUnpackedShortHeaderPacket(destConnID, pn, data, p.ecn, p.rcvTime, log)
+	isNonProbing, pathChallenge, err := c.handleUnpackedShortHeaderPacket(destConnID, pn, data, packetSourceAddrPort(p.remoteAddr), p.ecn, p.rcvTime, log)
 	if err != nil {
 		return false, err
 	}
@@ -1914,7 +1922,7 @@ func (c *Conn) handleUnpackedLongHeaderPacket(
 			})
 		}
 	}
-	isAckEliciting, _, _, err := c.handleFrames(packet.data, packet.hdr.DestConnectionID, packet.encryptionLevel, log, rcvTime)
+	isAckEliciting, _, _, err := c.handleFrames(packet.data, packet.hdr.DestConnectionID, packet.encryptionLevel, log, rcvTime, netip.AddrPort{})
 	if err != nil {
 		return err
 	}
@@ -1926,6 +1934,7 @@ func (c *Conn) handleUnpackedShortHeaderPacket(
 	destConnID protocol.ConnectionID,
 	pn protocol.PacketNumber,
 	data []byte,
+	source netip.AddrPort,
 	ecn protocol.ECN,
 	rcvTime monotime.Time,
 	log func([]qlog.Frame),
@@ -1947,7 +1956,7 @@ func (c *Conn) handleUnpackedShortHeaderPacket(
 		}
 	}
 
-	isAckEliciting, isNonProbing, pathChallenge, err := c.handleFrames(data, destConnID, protocol.Encryption1RTT, log, rcvTime)
+	isAckEliciting, isNonProbing, pathChallenge, err := c.handleFrames(data, destConnID, protocol.Encryption1RTT, log, rcvTime, source)
 	if err != nil {
 		return false, nil, err
 	}
@@ -1998,6 +2007,7 @@ func (c *Conn) handleFrames(
 	encLevel protocol.EncryptionLevel,
 	log func([]qlog.Frame),
 	rcvTime monotime.Time,
+	source netip.AddrPort,
 ) (isAckEliciting, isNonProbing bool, pathChallenge *wire.PathChallengeFrame, _ error) {
 	// Only used for tracing.
 	// If we're not tracing, this slice will always remain empty.
@@ -2091,7 +2101,7 @@ func (c *Conn) handleFrames(
 			if skipHandling {
 				continue
 			}
-			pc, err := c.handleFrame(frame, encLevel, destConnID, rcvTime)
+			pc, err := c.handleFrame(frame, encLevel, destConnID, rcvTime, source)
 			if pc != nil {
 				pathChallenge = pc
 			}
@@ -2131,6 +2141,7 @@ func (c *Conn) handleFrame(
 	encLevel protocol.EncryptionLevel,
 	destConnID protocol.ConnectionID,
 	rcvTime monotime.Time,
+	source netip.AddrPort,
 ) (pathChallenge *wire.PathChallengeFrame, _ error) {
 	var err error
 	wire.LogFrame(c.logger, f, false)
@@ -2158,7 +2169,7 @@ func (c *Conn) handleFrame(
 		c.handlePathChallengeFrame(frame)
 		pathChallenge = frame
 	case *wire.PathResponseFrame:
-		err = c.handlePathResponseFrame(frame)
+		err = c.handlePathResponseFrame(frame, source)
 	case *wire.NewTokenFrame:
 		err = c.handleNewTokenFrame(frame)
 	case *wire.NewConnectionIDFrame:
@@ -2502,7 +2513,9 @@ func (c *Conn) handlePathChallengeFrame(f *wire.PathChallengeFrame) {
 	}
 }
 
-func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame) error {
+func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame, source netip.AddrPort) error {
+	c.handleQNTPathResponseFrame(f, source)
+
 	// A PATH_RESPONSE might validate an outgoing multipath path (5f) rather than
 	// an RFC 9000 single-path migration. Check multipath first; if it matched, we
 	// are done. This keeps the two validators (draft-multipath vs RFC 9000
@@ -2518,6 +2531,10 @@ func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame) error {
 	default:
 		panic("unreachable")
 	}
+}
+
+func (c *Conn) handleQNTPathResponseFrame(f *wire.PathResponseFrame, source netip.AddrPort) {
+	c.qntConsumePathResponse(f, source)
 }
 
 func (c *Conn) handlePathResponseFrameClient(f *wire.PathResponseFrame) error {
