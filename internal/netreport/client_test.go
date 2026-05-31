@@ -89,6 +89,12 @@ func TestPreferredRelayHysteresis(t *testing.T) {
 			wantAfter: "https://b.example/",
 		},
 		{
+			name:      "exact 2/3 threshold wins",
+			first:     map[string]time.Duration{"https://a.example/": ms(60)},
+			second:    map[string]time.Duration{"https://a.example/": ms(60), "https://b.example/": ms(40)},
+			wantAfter: "https://b.example/",
+		},
+		{
 			name:      "old relay gone, switch to only candidate",
 			first:     map[string]time.Duration{"https://a.example/": ms(60)},
 			second:    map[string]time.Duration{"https://b.example/": ms(55)},
@@ -163,7 +169,9 @@ func TestGetReportEmptyRelayMap(t *testing.T) {
 }
 
 func TestRunHTTPSProbe(t *testing.T) {
+	var gotPath string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
 		if r.URL.Path != relayProbePath {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -186,6 +194,9 @@ func TestRunHTTPSProbe(t *testing.T) {
 	}
 	if !rep.relay.Equal(relayURL) {
 		t.Errorf("relay = %v, want %v", rep.relay, relayURL)
+	}
+	if gotPath != relayProbePath {
+		t.Errorf("probe path = %q, want %q", gotPath, relayProbePath)
 	}
 }
 
@@ -260,6 +271,33 @@ func TestCheckCaptivePortal(t *testing.T) {
 				t.Errorf("captive = %v, want %v", got, tt.wantCaptive)
 			}
 		})
+	}
+}
+
+func TestCheckCaptivePortalRequestShape(t *testing.T) {
+	var gotPath, gotChallenge string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotChallenge = r.Header.Get(challengeHeader)
+		w.Header().Set(responseHeader, "response "+gotChallenge)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	relayURL := mustRelay(t, ts.URL)
+	got, err := checkCaptivePortal(context.Background(), relayURL, nil)
+	if err != nil {
+		t.Fatalf("checkCaptivePortal: %v", err)
+	}
+	if got {
+		t.Fatal("checkCaptivePortal = true, want false")
+	}
+	if gotPath != captivePortalPath {
+		t.Errorf("captive portal path = %q, want %q", gotPath, captivePortalPath)
+	}
+	wantChallenge := "ts_" + relayURL.Host()
+	if gotChallenge != wantChallenge {
+		t.Errorf("%s = %q, want %q", challengeHeader, gotChallenge, wantChallenge)
 	}
 }
 
