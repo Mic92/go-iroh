@@ -14,8 +14,7 @@ import (
 
 // TestQNTNegotiated checks the negotiation gate: n0 NAT traversal is negotiated
 // only when both peers advertise the n0_nat_traversal transport parameter with a
-// non-zero address limit. Connection-level parser admission remains disabled in
-// this slice because the operational state machine is still fail-closed.
+// non-zero address limit.
 func TestQNTNegotiated(t *testing.T) {
 	const local = uint8(8)
 	const peerLimit = uint8(16)
@@ -80,35 +79,13 @@ func TestQNTConfigClone(t *testing.T) {
 	}
 }
 
-func TestQNTApplyTransportParametersDoesNotAdmitFrames(t *testing.T) {
+func TestQNTApplyTransportParametersAdmitsNegotiatedFrames(t *testing.T) {
 	const limit = uint8(8)
 	c := newQNTTransportParameterConn(limit, limit)
 	c.applyTransportParameters()
 	if !c.qntNegotiated() {
 		t.Fatal("qntNegotiated() = false, want true")
 	}
-	for _, ft := range []wire.FrameType{
-		wire.FrameTypeAddIPv4Address,
-		wire.FrameTypeAddIPv6Address,
-		wire.FrameTypeReachOutAtIPv4,
-		wire.FrameTypeReachOutAtIPv6,
-		wire.FrameTypeRemoveAddress,
-	} {
-		b := quicvarint.Append(nil, uint64(ft))
-		if _, _, err := c.frameParser.ParseType(b, protocol.Encryption1RTT); err == nil {
-			t.Fatalf("ParseType(%#x) admitted QNT frame after negotiation", uint64(ft))
-		}
-	}
-}
-
-func TestQNTManualParserAdmissionParsesAndHandlesFrames(t *testing.T) {
-	const limit = uint8(4)
-	c := newQNTTransportParameterConn(limit, limit)
-	c.applyTransportParameters()
-	if !c.qntNegotiated() {
-		t.Fatal("qntNegotiated() = false, want true")
-	}
-	c.frameParser.SetSupportsNATTraversal(true)
 
 	added := netip.MustParseAddrPort("198.51.100.1:1001")
 	reachOut := netip.MustParseAddrPort("198.51.100.2:1002")
@@ -118,7 +95,7 @@ func TestQNTManualParserAdmissionParsesAndHandlesFrames(t *testing.T) {
 		&wire.RemoveAddressFrame{SeqNo: 1},
 	}
 	for _, f := range frames {
-		parsed := parseQNTFrameWithManualAdmission(t, c, f)
+		parsed := parseQNTFrame(t, c, f)
 		switch frame := parsed.(type) {
 		case *wire.AddAddressFrame:
 			if err := c.handleAddAddressFrame(frame); err != nil {
@@ -145,7 +122,30 @@ func TestQNTManualParserAdmissionParsesAndHandlesFrames(t *testing.T) {
 	}
 }
 
-func parseQNTFrameWithManualAdmission(t *testing.T, c *Conn, f wire.Frame) wire.Frame {
+func TestQNTApplyTransportParametersRejectsUnnegotiatedFrames(t *testing.T) {
+	const local = uint8(8)
+	const peer = uint8(0)
+	c := newQNTTransportParameterConn(local, peer)
+	c.applyTransportParameters()
+	if c.qntNegotiated() {
+		t.Fatal("qntNegotiated() = true, want false")
+	}
+
+	for _, ft := range []wire.FrameType{
+		wire.FrameTypeAddIPv4Address,
+		wire.FrameTypeAddIPv6Address,
+		wire.FrameTypeReachOutAtIPv4,
+		wire.FrameTypeReachOutAtIPv6,
+		wire.FrameTypeRemoveAddress,
+	} {
+		b := quicvarint.Append(nil, uint64(ft))
+		if _, _, err := c.frameParser.ParseType(b, protocol.Encryption1RTT); err == nil {
+			t.Fatalf("ParseType(%#x) admitted QNT frame without negotiation", uint64(ft))
+		}
+	}
+}
+
+func parseQNTFrame(t *testing.T, c *Conn, f wire.Frame) wire.Frame {
 	t.Helper()
 	b, err := f.Append(nil, protocol.Version1)
 	if err != nil {

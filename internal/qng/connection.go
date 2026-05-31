@@ -2951,6 +2951,9 @@ func (c *Conn) applyTransportParameters() {
 	// parser rejects them as unknown, keeping un-negotiated connections
 	// byte-identical.
 	c.frameParser.SetSupportsAddressDiscovery(c.acceptsObservedAddr())
+	// Admit n0 NAT traversal frames only once both peers advertised the
+	// n0_nat_traversal transport parameter.
+	c.frameParser.SetSupportsNATTraversal(c.qntNegotiated())
 	c.connFlowController.UpdateSendWindow(params.InitialMaxData)
 	c.rttStats.SetMaxAckDelay(params.MaxAckDelay)
 	c.connIDGenerator.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
@@ -2988,8 +2991,7 @@ func (c *Conn) multipathNegotiated() bool {
 // qntNegotiated reports whether n0 QUIC NAT traversal was negotiated. This is
 // the case only when both peers advertised the n0_nat_traversal transport
 // parameter with a non-zero address limit. It must be called only after the
-// peer's transport parameters have been processed. QNT frame parser admission
-// intentionally remains disabled until the state machine is implemented.
+// peer's transport parameters have been processed.
 func (c *Conn) qntNegotiated() bool {
 	return maxRemoteNATTraversalAddressesParam(c.config.MaxRemoteNATTraversalAddresses) != nil &&
 		c.peerParams != nil &&
