@@ -10,6 +10,7 @@ import (
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/internal/socket"
 )
 
 // TestEndpointSecretKey verifies SecretKey returns the configured key and that
@@ -106,6 +107,99 @@ func TestEndpointLocalNATTraversalCandidates(t *testing.T) {
 	if got[0] != loopback.LocalAddr() {
 		t.Fatalf("loopback localNATTraversalCandidates = %v, want [%v]", got, loopback.LocalAddr())
 	}
+
+	external4 := netip.MustParseAddrPort("203.0.113.10:4444")
+	external6 := netip.MustParseAddrPort("[2001:db8::10]:5555")
+	if !loopback.setExternalNATTraversalCandidates(external4, external6) {
+		t.Fatal("setExternalNATTraversalCandidates = false, want true")
+	}
+	got = loopback.localNATTraversalCandidates()
+	want := []netip.AddrPort{loopback.LocalAddr(), external4, external6}
+	if !equalAddrPorts(got, want) {
+		t.Fatalf("localNATTraversalCandidates with externals = %v, want %v", got, want)
+	}
+	if loopback.setExternalNATTraversalCandidates(external4, external6) {
+		t.Fatal("same setExternalNATTraversalCandidates = true, want false")
+	}
+}
+
+func TestEndpointExternalNATTraversalCandidatesCanonicalize(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	bound := ep.LocalAddr()
+	mapped := netip.AddrPortFrom(netip.AddrFrom16(bound.Addr().As16()), bound.Port())
+	externalMapped := netip.MustParseAddrPort("[::ffff:198.51.100.10]:4444")
+	externalCanon := netip.MustParseAddrPort("198.51.100.10:4444")
+	if !ep.setExternalNATTraversalCandidates(
+		mapped,
+		externalMapped,
+		externalCanon,
+		netip.AddrPort{},
+		netip.MustParseAddrPort("0.0.0.0:4444"),
+		netip.MustParseAddrPort("198.51.100.11:0"),
+	) {
+		t.Fatal("setExternalNATTraversalCandidates = false, want true")
+	}
+	want := []netip.AddrPort{
+		bound,
+		externalCanon,
+	}
+	if got := ep.localNATTraversalCandidates(); !equalAddrPorts(got, want) {
+		t.Fatalf("localNATTraversalCandidates = %v, want %v", got, want)
+	}
+}
+
+func TestEndpointExternalNATTraversalCandidatesReadvertiseActiveRemotes(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	remote, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &endpointQNTFakeConn{
+		addr: socket.IPAddr(netip.MustParseAddrPort("192.0.2.20:5678")),
+		done: make(chan struct{}),
+	}
+	events := ep.remotes.AddConnection(remote.Public(), conn)
+	select {
+	case <-events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial path event")
+	}
+
+	external := netip.MustParseAddrPort("203.0.113.10:4444")
+	if !ep.setExternalNATTraversalCandidates(external) {
+		t.Fatal("setExternalNATTraversalCandidates = false, want true")
+	}
+	want := []netip.AddrPort{ep.LocalAddr(), external}
+	if !equalAddrPorts(conn.natAddrs, want) {
+		t.Fatalf("advertised candidates = %v, want %v", conn.natAddrs, want)
+	}
+}
+
+type endpointQNTFakeConn struct {
+	addr     socket.Addr
+	done     chan struct{}
+	natAddrs []netip.AddrPort
+}
+
+func (c *endpointQNTFakeConn) SmoothedRTT() time.Duration { return time.Millisecond }
+func (c *endpointQNTFakeConn) Done() <-chan struct{}      { return c.done }
+func (c *endpointQNTFakeConn) RemoteAddr() socket.Addr    { return c.addr }
+func (c *endpointQNTFakeConn) MultipathNegotiated() bool  { return true }
+func (c *endpointQNTFakeConn) AddNATTraversalAddress(addr netip.AddrPort) error {
+	c.natAddrs = append(c.natAddrs, addr)
+	return nil
 }
 
 func TestEndpointRegisterConnSeedsQNTCandidatesOpportunistically(t *testing.T) {

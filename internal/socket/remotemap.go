@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -82,6 +83,21 @@ func (m *RemoteMap) Actor(id base.EndpointId) *RemoteStateActor {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.actor(id)
+}
+
+// AddNATTraversalAddresses advertises local QNT candidates to currently-active
+// remote actors. It does not spawn actors and ignores per-actor errors, because
+// candidate updates must not make an established endpoint fail.
+func (m *RemoteMap) AddNATTraversalAddresses(addrs []netip.AddrPort) {
+	m.mu.Lock()
+	actors := make([]*RemoteStateActor, 0, len(m.actors))
+	for _, a := range m.actors {
+		actors = append(actors, a)
+	}
+	m.mu.Unlock()
+	for _, a := range actors {
+		_ = a.AddNATTraversalAddresses(addrs)
+	}
 }
 
 // Len returns the number of registered actors. Intended for tests and metrics.

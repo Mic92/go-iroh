@@ -40,8 +40,9 @@ type Endpoint struct {
 	remotes *socket.RemoteMap
 	lookup  *AddressLookupServices
 
-	mu     sync.Mutex
-	closed bool
+	mu          sync.Mutex
+	closed      bool
+	externalNAT []netip.AddrPort
 }
 
 // config holds the options assembled by [Option] values before [Bind].
@@ -271,14 +272,81 @@ func (e *Endpoint) LocalAddr() netip.AddrPort {
 // localNATTraversalCandidates returns concrete local direct addresses this
 // endpoint can hand to qng's QNT state. The default bind address is unspecified
 // ([::]:port), which is not a usable candidate and must not be advertised.
-// Reflexive QAD addresses are not endpoint state yet; when they are, they should
-// be appended here after the same validity checks.
+// QAD-derived external addresses are appended after the same canonicalization
+// and validity checks.
 func (e *Endpoint) localNATTraversalCandidates() []netip.AddrPort {
-	addr := e.LocalAddr()
-	if !addr.IsValid() || addr.Addr().IsUnspecified() {
-		return nil
+	var addrs []netip.AddrPort
+	if addr, ok := canonicalNATTraversalCandidate(e.LocalAddr()); ok {
+		addrs = appendUniqueNATTraversalCandidate(addrs, addr)
 	}
-	return []netip.AddrPort{addr}
+	e.mu.Lock()
+	external := append([]netip.AddrPort(nil), e.externalNAT...)
+	e.mu.Unlock()
+	for _, addr := range external {
+		addrs = appendUniqueNATTraversalCandidate(addrs, addr)
+	}
+	return addrs
+}
+
+func (e *Endpoint) setExternalNATTraversalCandidates(addrs ...netip.AddrPort) bool {
+	var next []netip.AddrPort
+	for _, addr := range addrs {
+		next = appendUniqueNATTraversalCandidate(next, addr)
+	}
+
+	e.mu.Lock()
+	if equalAddrPorts(e.externalNAT, next) {
+		e.mu.Unlock()
+		return false
+	}
+	e.externalNAT = next
+	e.mu.Unlock()
+
+	e.advertiseNATTraversalCandidates()
+	return true
+}
+
+func (e *Endpoint) advertiseNATTraversalCandidates() {
+	if e.remotes == nil {
+		return
+	}
+	candidates := e.localNATTraversalCandidates()
+	if len(candidates) == 0 {
+		return
+	}
+	e.remotes.AddNATTraversalAddresses(candidates)
+}
+
+func canonicalNATTraversalCandidate(addr netip.AddrPort) (netip.AddrPort, bool) {
+	if !addr.IsValid() || addr.Port() == 0 || addr.Addr().IsUnspecified() {
+		return netip.AddrPort{}, false
+	}
+	return netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port()), true
+}
+
+func appendUniqueNATTraversalCandidate(addrs []netip.AddrPort, addr netip.AddrPort) []netip.AddrPort {
+	addr, ok := canonicalNATTraversalCandidate(addr)
+	if !ok {
+		return addrs
+	}
+	for _, a := range addrs {
+		if a == addr {
+			return addrs
+		}
+	}
+	return append(addrs, addr)
+}
+
+func equalAddrPorts(a, b []netip.AddrPort) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Addr returns the endpoint's [base.EndpointAddr] from currently-known local
@@ -481,15 +549,11 @@ func (e *Endpoint) registerConn(remote base.EndpointId, qc *quic.Conn) {
 	if !qc.ConnectionState().MultipathNegotiated {
 		return
 	}
-	candidates := e.localNATTraversalCandidates()
-	if len(candidates) == 0 {
-		return
-	}
 	// Candidate seeding is opportunistic: QNT may still be disabled or
 	// incomplete, and path management must not make an otherwise-established
 	// connection fail. The actor/qng layers keep the failure visible to explicit
 	// hole-punch calls.
-	_ = e.remotes.Actor(remote).AddNATTraversalAddresses(candidates)
+	_ = e.remotes.Actor(remote).AddNATTraversalAddresses(e.localNATTraversalCandidates())
 }
 
 // resolveFunc returns the address-lookup hook the RemoteMap actors use to
