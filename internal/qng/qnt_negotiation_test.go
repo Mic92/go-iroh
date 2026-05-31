@@ -2,6 +2,7 @@ package quic
 
 import (
 	"context"
+	"net/netip"
 	"testing"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/flowcontrol"
@@ -97,6 +98,45 @@ func TestQNTApplyTransportParametersDoesNotAdmitFrames(t *testing.T) {
 		if _, _, err := c.frameParser.ParseType(b, protocol.Encryption1RTT); err == nil {
 			t.Fatalf("ParseType(%#x) admitted QNT frame after negotiation", uint64(ft))
 		}
+	}
+}
+
+func TestQNTManualParserAdmissionHandlesReachOut(t *testing.T) {
+	const limit = uint8(8)
+	c := newQNTTransportParameterConn(limit, limit)
+	c.applyTransportParameters()
+	c.frameParser.SetSupportsNATTraversal(true)
+
+	want := &wire.ReachOutFrame{
+		Round: 1,
+		Addr:  netip.MustParseAddr("198.51.100.7"),
+		Port:  4433,
+	}
+	b, err := want.Append(nil, protocol.Version1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ft, n, err := c.frameParser.ParseType(b, protocol.Encryption1RTT)
+	if err != nil {
+		t.Fatalf("ParseType: %v", err)
+	}
+	got, _, err := c.frameParser.ParseLessCommonFrame(ft, b[n:], protocol.Version1)
+	if err != nil {
+		t.Fatalf("ParseLessCommonFrame: %v", err)
+	}
+	reachOut, ok := got.(*wire.ReachOutFrame)
+	if !ok {
+		t.Fatalf("parsed frame = %T, want *wire.ReachOutFrame", got)
+	}
+	if reachOut.Round != want.Round || reachOut.Addr != want.Addr || reachOut.Port != want.Port {
+		t.Fatalf("parsed REACH_OUT = %+v, want %+v", reachOut, want)
+	}
+	if err := c.handleReachOutFrame(reachOut); err != nil {
+		t.Fatalf("handleReachOutFrame: %v", err)
+	}
+	probes := c.qntPendingProbeAddresses()
+	if len(probes) != 1 || probes[0] != netip.AddrPortFrom(want.Addr, want.Port) {
+		t.Fatalf("pending probes after REACH_OUT = %v, want [%v]", probes, netip.AddrPortFrom(want.Addr, want.Port))
 	}
 }
 
