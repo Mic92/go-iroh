@@ -2,6 +2,7 @@ package quic
 
 import (
 	"context"
+	"net"
 	"net/netip"
 	"sync"
 	"testing"
@@ -220,6 +221,41 @@ func TestObservedAddrStaleSeqNoIgnored(t *testing.T) {
 	want = netip.MustParseAddrPort("192.0.2.11:1100")
 	if !ok || got != want {
 		t.Fatalf("ObservedAddr = %v, %v, want %v, true", got, ok, want)
+	}
+}
+
+func TestObservedAddrQueueReportFromUDPSource(t *testing.T) {
+	c := &Conn{
+		config: &Config{SendObservedAddressReports: true},
+		peerParams: &wire.TransportParameters{
+			AddressDiscoveryRole: wire.AddressDiscoveryReceiveOnly,
+		},
+		framer: newFramer(nil),
+	}
+
+	c.maybeQueueObservedAddr(&net.UDPAddr{
+		IP:   net.ParseIP("::ffff:192.0.2.10"),
+		Port: 1234,
+	})
+	c.maybeQueueObservedAddr(&net.TCPAddr{
+		IP:   net.ParseIP("192.0.2.11"),
+		Port: 1235,
+	})
+
+	c.framer.controlFrameMutex.Lock()
+	defer c.framer.controlFrameMutex.Unlock()
+	if len(c.framer.controlFrames) != 1 {
+		t.Fatalf("queued frames = %d, want 1", len(c.framer.controlFrames))
+	}
+	frame, ok := c.framer.controlFrames[0].(*wire.ObservedAddrFrame)
+	if !ok {
+		t.Fatalf("queued frame = %T, want *wire.ObservedAddrFrame", c.framer.controlFrames[0])
+	}
+	if frame.SeqNo != 0 || frame.Addr != netip.MustParseAddr("192.0.2.10") || frame.Port != 1234 {
+		t.Fatalf("queued frame = %+v, want seq 0 addr 192.0.2.10 port 1234", frame)
+	}
+	if c.nextObservedAddrSeqNo != 1 {
+		t.Fatalf("nextObservedAddrSeqNo = %d, want 1", c.nextObservedAddrSeqNo)
 	}
 }
 
