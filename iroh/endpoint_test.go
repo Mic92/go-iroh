@@ -1,6 +1,7 @@
 package iroh
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -132,6 +133,59 @@ func TestEndpointDirectEcho(t *testing.T) {
 	}
 	if server.transport.ConnectionIDLength != 8 {
 		t.Errorf("server transport ConnectionIDLength = %d, want 8", server.transport.ConnectionIDLength)
+	}
+}
+
+func TestEndpointBinaryALPN(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	alpn := []byte{'i', 'r', 'o', 'h', '/', 0xff, 0x00, '/', '1'}
+
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	type srvResult struct {
+		alpn []byte
+		err  error
+	}
+	done := make(chan srvResult, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err != nil {
+			done <- srvResult{err: err}
+			return
+		}
+		done <- srvResult{alpn: append([]byte(nil), conn.ALPN()...)}
+	}()
+
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+
+	if !bytes.Equal(conn.ALPN(), alpn) {
+		t.Errorf("client ALPN = % x, want % x", conn.ALPN(), alpn)
+	}
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("server: %v", res.err)
+	}
+	if !bytes.Equal(res.alpn, alpn) {
+		t.Errorf("server ALPN = % x, want % x", res.alpn, alpn)
 	}
 }
 

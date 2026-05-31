@@ -1,6 +1,7 @@
 package iroh
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -119,6 +120,110 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 	}
 	if !res.peer.Equal(clientKey.Public()) {
 		t.Errorf("server saw client id %s, want %s", res.peer, clientKey.Public())
+	}
+}
+
+func TestIrohTLSOverQUICSelectsServerPreferredBinaryALPN(t *testing.T) {
+	serverKey, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKey, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	primary := []byte("iroh-primary/0")
+	additional := []byte{'i', 'r', 'o', 'h', '/', 0xff, 0x00, '/', '1'}
+
+	serverTLS, err := serverTLSConfig(serverKey, []string{string(additional), string(primary)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public(), []string{string(primary), string(additional)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	serverUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverUDP.Close()
+	ln, err := quic.Listen(serverUDP, serverTLS, &quic.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	type result struct {
+		alpn []byte
+		err  error
+	}
+	serverDone := make(chan result, 1)
+	go func() {
+		conn, err := ln.Accept(ctx)
+		if err != nil {
+			serverDone <- result{err: err}
+			return
+		}
+		str, err := conn.AcceptStream(ctx)
+		if err != nil {
+			serverDone <- result{err: err}
+			return
+		}
+		if _, err := io.ReadAll(str); err != nil {
+			serverDone <- result{err: err}
+			return
+		}
+		if _, err := str.Write([]byte("ok")); err != nil {
+			serverDone <- result{err: err}
+			return
+		}
+		if err := str.Close(); err != nil {
+			serverDone <- result{err: err}
+			return
+		}
+		alpn := []byte(conn.ConnectionState().TLS.NegotiatedProtocol)
+		serverDone <- result{alpn: alpn}
+	}()
+
+	clientUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientUDP.Close()
+
+	conn, err := quic.Dial(ctx, clientUDP, ln.Addr(), clientTLS, &quic.Config{})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+
+	got := []byte(conn.ConnectionState().TLS.NegotiatedProtocol)
+	if !bytes.Equal(got, additional) {
+		t.Errorf("client ALPN = % x, want % x", got, additional)
+	}
+	str, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := str.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(str); err != nil {
+		t.Fatalf("read reply: %v", err)
+	}
+
+	res := <-serverDone
+	if res.err != nil {
+		t.Fatalf("server: %v", res.err)
+	}
+	if !bytes.Equal(res.alpn, additional) {
+		t.Errorf("server ALPN = % x, want % x", res.alpn, additional)
 	}
 }
 
