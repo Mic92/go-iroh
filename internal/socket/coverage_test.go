@@ -658,6 +658,24 @@ func TestActorMultipathPathsEmitQNGRouteEvents(t *testing.T) {
 	}
 }
 
+func TestMultipathCandidatesUsePathRTT(t *testing.T) {
+	route := IPAddr(netip.MustParseAddrPort("[2001:db8::1]:4433"))
+	candidates := appendMultipathCandidates(nil, map[string]struct{}{}, []PathInfo{{
+		ID:        1,
+		Validated: true,
+		Addr:      route,
+		HasAddr:   true,
+		RTT:       7 * time.Millisecond,
+		HasRTT:    true,
+	}}, 100*time.Millisecond)
+	if len(candidates) != 1 {
+		t.Fatalf("candidates len = %d, want 1", len(candidates))
+	}
+	if candidates[0].RTT != 7*time.Millisecond {
+		t.Fatalf("candidate RTT = %v, want per-path RTT", candidates[0].RTT)
+	}
+}
+
 func TestActorAddConnectionSeedsExistingNATTraversalAddresses(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

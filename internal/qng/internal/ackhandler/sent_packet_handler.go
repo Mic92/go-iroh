@@ -613,6 +613,7 @@ func (h *sentPacketHandler) PathDebugStats(pid protocol.PathID) (PathDebugStats,
 		LargestSent:   path.space.largestSent,
 		LargestAcked:  path.space.largestAcked,
 		BytesInFlight: path.bytesInFlight,
+		SmoothedRTT:   path.rttStats.SmoothedRTT(),
 	}
 	if pid != protocol.PathIDZero {
 		path0 := h.getAppDataPath(protocol.PathIDZero)

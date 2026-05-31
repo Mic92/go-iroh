@@ -1,6 +1,8 @@
 package ackhandler
 
 import (
+	"time"
+
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
@@ -85,6 +87,8 @@ type PathDebugStats struct {
 	LargestAcked protocol.PacketNumber
 	// BytesInFlight is pid's current application-data bytes in flight.
 	BytesInFlight protocol.ByteCount
+	// SmoothedRTT is pid's application-data RTT estimate.
+	SmoothedRTT time.Duration
 	// DistinctController is true when pid's congestion controller and RTT
 	// estimator are both distinct from path 0's and from the connection-level
 	// objects (the Stage 4 risk-#4 gate). It is always false for PathIDZero,

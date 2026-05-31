@@ -72,9 +72,9 @@ type natTraversalRemoteAddressConnection interface {
 	NATTraversalAddresses() ([]netip.AddrPort, error)
 }
 
-// PathInfo is qng multipath path state observed through a [Connection]. Addr is
-// set only when qng reports the address that actually routes the path; socket
-// must not fabricate it from the connection's original RemoteAddr.
+// PathInfo is qng multipath path state observed through a [Connection]. Addr and
+// RTT are set only when qng reports them; socket must not fabricate Addr from
+// the connection's original RemoteAddr.
 type PathInfo struct {
 	// ID is the QUIC multipath PathID.
 	ID uint32
@@ -84,6 +84,10 @@ type PathInfo struct {
 	Addr Addr
 	// HasAddr reports whether Addr was observed from qng route metadata.
 	HasAddr bool
+	// RTT is the path's smoothed round-trip time, when HasRTT is true.
+	RTT time.Duration
+	// HasRTT reports whether RTT was observed from qng per-path state.
+	HasRTT bool
 }
 
 type pathObservingConnection interface {
@@ -460,7 +464,11 @@ func appendCandidate(candidates []PathCandidate, seen map[string]struct{}, addr 
 func appendMultipathCandidates(candidates []PathCandidate, seen map[string]struct{}, paths []PathInfo, rtt time.Duration) []PathCandidate {
 	for _, p := range paths {
 		if p.Validated && p.HasAddr {
-			candidates = appendCandidate(candidates, seen, p.Addr, rtt)
+			pathRTT := rtt
+			if p.HasRTT {
+				pathRTT = p.RTT
+			}
+			candidates = appendCandidate(candidates, seen, p.Addr, pathRTT)
 		}
 	}
 	return candidates

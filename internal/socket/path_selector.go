@@ -38,10 +38,8 @@ type PathCandidate struct {
 	// Addr is the path's transport address.
 	Addr Addr
 	// RTT is the smoothed round-trip time observed on the path.
-	//
-	// The RTT comes from qng's quic.Conn.ConnectionStats().SmoothedRTT for the
-	// connection's active path. qng negotiates multipath, but this layer still
-	// reports connection-level active-path RTT until per-PathID RTT is surfaced.
+	// qng multipath paths use per-path RTT when available; otherwise the socket
+	// layer falls back to connection-level active-path RTT.
 	RTT time.Duration
 }
 

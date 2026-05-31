@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"sort"
+	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
@@ -243,6 +244,11 @@ type PathInfo struct {
 	Validated bool
 	// RemoteAddr is the remote UDP route for this path, when known.
 	RemoteAddr netip.AddrPort
+	// SmoothedRTT is the path's application-data RTT estimate, when HasRTT is
+	// true.
+	SmoothedRTT time.Duration
+	// HasRTT reports whether SmoothedRTT was observed for this path.
+	HasRTT bool
 }
 
 // pathSnapshotRequest is the command Conn.Paths hands to the run goroutine,
@@ -281,11 +287,16 @@ func (c *Conn) processPathSnapshotRequests() {
 			if c.multipathOut != nil && len(c.multipathOut.paths) > 0 {
 				req.paths = make([]PathInfo, 0, len(c.multipathOut.paths))
 				for pid, st := range c.multipathOut.paths {
-					req.paths = append(req.paths, PathInfo{
+					info := PathInfo{
 						ID:         pid,
 						Validated:  st.validated,
 						RemoteAddr: st.qntRoute,
-					})
+					}
+					if stats, ok := c.sentPacketHandler.PathDebugStats(pid); ok {
+						info.SmoothedRTT = stats.SmoothedRTT
+						info.HasRTT = true
+					}
+					req.paths = append(req.paths, info)
 				}
 				sort.Slice(req.paths, func(i, j int) bool {
 					return req.paths[i].ID < req.paths[j].ID

@@ -418,6 +418,10 @@ func (a *connAdapter) Paths() []socket.PathInfo {
 			ID:        uint32(p.ID),
 			Validated: p.Validated,
 		}
+		if p.HasRTT {
+			paths[i].RTT = p.SmoothedRTT
+			paths[i].HasRTT = true
+		}
 		if p.RemoteAddr.IsValid() {
 			paths[i].Addr = socket.IPAddr(p.RemoteAddr)
 			paths[i].HasAddr = true
