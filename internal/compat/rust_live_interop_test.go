@@ -289,22 +289,7 @@ func TestLiveRustInteropGate(t *testing.T) {
 }
 
 func TestLiveRustListenExampleStarts(t *testing.T) {
-	if os.Getenv(liveRustInteropEnv) != "1" {
-		t.Skipf("set %s=1 with %s or %s pointing at a built Rust listen example; this test never downloads or builds Rust dependencies", liveRustInteropEnv, rustListenBinEnv, rustRepoEnv)
-	}
-
-	bin, checked, ok := rustListenExampleBin()
-	if !ok {
-		t.Skipf("%s not set and no local Rust listen example found via %s; checked %v", rustListenBinEnv, rustRepoEnv, checked)
-	}
-	if !filepath.IsAbs(bin) {
-		t.Fatalf("%s=%q, want absolute path", rustListenBinEnv, bin)
-	}
-	if st, err := os.Stat(bin); err != nil {
-		t.Skipf("Rust listen example %s not found: %v", bin, err)
-	} else if st.IsDir() || st.Mode()&0o111 == 0 {
-		t.Fatalf("Rust listen example %s is not executable", bin)
-	}
+	bin := requireRustListenExample(t)
 
 	peer, err := startRustListenPeer(t, bin)
 	if err != nil {
@@ -314,22 +299,7 @@ func TestLiveRustListenExampleStarts(t *testing.T) {
 }
 
 func TestLiveRustGoToRustEcho(t *testing.T) {
-	if os.Getenv(liveRustInteropEnv) != "1" {
-		t.Skipf("set %s=1 with %s or %s pointing at a built Rust listen example; this test never downloads or builds Rust dependencies", liveRustInteropEnv, rustListenBinEnv, rustRepoEnv)
-	}
-
-	bin, checked, ok := rustListenExampleBin()
-	if !ok {
-		t.Skipf("%s not set and no local Rust listen example found via %s; checked %v", rustListenBinEnv, rustRepoEnv, checked)
-	}
-	if !filepath.IsAbs(bin) {
-		t.Fatalf("%s=%q, want absolute path", rustListenBinEnv, bin)
-	}
-	if st, err := os.Stat(bin); err != nil {
-		t.Skipf("Rust listen example %s not found: %v", bin, err)
-	} else if st.IsDir() || st.Mode()&0o111 == 0 {
-		t.Fatalf("Rust listen example %s is not executable", bin)
-	}
+	bin := requireRustListenExample(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -338,6 +308,7 @@ func TestLiveRustGoToRustEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("Rust listen example ready: id=%s addrs=%v relay=%s", peer.Ready.EndpointIDText, peer.Ready.Addrs, peer.Ready.RelayURL)
 
 	client, err := iroh.Bind(ctx, iroh.WithRelayMode(relay.ModeCustomURLs(peer.Ready.RelayURL)))
 	if err != nil {
@@ -367,6 +338,10 @@ func TestLiveRustGoToRustEcho(t *testing.T) {
 	if string(conn.ALPN()) != rustExampleALPN {
 		t.Fatalf("ALPN = %q, want %q", conn.ALPN(), rustExampleALPN)
 	}
+	if !conn.MultipathNegotiated() {
+		t.Fatalf("MultipathNegotiated = false, want true\n%s", peer.Output())
+	}
+	t.Logf("Rust echo connected: id=%s alpn=%q multipath=%t", conn.RemoteID(), conn.ALPN(), conn.MultipathNegotiated())
 
 	s, err := conn.OpenStream(ctx)
 	if err != nil {
@@ -389,6 +364,28 @@ func TestLiveRustGoToRustEcho(t *testing.T) {
 	if string(got) != want {
 		t.Fatalf("response = %q, want %q\n%s", got, want, peer.Output())
 	}
+}
+
+func requireRustListenExample(t *testing.T) string {
+	t.Helper()
+	if os.Getenv(liveRustInteropEnv) != "1" {
+		t.Skipf("set %s=1 with %s or %s pointing at a built Rust listen example; this test never downloads or builds Rust dependencies", liveRustInteropEnv, rustListenBinEnv, rustRepoEnv)
+	}
+
+	bin, checked, ok := rustListenExampleBin()
+	if !ok {
+		t.Skipf("%s not set and no local Rust listen example found via %s; checked %v", rustListenBinEnv, rustRepoEnv, checked)
+	}
+	if !filepath.IsAbs(bin) {
+		t.Fatalf("%s=%q, want absolute path", rustListenBinEnv, bin)
+	}
+	if st, err := os.Stat(bin); err != nil {
+		t.Skipf("Rust listen example %s not found: %v", bin, err)
+	} else if st.IsDir() || st.Mode()&0o111 == 0 {
+		t.Fatalf("Rust listen example %s is not executable", bin)
+	}
+	t.Logf("using Rust listen example: %s", bin)
+	return bin
 }
 
 func rustIrohBin() (bin string, checked []string, ok bool) {
