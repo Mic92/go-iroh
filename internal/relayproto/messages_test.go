@@ -203,6 +203,70 @@ func TestVarintRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRelayFrameTypeWireValues(t *testing.T) {
+	cases := []struct {
+		name string
+		ft   FrameType
+		want byte
+	}{
+		{"ServerChallenge", FrameServerChallenge, 0},
+		{"ClientAuth", FrameClientAuth, 1},
+		{"ServerConfirmsAuth", FrameServerConfirmsAuth, 2},
+		{"ServerDeniesAuth", FrameServerDeniesAuth, 3},
+		{"ClientToRelayDatagram", FrameClientToRelayDatagram, 4},
+		{"ClientToRelayDatagramBatch", FrameClientToRelayDatagramBat, 5},
+		{"RelayToClientDatagram", FrameRelayToClientDatagram, 6},
+		{"RelayToClientDatagramBatch", FrameRelayToClientDatagramBat, 7},
+		{"EndpointGone", FrameEndpointGone, 8},
+		{"Ping", FramePing, 9},
+		{"Pong", FramePong, 10},
+		{"Health", FrameHealth, 11},
+		{"Restarting", FrameRestarting, 12},
+		{"Status", FrameStatus, 13},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := writeFrameType(nil, c.ft)
+			if len(got) != 1 || got[0] != c.want {
+				t.Fatalf("writeFrameType(%s) = %x, want %02x", c.ft, got, c.want)
+			}
+			ft, rest, err := readFrameType(got)
+			if err != nil {
+				t.Fatalf("readFrameType: %v", err)
+			}
+			if ft != c.ft || len(rest) != 0 {
+				t.Fatalf("readFrameType(%02x) = %s, %x, want %s, empty", c.want, ft, rest, c.ft)
+			}
+		})
+	}
+}
+
+func TestRelayEcnWireValues(t *testing.T) {
+	cases := []struct {
+		name string
+		wire byte
+		want EcnCodepoint
+		ok   bool
+	}{
+		{"NotECT", 0, 0, false},
+		{"ECT1", 1, EcnEct1, true},
+		{"ECT0", 2, EcnEct0, true},
+		{"CE", 3, EcnCe, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := ecnFromBits(c.wire)
+			if got != c.want || ok != c.ok {
+				t.Fatalf("ecnFromBits(%d) = %d, %v, want %d, %v", c.wire, got, ok, c.want, c.ok)
+			}
+			d := Datagrams{Ecn: c.want, Contents: []byte("x")}
+			if got := d.appendTo(nil)[0]; got != byte(c.want) {
+				t.Fatalf("Datagrams.appendTo ECN byte = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
 func ping42() [8]byte {
 	var p [8]byte
 	for i := range p {
