@@ -155,6 +155,10 @@ type Incoming struct {
 	qc *quic.Conn
 }
 
+// ErrIncomingRetryUnsupported is returned when Retry cannot emit a QUIC Retry
+// packet for an incoming connection.
+var ErrIncomingRetryUnsupported = errors.New("iroh: incoming retry not supported")
+
 // Accept accepts the incoming connection and returns an [Accepting] handle.
 func (in *Incoming) Accept() (*Accepting, error) {
 	if in == nil || in.qc == nil {
@@ -182,7 +186,7 @@ func (in *Incoming) Retry() error {
 	if in != nil && in.qc != nil {
 		in.qc.CloseWithError(0, "retry unavailable")
 	}
-	return errors.New("iroh: incoming retry not supported")
+	return ErrIncomingRetryUnsupported
 }
 
 // Ignore closes the incoming connection without waiting for completion.

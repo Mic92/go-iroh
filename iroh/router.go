@@ -49,11 +49,11 @@ type IncomingFilterOutcome int
 const (
 	// FilterAccept accepts the connection and dispatches it to a handler.
 	FilterAccept IncomingFilterOutcome = iota
-	// FilterReject refuses the connection.
-	FilterReject
 	// FilterRetry asks the peer to retry. If the transport cannot emit a QUIC
 	// Retry packet, the connection is closed.
 	FilterRetry
+	// FilterReject refuses the connection.
+	FilterReject
 	// FilterIgnore closes the incoming connection without dispatching it.
 	FilterIgnore
 )

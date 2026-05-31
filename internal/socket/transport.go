@@ -17,8 +17,8 @@ import (
 //
 // The IP transport is always present. The relay transport is present when the
 // endpoint has relays configured; otherwise relay-addressed sends are blackholed
-// (reported as success so quic-go's loss recovery retransmits). Custom transport
-// routing is recognized and degrades cleanly until a later slice adds it.
+// (reported as success so quic-go's loss recovery retransmits). Custom
+// transports are present only when callers configure them.
 type Transports struct {
 	ip     *IpTransport
 	relay  *RelayTransport
@@ -143,9 +143,7 @@ func (m *MagicConn) ReadFrom(p []byte) (int, net.Addr, error) {
 // recvAddr maps a received datagram's RecvInfo to the net.Addr quic-go sees: the
 // real IP for an IP path, or the synthetic mapped IPv6 ULA for a relay or custom
 // path. It mirrors the Rust recv rewrite in process_datagrams
-// (iroh/src/socket.rs:596). Relay and custom datagrams cannot yet be received in
-// this build (no relay/custom transport feeds the recv channel); the mapping is
-// implemented so the path is correct when those transports land in later slices.
+// (iroh/src/socket.rs:596).
 func (m *MagicConn) recvAddr(info RecvInfo) (net.Addr, bool) {
 	switch info.Remote.kind {
 	case AddrIP:
