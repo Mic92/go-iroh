@@ -3,6 +3,7 @@ package compat
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,9 +18,13 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/relay"
 )
 
 const rustTransferBinEnv = "GO_IROH_RUST_TRANSFER_BIN"
+const rustTransferALPN = "n0/iroh/transfer/example/1"
+const rustTransferGracefulClose = 1
 
 func TestRustTransferExampleBin(t *testing.T) {
 	t.Run("explicit", func(t *testing.T) {
@@ -152,6 +157,93 @@ func TestParseRustTransferEndpointBoundJSON(t *testing.T) {
 	}
 }
 
+func TestParseRustTransferCompletionJSON(t *testing.T) {
+	sk, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public()
+
+	line := fmt.Sprintf(`{"timestamp":"2026-05-31T00:00:00Z","kind":"DownloadComplete","size":7,"duration":42,"num_chunks":1,"remote_id":%q}`, id.String())
+	got, ok, err := parseRustTransferCompletion(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("parseRustTransferCompletion ok = false, want true")
+	}
+	if got.Kind != "DownloadComplete" {
+		t.Fatalf("kind = %q, want DownloadComplete", got.Kind)
+	}
+	if got.Size != 7 {
+		t.Fatalf("size = %d, want 7", got.Size)
+	}
+	if !got.HasRemoteID {
+		t.Fatal("remote id missing")
+	}
+	if !got.RemoteID.Equal(id) {
+		t.Fatalf("remote id = %s, want %s", got.RemoteID, id)
+	}
+	if got.RemoteIDText != id.String() {
+		t.Fatalf("remote id text = %q, want %q", got.RemoteIDText, id.String())
+	}
+	if got.Line != line {
+		t.Fatalf("line = %q, want %q", got.Line, line)
+	}
+
+	_, ok, err = parseRustTransferCompletion(`not json`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("parseRustTransferCompletion ok = true for non-json line")
+	}
+
+	_, ok, err = parseRustTransferCompletion(`{"timestamp":"2026-05-31T00:00:00Z","kind":"PathStats","paths":[]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Fatal("parseRustTransferCompletion ok = true for PathStats")
+	}
+
+	_, ok, err = parseRustTransferCompletion(`{"timestamp":"2026-05-31T00:00:00Z","kind":"UploadComplete","duration":42}`)
+	if err == nil {
+		t.Fatal("parseRustTransferCompletion missing size err = nil")
+	}
+	if !ok {
+		t.Fatal("parseRustTransferCompletion ok = false for malformed completion")
+	}
+}
+
+func TestRustTransferUploadRequestBytes(t *testing.T) {
+	payload := []byte("go")
+	got := rustTransferUploadRequest(payload)
+	want := []byte{0, 0, 0, 1, 0x01, 'g', 'o'}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("rustTransferUploadRequest = %x, want %x", got, want)
+	}
+}
+
+func TestParseRustTransferCompletionOutput(t *testing.T) {
+	output := strings.Join([]string{
+		"plain stderr line",
+		`{"timestamp":"2026-05-31T00:00:00Z","kind":"ConnectionAccepted","id":0}`,
+		`{"timestamp":"2026-05-31T00:00:00Z","kind":"DownloadComplete","size":3,"duration":42,"num_chunks":1}`,
+		"",
+	}, "\n")
+	got, ok, err := findRustTransferCompletion(output, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("findRustTransferCompletion ok = false, want true")
+	}
+	if got.Kind != "DownloadComplete" || got.Size != 3 {
+		t.Fatalf("completion = %+v, want DownloadComplete size 3", got)
+	}
+}
+
 func TestStartRustTransferProviderReadsEndpointBound(t *testing.T) {
 	sk, err := base.GenerateSecretKey()
 	if err != nil {
@@ -199,6 +291,101 @@ while :; do sleep 1; done
 	if err := provider.Close(); err != nil {
 		t.Fatalf("stop fake transfer provider: %v\n%s", err, provider.Output())
 	}
+}
+
+func TestLiveRustTransferGoToRustUpload(t *testing.T) {
+	bin := requireRustTransferExample(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	provider, err := startRustTransferProvider(t, bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !provider.Ready.HasRelayURL {
+		t.Fatalf("Rust transfer example EndpointBound has no relay URL\n%s", provider.Output())
+	}
+	t.Logf("Rust transfer example ready: id=%s direct=%v relay=%s", provider.Ready.EndpointIDText, provider.Ready.DirectAddrs, provider.Ready.RelayURL)
+
+	client, err := iroh.Bind(ctx, iroh.WithRelayMode(relay.ModeCustomURLs(provider.Ready.RelayURL)))
+	if err != nil {
+		t.Fatalf("bind Go endpoint: %v", err)
+	}
+	defer client.Close(ctx)
+
+	if len(provider.Ready.DirectAddrs) == 0 {
+		if err := client.Online(ctx); err != nil {
+			t.Fatalf("Go endpoint online: %v", err)
+		}
+	}
+
+	addr := base.NewEndpointAddr(provider.Ready.EndpointID).WithRelayURL(provider.Ready.RelayURL)
+	for _, ap := range provider.Ready.DirectAddrs {
+		addr = addr.WithIP(ap)
+	}
+
+	conn, err := client.Connect(ctx, addr, []byte(rustTransferALPN))
+	if err != nil {
+		t.Fatalf("connect to Rust transfer example: %v\n%s", err, provider.Output())
+	}
+	connClosed := false
+	defer func() {
+		if !connClosed {
+			_ = conn.CloseWithError(rustTransferGracefulClose, "")
+		}
+	}()
+	if !conn.RemoteID().Equal(provider.Ready.EndpointID) {
+		t.Fatalf("remote id = %s, want %s", conn.RemoteID(), provider.Ready.EndpointID)
+	}
+	if string(conn.ALPN()) != rustTransferALPN {
+		t.Fatalf("ALPN = %q, want %q", conn.ALPN(), rustTransferALPN)
+	}
+	if !conn.MultipathNegotiated() {
+		t.Fatalf("MultipathNegotiated = false, want true\n%s", provider.Output())
+	}
+	t.Logf("Rust transfer connected: id=%s alpn=%q multipath=%t", conn.RemoteID(), conn.ALPN(), conn.MultipathNegotiated())
+
+	s, err := conn.OpenStream(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	if err := s.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatalf("set stream deadline: %v", err)
+	}
+	payload := []byte("go")
+	if _, err := io.Copy(s, bytes.NewReader(rustTransferUploadRequest(payload))); err != nil {
+		t.Fatalf("write stream: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("close stream write side: %v", err)
+	}
+	got, err := io.ReadAll(s)
+	if err != nil {
+		t.Fatalf("read stream EOF: %v\n%s", err, provider.Output())
+	}
+	if len(got) != 0 {
+		t.Fatalf("stream response = %x, want EOF with no data\n%s", got, provider.Output())
+	}
+
+	completion, err := waitRustTransferCompletion(ctx, provider, uint64(len(payload)))
+	if err != nil {
+		t.Fatalf("wait for Rust transfer completion: %v\n%s", err, provider.Output())
+	}
+	if completion.Kind != "DownloadComplete" {
+		t.Fatalf("completion kind = %q, want DownloadComplete\n%s", completion.Kind, provider.Output())
+	}
+	if !completion.HasRemoteID {
+		t.Fatalf("completion has no remote_id\n%s", provider.Output())
+	}
+	if !completion.RemoteID.Equal(client.ID()) {
+		t.Fatalf("completion remote id = %s, want %s\n%s", completion.RemoteID, client.ID(), provider.Output())
+	}
+
+	if err := conn.CloseWithError(rustTransferGracefulClose, ""); err != nil {
+		t.Fatalf("close Rust transfer connection: %v\n%s", err, provider.Output())
+	}
+	connClosed = true
 }
 
 func TestLiveRustTransferExampleStarts(t *testing.T) {
@@ -313,6 +500,105 @@ func parseRustTransferEndpointBound(line string) (rustTransferReady, bool, error
 		ready.HasRelayURL = true
 	}
 	return ready, true, nil
+}
+
+type rustTransferCompletion struct {
+	Kind         string
+	Size         uint64
+	RemoteID     base.EndpointId
+	RemoteIDText string
+	HasRemoteID  bool
+	Line         string
+}
+
+func parseRustTransferCompletion(line string) (rustTransferCompletion, bool, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return rustTransferCompletion{}, false, nil
+	}
+
+	var kind struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(line), &kind); err != nil {
+		return rustTransferCompletion{}, false, nil
+	}
+	if kind.Kind != "DownloadComplete" && kind.Kind != "UploadComplete" {
+		return rustTransferCompletion{}, false, nil
+	}
+
+	var event struct {
+		Size     *uint64 `json:"size"`
+		RemoteID *string `json:"remote_id"`
+	}
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		return rustTransferCompletion{}, true, fmt.Errorf("%s json: %w", kind.Kind, err)
+	}
+	if event.Size == nil {
+		return rustTransferCompletion{}, true, fmt.Errorf("%s missing size", kind.Kind)
+	}
+
+	completion := rustTransferCompletion{
+		Kind: kind.Kind,
+		Size: *event.Size,
+		Line: line,
+	}
+	if event.RemoteID != nil {
+		if *event.RemoteID == "" {
+			return rustTransferCompletion{}, true, fmt.Errorf("%s empty remote_id", kind.Kind)
+		}
+		id, err := parseRustEndpointID(*event.RemoteID)
+		if err != nil {
+			return rustTransferCompletion{}, true, err
+		}
+		completion.RemoteID = id
+		completion.RemoteIDText = *event.RemoteID
+		completion.HasRemoteID = true
+	}
+	return completion, true, nil
+}
+
+func findRustTransferCompletion(output string, wantSize uint64) (rustTransferCompletion, bool, error) {
+	for _, line := range strings.Split(output, "\n") {
+		completion, ok, err := parseRustTransferCompletion(line)
+		if err != nil {
+			return rustTransferCompletion{}, false, err
+		}
+		if !ok {
+			continue
+		}
+		if completion.Size != wantSize {
+			return completion, true, fmt.Errorf("%s size = %d, want %d", completion.Kind, completion.Size, wantSize)
+		}
+		return completion, true, nil
+	}
+	return rustTransferCompletion{}, false, nil
+}
+
+func waitRustTransferCompletion(ctx context.Context, provider *rustTransferProvider, wantSize uint64) (rustTransferCompletion, error) {
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		completion, ok, err := findRustTransferCompletion(provider.Output(), wantSize)
+		if err != nil {
+			return rustTransferCompletion{}, err
+		}
+		if ok {
+			return completion, nil
+		}
+		select {
+		case <-ctx.Done():
+			return rustTransferCompletion{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func rustTransferUploadRequest(payload []byte) []byte {
+	request := make([]byte, 0, 5+len(payload))
+	request = append(request, 0, 0, 0, 1, 0x01)
+	request = append(request, payload...)
+	return request
 }
 
 type rustTransferProvider struct {
