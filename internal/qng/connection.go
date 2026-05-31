@@ -1459,6 +1459,22 @@ func (c *Conn) handleShortHeaderPacket(
 	if c.perspective == protocol.PerspectiveClient {
 		return true, nil
 	}
+	if pathChallenge != nil && c.qntNegotiated() && addrsEqual(p.remoteAddr, c.RemoteAddr()) {
+		// QNT probes are PATH_CHALLENGE packets sent to advertised candidate
+		// addresses. On loopback, that candidate can be the existing 4-tuple, so
+		// the migration path manager below will not run. Answer here so the peer
+		// can match the PATH_RESPONSE to its QNT probe.
+		probe, buf, err := c.packer.PackPathProbePacket(c.connIDManager.Get(), []ackhandler.Frame{
+			{Frame: &wire.PathResponseFrame{Data: pathChallenge.Data}},
+		}, c.version)
+		if err != nil {
+			return true, err
+		}
+		c.logger.Debugf("sending QNT path response packet to %s", p.remoteAddr)
+		c.logShortHeaderPacketWithDatagramID(probe, protocol.ECNNon, buf.Len(), false, datagramID)
+		c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, p.rcvTime)
+		c.sendQueue.SendProbe(buf, p.remoteAddr)
+	}
 	if addrsEqual(p.remoteAddr, c.RemoteAddr()) {
 		return true, nil
 	}
@@ -2524,7 +2540,9 @@ func (c *Conn) handlePathChallengeFrame(f *wire.PathChallengeFrame) {
 }
 
 func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame, source netip.AddrPort) error {
-	c.handleQNTPathResponseFrame(f, source)
+	if c.handleQNTPathResponseFrame(f, source) {
+		return nil
+	}
 
 	// A PATH_RESPONSE might validate an outgoing multipath path (5f) rather than
 	// an RFC 9000 single-path migration. Check multipath first; if it matched, we
@@ -2535,18 +2553,26 @@ func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame, source netip.A
 	}
 	switch c.perspective {
 	case protocol.PerspectiveClient:
+		if c.qntNegotiated() && c.pathManagerOutgoing.Load() == nil {
+			return nil
+		}
 		return c.handlePathResponseFrameClient(f)
 	case protocol.PerspectiveServer:
+		if c.qntNegotiated() && c.pathManager == nil {
+			return nil
+		}
 		return c.handlePathResponseFrameServer(f)
 	default:
 		panic("unreachable")
 	}
 }
 
-func (c *Conn) handleQNTPathResponseFrame(f *wire.PathResponseFrame, source netip.AddrPort) {
+func (c *Conn) handleQNTPathResponseFrame(f *wire.PathResponseFrame, source netip.AddrPort) bool {
 	if addr, ok := c.qntConsumePathResponse(f, source); ok {
 		c.qntQueueValidatedProbe(addr)
+		return true
 	}
+	return false
 }
 
 func (c *Conn) handlePathResponseFrameClient(f *wire.PathResponseFrame) error {
