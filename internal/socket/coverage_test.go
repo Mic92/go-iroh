@@ -724,6 +724,38 @@ func TestActorAddNATTraversalAddressesCanonicalizesAndDedups(t *testing.T) {
 	}
 }
 
+func TestActorAddNATTraversalAddressesRemovesStaleCandidates(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	conn.multipathNegotiated = true
+	if _, ok := a.AddConnection(conn); !ok {
+		t.Fatal("AddConnection failed")
+	}
+
+	oldAddr := netip.MustParseAddrPort("192.0.2.10:1111")
+	newAddr := netip.MustParseAddrPort("192.0.2.11:2222")
+	if err := a.AddNATTraversalAddresses([]netip.AddrPort{oldAddr}); err != nil {
+		t.Fatalf("first AddNATTraversalAddresses: %v", err)
+	}
+	if err := a.AddNATTraversalAddresses([]netip.AddrPort{newAddr}); err != nil {
+		t.Fatalf("replacement AddNATTraversalAddresses: %v", err)
+	}
+	if len(conn.removedNAT) != 1 || conn.removedNAT[0] != oldAddr {
+		t.Fatalf("removed NAT candidates = %v, want [%v]", conn.removedNAT, oldAddr)
+	}
+
+	if err := a.TriggerHolepunch(); err != nil {
+		t.Fatalf("TriggerHolepunch: %v", err)
+	}
+	if got := conn.natAddrs[len(conn.natAddrs)-1]; got != newAddr {
+		t.Fatalf("TriggerHolepunch re-advertised %v, want only replacement %v", got, newAddr)
+	}
+}
+
 func TestTriggerHolepunchInitiateRoundError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -214,6 +214,15 @@ func (a *connAdapter) AddNATTraversalAddress(addr netip.AddrPort) error {
 	return err
 }
 
+// RemoveNATTraversalAddress removes one local QNT candidate address from qng.
+func (a *connAdapter) RemoveNATTraversalAddress(addr netip.AddrPort) error {
+	err := a.qc.RemoveNATTraversalAddress(addr)
+	if errors.Is(err, quic.ErrNATTraversalNotNegotiated) {
+		return socket.ErrExtensionNotNegotiated
+	}
+	return err
+}
+
 // InitiateNATTraversalRound asks qng to start one QNT round.
 func (a *connAdapter) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort, error) {
 	addrs, err := a.qc.InitiateNATTraversalRound(ctx)

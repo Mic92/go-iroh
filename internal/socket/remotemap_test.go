@@ -24,6 +24,7 @@ type fakeConn struct {
 	initiateRoundCalls  atomic.Int64
 	paths               []PathInfo
 	natAddrs            []netip.AddrPort
+	removedNAT          []netip.AddrPort
 	addNATErr           error
 	done                chan struct{}
 	once                sync.Once
@@ -43,6 +44,10 @@ func (c *fakeConn) AddNATTraversalAddress(addr netip.AddrPort) error {
 		return c.addNATErr
 	}
 	c.natAddrs = append(c.natAddrs, addr)
+	return nil
+}
+func (c *fakeConn) RemoveNATTraversalAddress(addr netip.AddrPort) error {
+	c.removedNAT = append(c.removedNAT, addr)
 	return nil
 }
 func (c *fakeConn) OpenPath(ctx context.Context) error {

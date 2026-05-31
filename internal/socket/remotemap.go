@@ -85,7 +85,7 @@ func (m *RemoteMap) Actor(id base.EndpointId) *RemoteStateActor {
 	return m.actor(id)
 }
 
-// AddNATTraversalAddresses advertises local QNT candidates to currently-active
+// AddNATTraversalAddresses reconciles local QNT candidates on currently-active
 // remote actors. It does not spawn actors and ignores per-actor errors, because
 // candidate updates must not make an established endpoint fail.
 func (m *RemoteMap) AddNATTraversalAddresses(addrs []netip.AddrPort) {

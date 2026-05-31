@@ -311,9 +311,6 @@ func (e *Endpoint) advertiseNATTraversalCandidates() {
 		return
 	}
 	candidates := e.localNATTraversalCandidates()
-	if len(candidates) == 0 {
-		return
-	}
 	e.remotes.AddNATTraversalAddresses(candidates)
 }
 

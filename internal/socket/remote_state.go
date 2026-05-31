@@ -88,6 +88,7 @@ type pathObservingConnection interface {
 
 type natTraversalAddressConnection interface {
 	AddNATTraversalAddress(netip.AddrPort) error
+	RemoveNATTraversalAddress(netip.AddrPort) error
 }
 
 // ResolveFunc resolves additional transport addresses for a remote endpoint. It
@@ -511,6 +512,15 @@ func appendUniqueNATAddr(addrs []netip.AddrPort, addr netip.AddrPort) []netip.Ad
 	return append(addrs, addr)
 }
 
+func containsNATAddr(addrs []netip.AddrPort, addr netip.AddrPort) bool {
+	for _, a := range addrs {
+		if a == addr {
+			return true
+		}
+	}
+	return false
+}
+
 func canonicalNATAddr(addr netip.AddrPort) (netip.AddrPort, bool) {
 	if !addr.IsValid() || addr.Port() == 0 {
 		return netip.AddrPort{}, false
@@ -646,11 +656,11 @@ func (a *RemoteStateActor) MultipathPaths() []PathInfo {
 	return paths
 }
 
-// AddNATTraversalAddresses hands local QNT candidate addresses to active qng
-// connections. Candidate discovery stays outside this method: callers must pass
-// already-vetted local candidates, such as endpoint-bound direct addresses and
-// QAD reflexive addresses. qng owns QNT state, wire frames, probe timers, and
-// eventual path opening.
+// AddNATTraversalAddresses reconciles the full local QNT candidate set for
+// active qng connections. Candidate discovery stays outside this method:
+// callers must pass already-vetted local candidates, such as endpoint-bound
+// direct addresses and QAD reflexive addresses. qng owns QNT state, wire frames,
+// probe timers, and eventual path opening.
 func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) error {
 	a.mu.Lock()
 	var candidates []netip.AddrPort
@@ -660,8 +670,20 @@ func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) erro
 			continue
 		}
 		candidates = appendUniqueNATAddr(candidates, canon)
-		a.localNAT = appendUniqueNATAddr(a.localNAT, canon)
 	}
+	var removed []netip.AddrPort
+	for _, addr := range a.localNAT {
+		if !containsNATAddr(candidates, addr) {
+			removed = append(removed, addr)
+		}
+	}
+	var added []netip.AddrPort
+	for _, addr := range candidates {
+		if !containsNATAddr(a.localNAT, addr) {
+			added = append(added, addr)
+		}
+	}
+	a.localNAT = candidates
 	conns := make([]Connection, 0, len(a.conns))
 	for conn := range a.conns {
 		conns = append(conns, conn)
@@ -687,7 +709,12 @@ func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) erro
 	if target == nil {
 		return ErrHolepunchNotImplemented
 	}
-	for _, addr := range candidates {
+	for _, addr := range removed {
+		if err := target.RemoveNATTraversalAddress(addr); err != nil {
+			return fmt.Errorf("socket: remove nat traversal address %s: %w", addr, err)
+		}
+	}
+	for _, addr := range added {
 		if err := target.AddNATTraversalAddress(addr); err != nil {
 			return fmt.Errorf("socket: add nat traversal address %s: %w", addr, err)
 		}

@@ -187,10 +187,53 @@ func TestEndpointExternalNATTraversalCandidatesReadvertiseActiveRemotes(t *testi
 	}
 }
 
+func TestEndpointExternalNATTraversalCandidatesRemoveStaleRemoteCandidate(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	remote, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &endpointQNTFakeConn{
+		addr: socket.IPAddr(netip.MustParseAddrPort("192.0.2.20:5678")),
+		done: make(chan struct{}),
+	}
+	events := ep.remotes.AddConnection(remote.Public(), conn)
+	select {
+	case <-events:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for initial path event")
+	}
+
+	oldExternal := netip.MustParseAddrPort("203.0.113.10:4444")
+	newExternal := netip.MustParseAddrPort("203.0.113.11:5555")
+	if !ep.setExternalNATTraversalCandidates(oldExternal) {
+		t.Fatal("first setExternalNATTraversalCandidates = false, want true")
+	}
+	if !ep.setExternalNATTraversalCandidates(newExternal) {
+		t.Fatal("replacement setExternalNATTraversalCandidates = false, want true")
+	}
+
+	wantCurrent := []netip.AddrPort{ep.LocalAddr(), newExternal}
+	if !equalAddrPorts(conn.currentNAT, wantCurrent) {
+		t.Fatalf("current QNT candidates = %v, want %v", conn.currentNAT, wantCurrent)
+	}
+	if len(conn.removedNAT) != 1 || conn.removedNAT[0] != oldExternal {
+		t.Fatalf("removed QNT candidates = %v, want [%v]", conn.removedNAT, oldExternal)
+	}
+}
+
 type endpointQNTFakeConn struct {
-	addr     socket.Addr
-	done     chan struct{}
-	natAddrs []netip.AddrPort
+	addr       socket.Addr
+	done       chan struct{}
+	natAddrs   []netip.AddrPort
+	removedNAT []netip.AddrPort
+	currentNAT []netip.AddrPort
 }
 
 func (c *endpointQNTFakeConn) SmoothedRTT() time.Duration { return time.Millisecond }
@@ -199,6 +242,18 @@ func (c *endpointQNTFakeConn) RemoteAddr() socket.Addr    { return c.addr }
 func (c *endpointQNTFakeConn) MultipathNegotiated() bool  { return true }
 func (c *endpointQNTFakeConn) AddNATTraversalAddress(addr netip.AddrPort) error {
 	c.natAddrs = append(c.natAddrs, addr)
+	c.currentNAT = appendUniqueNATTraversalCandidate(c.currentNAT, addr)
+	return nil
+}
+func (c *endpointQNTFakeConn) RemoveNATTraversalAddress(addr netip.AddrPort) error {
+	c.removedNAT = append(c.removedNAT, addr)
+	var next []netip.AddrPort
+	for _, cur := range c.currentNAT {
+		if cur != addr {
+			next = append(next, cur)
+		}
+	}
+	c.currentNAT = next
 	return nil
 }
 
