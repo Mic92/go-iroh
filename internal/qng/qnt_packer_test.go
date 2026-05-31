@@ -5,11 +5,13 @@ import (
 	"net"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/handshake"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
+	"github.com/tmc/go-iroh/internal/qng/internal/utils"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
@@ -272,6 +274,65 @@ func TestSendOnPathSkipsInvalidQNTRouteBeforePack(t *testing.T) {
 	}
 }
 
+func TestQNTDriveMultipathSendsRouteDataViaSendProbe(t *testing.T) {
+	c, _ := newQNTRoutePathTestConn(t)
+	c.handshakeConfirmed = true
+	c.perspective = protocol.PerspectiveClient
+	c.config.InitialPacketSize = protocol.InitialPacketSize
+	c.version = protocol.Version1
+	c.logger = utils.DefaultLogger
+	c.conn = qntProbeSendConn{}
+	c.multipathManager.handleMaxPathID(protocol.PathID(4))
+
+	s := &qntProbeTestSender{available: make(chan struct{})}
+	c.sendQueue = s
+	c.perPathDestConnIDs = make(map[protocol.PathID]protocol.ConnectionID)
+	packer := newQNTProbeTestPacker()
+	packer.getDestConnIDForPath = c.destConnIDForPath
+	c.packer = packer
+
+	route := netip.MustParseAddrPort("198.51.100.44:4433")
+	c.qntQueueValidatedProbe(route)
+	pid, gotRoute, ok, err := c.qntOpenValidatedPathLocked()
+	if err != nil {
+		t.Fatalf("qntOpenValidatedPathLocked: %v", err)
+	}
+	if !ok {
+		t.Fatal("qntOpenValidatedPathLocked ok = false, want true")
+	}
+	if gotRoute != route {
+		t.Fatalf("qntOpenValidatedPathLocked route = %v, want %v", gotRoute, route)
+	}
+	c.perPathDestConnIDs[pid] = protocol.ParseConnectionID([]byte{1, 2, 3, 4})
+
+	st := c.multipathOut.paths[pid]
+	st.validated = true
+	st.sendData = append(st.sendData, []byte("qnt route payload"))
+
+	if err := c.driveMultipath(monotime.Now()); err != nil {
+		t.Fatalf("driveMultipath: %v", err)
+	}
+	if s.probes != 1 || s.sends != 0 {
+		t.Fatalf("sender probes/sends = %d/%d, want 1/0", s.probes, s.sends)
+	}
+	if s.addr == nil || netip.AddrPortFrom(s.addr.AddrPort().Addr(), uint16(s.addr.Port)) != route {
+		t.Fatalf("SendProbe addr = %v, want %v", s.addr, route)
+	}
+	if len(s.data) == 0 {
+		t.Fatal("SendProbe packet is empty")
+	}
+	if len(st.sendData) != 0 {
+		t.Fatalf("route path sendData length = %d, want 0", len(st.sendData))
+	}
+
+	if err := c.driveMultipath(monotime.Now()); err != nil {
+		t.Fatalf("second driveMultipath: %v", err)
+	}
+	if s.probes != 1 || s.sends != 0 {
+		t.Fatalf("second drive probes/sends = %d/%d, want 1/0", s.probes, s.sends)
+	}
+}
+
 func newQNTProbeTestPacker() *packetPacker {
 	return &packetPacker{
 		cryptoSetup:         qntProbeCryptoSetup{},
@@ -358,6 +419,17 @@ func (s *qntProbeTestSender) Run() error                 { return nil }
 func (s *qntProbeTestSender) WouldBlock() bool           { return false }
 func (s *qntProbeTestSender) Available() <-chan struct{} { return s.available }
 func (s *qntProbeTestSender) Close()                     {}
+
+type qntProbeSendConn struct{}
+
+func (qntProbeSendConn) Write([]byte, uint16, protocol.ECN) error { return nil }
+func (qntProbeSendConn) WriteTo([]byte, net.Addr) error           { return nil }
+func (qntProbeSendConn) Close() error                             { return nil }
+func (qntProbeSendConn) LocalAddr() net.Addr                      { return &net.UDPAddr{} }
+func (qntProbeSendConn) RemoteAddr() net.Addr                     { return &net.UDPAddr{} }
+func (qntProbeSendConn) ChangeRemoteAddr(net.Addr, packetInfo)    {}
+func (qntProbeSendConn) capabilities() connCapabilities           { return connCapabilities{} }
+func (qntProbeSendConn) SetReadDeadline(time.Time) error          { return nil }
 
 type noAckFrameSource struct{}
 
