@@ -272,6 +272,61 @@ func TestConnUniStream(t *testing.T) {
 	}
 }
 
+func TestEndpointConnectWith(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-connect-with/0"
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	accepted := make(chan error, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err == nil {
+			err = conn.CloseWithError(0, "")
+		}
+		accepted <- err
+	}()
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	connecting, err := client.ConnectWith(ctx, base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn), ConnectOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !connecting.RemoteID().Equal(server.ID()) {
+		t.Fatalf("RemoteID = %s, want %s", connecting.RemoteID(), server.ID())
+	}
+	gotALPN, err := connecting.ALPN(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotALPN) != alpn {
+		t.Fatalf("ALPN = %q, want %q", gotALPN, alpn)
+	}
+	conn, used0RTT := connecting.Into0RTT()
+	if used0RTT {
+		t.Fatal("first ConnectWith unexpectedly used 0-RTT")
+	}
+	if got, err := connecting.Connection(ctx); err != nil || got != conn {
+		t.Fatalf("Connection = %v, %v; want original conn", got, err)
+	}
+	conn.CloseWithError(0, "")
+	if err := <-accepted; err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+}
+
 // ExampleConn_Close closes a loopback connection with an application code and
 // reads it back from CloseReason.
 func ExampleConn_Close() {
