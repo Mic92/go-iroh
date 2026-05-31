@@ -1,8 +1,11 @@
 package socket
 
 import (
+	"net"
 	"net/netip"
 	"testing"
+
+	"github.com/tmc/go-iroh/base"
 )
 
 // TestMappedAddrBytes pins the mapped-address byte scheme to the Rust
@@ -68,6 +71,67 @@ func TestMappedAddrGolden16(t *testing.T) {
 	}
 }
 
+func resetMappedAddrCountersForTest(t *testing.T) {
+	t.Helper()
+	oldEndpointID := endpointIDCounter.Load()
+	oldRelay := relayCounter.Load()
+	oldCustom := customCounter.Load()
+	endpointIDCounter.Store(0)
+	relayCounter.Store(0)
+	customCounter.Store(0)
+	t.Cleanup(func() {
+		endpointIDCounter.Store(oldEndpointID)
+		relayCounter.Store(oldRelay)
+		customCounter.Store(oldCustom)
+	})
+}
+
+// TestMappedAddrConstructorGoldens pins the allocating constructors to Rust's
+// first counter value: AtomicU64::new(1) followed by fetch_add yields ::1. Go
+// uses Add(1) on a zero-value atomic, so the first address must match exactly.
+func TestMappedAddrConstructorGoldens(t *testing.T) {
+	resetMappedAddrCountersForTest(t)
+
+	tests := []struct {
+		name string
+		new  func() netip.AddrPort
+		want string
+		kind MappedKind
+	}{
+		{
+			name: "endpoint id",
+			new:  func() netip.AddrPort { return NewEndpointIDMappedAddr().AddrPort() },
+			want: "[fd15:70a:510b::1]:12345",
+			kind: KindEndpointID,
+		},
+		{
+			name: "relay",
+			new:  func() netip.AddrPort { return NewRelayMappedAddr().AddrPort() },
+			want: "[fd15:70a:510b:1::1]:12345",
+			kind: KindRelay,
+		},
+		{
+			name: "custom",
+			new:  func() netip.AddrPort { return NewCustomMappedAddr().AddrPort() },
+			want: "[fd15:70a:510b:3::1]:12345",
+			kind: KindCustom,
+		},
+	}
+	for _, tt := range tests {
+		got := tt.new()
+		want := netip.MustParseAddrPort(tt.want)
+		if got != want {
+			t.Errorf("%s: AddrPort = %s, want %s", tt.name, got, want)
+		}
+		if got.Port() != mappedPort {
+			t.Errorf("%s: port = %d, want %d", tt.name, got.Port(), mappedPort)
+		}
+		if kind := Classify(got.Addr()); kind != tt.kind {
+			t.Errorf("%s: Classify = %v, want %v", tt.name, kind, tt.kind)
+		}
+	}
+}
+
 // TestMappedAddrPrefixExact checks the literal first 8 bytes.
 func TestMappedAddrPrefixExact(t *testing.T) {
 	a := mappedAddr(subnetRelay, 1).As16()
@@ -106,6 +170,40 @@ func TestClassify(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("Classify(%s) = %v, want %v", tt.addr, got, tt.want)
 		}
+	}
+}
+
+func TestPathAddrMappedReverseLookup(t *testing.T) {
+	s := NewSocket()
+	url, err := base.ParseRelayUrl("https://relay.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	eid := sk.Public()
+
+	relayMapped := s.RelayMappedAddrFor(url, eid)
+	gotRelay := s.PathAddr(eid, net.UDPAddrFromAddrPort(relayMapped.AddrPort()))
+	gotURL, gotEID, ok := gotRelay.Relay()
+	if !ok {
+		t.Fatalf("PathAddr(relay mapped) kind = %v, want relay", gotRelay.Kind())
+	}
+	if !gotURL.Equal(url) || !gotEID.Equal(eid) {
+		t.Errorf("PathAddr(relay mapped) = (%s, %s), want (%s, %s)", gotURL, gotEID, url, eid)
+	}
+
+	custom := base.NewCustomAddr(7, []byte("peer"))
+	customMapped := s.CustomMappedAddrFor(custom)
+	gotCustom := s.PathAddr(eid, net.UDPAddrFromAddrPort(customMapped.AddrPort()))
+	got, ok := gotCustom.Custom()
+	if !ok {
+		t.Fatalf("PathAddr(custom mapped) kind = %v, want custom", gotCustom.Kind())
+	}
+	if got.String() != custom.String() {
+		t.Errorf("PathAddr(custom mapped) = %s, want %s", got, custom)
 	}
 }
 
