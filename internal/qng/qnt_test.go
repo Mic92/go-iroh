@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
@@ -347,6 +348,48 @@ func TestQNTRoundQueuesOneReachOutPerLocalAndProbePerRemote(t *testing.T) {
 	probes := c.qntPendingProbeAddresses()
 	if len(probes) != 2 || !slices.Contains(probes, remote1) || !slices.Contains(probes, remote2) {
 		t.Fatalf("pending probes = %v, want %v and %v", probes, remote1, remote2)
+	}
+}
+
+func TestQNTRoundQueuesReachOutFramesToFramer(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	local := netip.MustParseAddrPort("192.0.2.1:1234")
+	remote := netip.MustParseAddrPort("198.51.100.1:1001")
+
+	if err := c.AddNATTraversalAddress(local); err != nil {
+		t.Fatalf("AddNATTraversalAddress: %v", err)
+	}
+	c.framer = newFramer(noopConnectionFlowController{})
+	if err := c.addRemoteNATTraversalAddressFrame(&wire.AddAddressFrame{SeqNo: 1, Addr: remote.Addr(), Port: remote.Port()}); err != nil {
+		t.Fatalf("add remote: %v", err)
+	}
+	if _, err := c.InitiateNATTraversalRound(context.Background()); err != nil {
+		t.Fatalf("InitiateNATTraversalRound: %v", err)
+	}
+	if pending := c.qntPendingReachOutFrames(); len(pending) != 0 {
+		t.Fatalf("pending REACH_OUT after queueing = %+v, want none", pending)
+	}
+	queued := queuedReachOutFrames(c)
+	if len(queued) != 1 {
+		t.Fatalf("queued REACH_OUT frames = %d, want 1", len(queued))
+	}
+	if got := netip.AddrPortFrom(queued[0].Addr, queued[0].Port); queued[0].Round != 1 || got != local {
+		t.Fatalf("queued REACH_OUT = round %d %v, want round 1 %v", queued[0].Round, got, local)
+	}
+
+	frames, _, _ := c.framer.Append(nil, nil, 1200, monotime.Now(), protocol.Version1)
+	if len(frames) != 1 {
+		t.Fatalf("framer returned %d frames, want 1", len(frames))
+	}
+	got, ok := frames[0].Frame.(*wire.ReachOutFrame)
+	if !ok {
+		t.Fatalf("framer returned %T, want *wire.ReachOutFrame", frames[0].Frame)
+	}
+	if got.Round != 1 || netip.AddrPortFrom(got.Addr, got.Port) != local {
+		t.Fatalf("packed REACH_OUT = round %d %s:%d, want round 1 %v", got.Round, got.Addr, got.Port, local)
+	}
+	if c.framer.HasData() {
+		t.Fatal("framer still has REACH_OUT data after append")
 	}
 }
 
@@ -855,6 +898,18 @@ func queuedRemoveAddressFrames(c *Conn) []*wire.RemoveAddressFrame {
 	var frames []*wire.RemoveAddressFrame
 	for _, f := range c.framer.controlFrames {
 		if rf, ok := f.(*wire.RemoveAddressFrame); ok {
+			frames = append(frames, rf)
+		}
+	}
+	return frames
+}
+
+func queuedReachOutFrames(c *Conn) []*wire.ReachOutFrame {
+	c.framer.controlFrameMutex.Lock()
+	defer c.framer.controlFrameMutex.Unlock()
+	var frames []*wire.ReachOutFrame
+	for _, f := range c.framer.controlFrames {
+		if rf, ok := f.(*wire.ReachOutFrame); ok {
 			frames = append(frames, rf)
 		}
 	}

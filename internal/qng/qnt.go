@@ -119,9 +119,9 @@ func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort,
 	}
 	st := c.qntLocalState()
 	st.mu.Lock()
-	defer st.mu.Unlock()
 	remote := st.remote.addresses()
 	if len(st.local) == 0 || len(remote) == 0 {
+		st.mu.Unlock()
 		return nil, ErrNATTraversalNotEnoughAddresses
 	}
 	st.round++
@@ -135,6 +135,8 @@ func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort,
 			Port:  local.addr.Port(),
 		})
 	}
+	st.mu.Unlock()
+	c.qntQueuePendingReachOutFrames()
 	return remote, nil
 }
 
@@ -172,6 +174,23 @@ func (c *Conn) qntPendingReachOutFrames() []*wire.ReachOutFrame {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return cloneReachOutFrames(st.pendingReachOut)
+}
+
+func (c *Conn) qntQueuePendingReachOutFrames() bool {
+	if c.framer == nil {
+		return false
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	frames := cloneReachOutFrames(st.pendingReachOut)
+	st.pendingReachOut = st.pendingReachOut[:0]
+	st.mu.Unlock()
+	for _, frame := range frames {
+		if frame != nil {
+			c.queueControlFrame(frame)
+		}
+	}
+	return len(frames) > 0
 }
 
 func (c *Conn) qntPendingProbeAddresses() []netip.AddrPort {
