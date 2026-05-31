@@ -658,6 +658,132 @@ func TestQNTValidatedProbeQueue(t *testing.T) {
 	}
 }
 
+func TestQNTOpenValidatedPathStoresRoute(t *testing.T) {
+	local := uint32(4)
+	peer := uint32(8)
+	c := newMaxPathIDTestConn(&local, &peer)
+	c.multipathManager.handleMaxPathID(protocol.PathID(4))
+	addr := netip.MustParseAddrPort("[::ffff:198.51.100.1]:1234")
+	want := netip.MustParseAddrPort("198.51.100.1:1234")
+
+	if !c.qntQueueValidatedProbe(addr) {
+		t.Fatal("qntQueueValidatedProbe = false, want true")
+	}
+	pid, route, ok, err := c.qntOpenValidatedPathLocked()
+	if err != nil {
+		t.Fatalf("qntOpenValidatedPathLocked: %v", err)
+	}
+	if !ok || pid != protocol.PathID(1) || route != want {
+		t.Fatalf("qntOpenValidatedPathLocked = %d, %v, %v, want 1, %v, true", pid, route, ok, want)
+	}
+	st := c.multipathOut.paths[pid]
+	if st == nil {
+		t.Fatalf("multipath path %d not stored", pid)
+	}
+	if st.qntRoute != want {
+		t.Fatalf("qntRoute = %v, want %v", st.qntRoute, want)
+	}
+	if st.validated {
+		t.Fatal("QNT route path is marked validated before route send support exists")
+	}
+	if c.multipathOut.nextPathID != protocol.PathID(2) {
+		t.Fatalf("nextPathID = %d, want 2", c.multipathOut.nextPathID)
+	}
+	if got, ok := c.qntPopValidatedProbe(); ok || got.IsValid() {
+		t.Fatalf("validated queue after route = %v, %v, want zero false", got, ok)
+	}
+}
+
+func TestQNTOpenValidatedPathRequiresCanOpenPath(t *testing.T) {
+	local := uint32(4)
+	peer := uint32(8)
+	addr := netip.MustParseAddrPort("198.51.100.1:1234")
+
+	tests := []struct {
+		name string
+		conn *Conn
+	}{
+		{name: "multipath off", conn: newMaxPathIDTestConn(nil, nil)},
+		{name: "peer max unset", conn: newMaxPathIDTestConn(&local, &peer)},
+		{name: "peer max below next path", conn: func() *Conn {
+			c := newMaxPathIDTestConn(&local, &peer)
+			c.multipathManager.handleMaxPathID(protocol.PathIDZero)
+			return c
+		}()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if !tt.conn.qntQueueValidatedProbe(addr) {
+				t.Fatal("qntQueueValidatedProbe = false, want true")
+			}
+			pid, route, ok, err := tt.conn.qntOpenValidatedPathLocked()
+			if !errors.Is(err, ErrPathLimit) {
+				t.Fatalf("qntOpenValidatedPathLocked err = %v, want ErrPathLimit", err)
+			}
+			if ok || pid != protocol.PathIDZero || route.IsValid() {
+				t.Fatalf("qntOpenValidatedPathLocked = %d, %v, %v, want zero false", pid, route, ok)
+			}
+			got, ok := tt.conn.qntPopValidatedProbe()
+			if !ok || got != addr {
+				t.Fatalf("validated probe after rejected route = %v, %v, want %v true", got, ok, addr)
+			}
+		})
+	}
+}
+
+func TestQNTOpenValidatedPathNoCandidate(t *testing.T) {
+	local := uint32(4)
+	peer := uint32(8)
+	tests := []struct {
+		name string
+		conn *Conn
+	}{
+		{name: "can open", conn: func() *Conn {
+			c := newMaxPathIDTestConn(&local, &peer)
+			c.multipathManager.handleMaxPathID(protocol.PathID(4))
+			return c
+		}()},
+		{name: "cannot open", conn: newMaxPathIDTestConn(nil, nil)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pid, route, ok, err := tt.conn.qntOpenValidatedPathLocked()
+			if err != nil {
+				t.Fatalf("qntOpenValidatedPathLocked: %v", err)
+			}
+			if ok || pid != protocol.PathIDZero || route.IsValid() {
+				t.Fatalf("qntOpenValidatedPathLocked without candidate = %d, %v, %v, want zero false", pid, route, ok)
+			}
+			if tt.conn.multipathOut != nil {
+				t.Fatal("qntOpenValidatedPathLocked without candidate initialized multipath state")
+			}
+		})
+	}
+}
+
+func TestQNTDriveMultipathSkipsRoutePaths(t *testing.T) {
+	route := netip.MustParseAddrPort("198.51.100.1:1234")
+	c := &Conn{
+		handshakeConfirmed: true,
+		perPathDestConnIDs: map[protocol.PathID]protocol.ConnectionID{
+			1: protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
+		},
+		multipathOut: &multipathOutgoing{
+			paths: map[protocol.PathID]*pathOpenState{
+				1: {id: 1, qntRoute: route, validated: true, sendData: [][]byte{{1, 2, 3}}},
+			},
+			nextPathID: 2,
+		},
+	}
+	if err := c.driveMultipath(monotime.Now()); err != nil {
+		t.Fatalf("driveMultipath: %v", err)
+	}
+	if got := c.multipathOut.paths[1].sendData; len(got) != 1 || !slices.Equal(got[0], []byte{1, 2, 3}) {
+		t.Fatalf("sendData after driveMultipath = %v, want queued datagram unchanged", got)
+	}
+}
+
 func TestQNTSentProbeRequiresChallengeAndSource(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
 	challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}

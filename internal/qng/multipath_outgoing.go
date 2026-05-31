@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net/netip"
 	"sort"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
@@ -76,6 +77,12 @@ type pathOpenState struct {
 	// deterministic, and leaves the path-0 send loop byte-identical. It is
 	// drained only in the run goroutine.
 	sendData [][]byte
+
+	// qntRoute is the validated remote address for a QNT-opened path. Route
+	// support is not wired into sendPathPacket/sendOnPath yet; while this is set,
+	// driveMultipath must not send the path over the connection's existing
+	// address.
+	qntRoute netip.AddrPort
 }
 
 // openPathRequest is the command Conn.OpenPath hands to the run goroutine. The
@@ -348,6 +355,27 @@ func (c *Conn) openPathLocked() (*MultipathPath, error) {
 	return &MultipathPath{conn: c, id: pid, validated: st.validatedChan}, nil
 }
 
+func (c *Conn) qntOpenValidatedPathLocked() (protocol.PathID, netip.AddrPort, bool, error) {
+	if _, ok := c.qntPeekValidatedProbe(); !ok {
+		return protocol.PathIDZero, netip.AddrPort{}, false, nil
+	}
+	if c.multipathOut == nil {
+		c.multipathOut = newMultipathOutgoing()
+	}
+	pid := c.multipathOut.nextPathID
+	if !c.canOpenPath(pid) {
+		return protocol.PathIDZero, netip.AddrPort{}, false, fmt.Errorf("%w: path %d peer max path id not raised that far", ErrPathLimit, pid)
+	}
+	route, ok := c.qntPopValidatedProbe()
+	if !ok {
+		return protocol.PathIDZero, netip.AddrPort{}, false, nil
+	}
+	c.multipathOut.nextPathID++
+	st := &pathOpenState{id: pid, validatedChan: make(chan struct{}), qntRoute: route}
+	c.multipathOut.paths[pid] = st
+	return pid, route, true, nil
+}
+
 // driveMultipath performs the per-path send work for every open non-zero path.
 // It runs in the run goroutine after the ordinary path-0 send. For each path it
 // either (a) sends a PATH_CHALLENGE if the path is still unvalidated and we have
@@ -359,6 +387,9 @@ func (c *Conn) driveMultipath(now monotime.Time) error {
 		return nil
 	}
 	for pid, st := range c.multipathOut.paths {
+		if st.qntRoute.IsValid() {
+			continue
+		}
 		connID, ok := c.destConnIDForPath(pid)
 		if !ok {
 			// The peer has not issued a PATH_NEW_CONNECTION_ID for this path yet;

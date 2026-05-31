@@ -337,6 +337,16 @@ func (c *Conn) qntPopValidatedProbe() (netip.AddrPort, bool) {
 	return addr, true
 }
 
+func (c *Conn) qntPeekValidatedProbe() (netip.AddrPort, bool) {
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if len(st.validatedProbes) == 0 {
+		return netip.AddrPort{}, false
+	}
+	return st.validatedProbes[0], true
+}
+
 func (c *Conn) queueLocalAddAddressFrame(seq uint64, addr netip.AddrPort) {
 	if c.framer == nil {
 		return
