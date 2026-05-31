@@ -478,6 +478,18 @@ func (e *Endpoint) registerConn(remote base.EndpointId, qc *quic.Conn) {
 	}
 	addr := e.sock.PathAddr(remote, qc.RemoteAddr())
 	e.remotes.AddConnection(remote, newConnAdapter(qc, addr))
+	if !qc.ConnectionState().MultipathNegotiated {
+		return
+	}
+	candidates := e.localNATTraversalCandidates()
+	if len(candidates) == 0 {
+		return
+	}
+	// Candidate seeding is opportunistic: QNT may still be disabled or
+	// incomplete, and path management must not make an otherwise-established
+	// connection fail. The actor/qng layers keep the failure visible to explicit
+	// hole-punch calls.
+	_ = e.remotes.Actor(remote).AddNATTraversalAddresses(candidates)
 }
 
 // resolveFunc returns the address-lookup hook the RemoteMap actors use to
