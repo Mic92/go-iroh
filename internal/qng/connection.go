@@ -198,6 +198,11 @@ type Conn struct {
 	// can confirm path-1 packets really flowed in path 1's own number space and
 	// controller. It is never used on a production connection.
 	pathStatsQueue chan *pathStatsRequest
+	// pathSnapshotQueue carries application-facing path-observability queries
+	// into the run goroutine, where the real multipathOut path-open state lives.
+	// It deliberately reports qng path state only; socket path events need a
+	// later address-bearing adapter instead of fabricated RemoteAddr values.
+	pathSnapshotQueue chan *pathSnapshotRequest
 
 	// nextObservedAddrSeqNo is the sequence number for the next OBSERVED_ADDRESS
 	// frame this endpoint emits (QUIC Address Discovery). It increments once per
@@ -592,6 +597,7 @@ func (c *Conn) preSetup() {
 	c.openPathQueue = make(chan *openPathRequest, 4)
 	c.pathDatagramQueue = make(chan pathDatagram, maxDatagramSendQueueLen)
 	c.pathStatsQueue = make(chan *pathStatsRequest, 4)
+	c.pathSnapshotQueue = make(chan *pathSnapshotRequest, 4)
 	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient)
 	c.handshakeStream = newCryptoStream()
 	c.sendQueue = newSendQueue(c.conn)
@@ -822,6 +828,7 @@ runLoop:
 			break runLoop
 		}
 		c.processPathStatsRequests()
+		c.processPathSnapshotRequests()
 		c.drainPathDatagrams()
 		if err := c.driveMultipath(now); err != nil {
 			c.setCloseError(&closeError{err: err})

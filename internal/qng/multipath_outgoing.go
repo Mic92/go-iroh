@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/ackhandler"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
@@ -216,6 +217,74 @@ func (c *Conn) PathStats(pid protocol.PathID) (ackhandler.PathDebugStats, bool) 
 		return req.stats, req.ok
 	case <-c.ctx.Done():
 		return ackhandler.PathDebugStats{}, false
+	}
+}
+
+// PathInfo is a snapshot of one qng multipath path's application-facing state.
+//
+// Path 0 is the initial path and is not listed here. The entries returned by
+// [Conn.Paths] are real qng non-zero paths provisioned by OpenPath or by a peer
+// packet that caused lazy path join. Remote/local socket addresses are
+// intentionally absent until qng can report the address that actually routes a
+// PathID; socket must not synthesize PathEvent addresses from the connection's
+// original RemoteAddr.
+type PathInfo struct {
+	// ID is the QUIC multipath PathID.
+	ID protocol.PathID
+	// Validated reports whether the path completed PATH_CHALLENGE /
+	// PATH_RESPONSE validation and can carry non-probing application data.
+	Validated bool
+}
+
+// pathSnapshotRequest is the command Conn.Paths hands to the run goroutine,
+// which fills in paths and closes done.
+type pathSnapshotRequest struct {
+	paths []PathInfo
+	done  chan struct{}
+}
+
+// Paths returns a snapshot of this connection's non-zero qng multipath paths.
+// The query runs on the connection's run goroutine because the path-open state
+// is owned there. It returns nil if no non-zero path has been opened or the
+// connection is closed.
+func (c *Conn) Paths() []PathInfo {
+	req := &pathSnapshotRequest{done: make(chan struct{})}
+	select {
+	case c.pathSnapshotQueue <- req:
+	case <-c.ctx.Done():
+		return nil
+	}
+	c.scheduleSending()
+	select {
+	case <-req.done:
+		return req.paths
+	case <-c.ctx.Done():
+		return nil
+	}
+}
+
+// processPathSnapshotRequests answers pending Paths queries. Run goroutine
+// only (called from the run loop), so reading multipathOut is safe.
+func (c *Conn) processPathSnapshotRequests() {
+	for {
+		select {
+		case req := <-c.pathSnapshotQueue:
+			if c.multipathOut != nil && len(c.multipathOut.paths) > 0 {
+				req.paths = make([]PathInfo, 0, len(c.multipathOut.paths))
+				for pid, st := range c.multipathOut.paths {
+					req.paths = append(req.paths, PathInfo{
+						ID:        pid,
+						Validated: st.validated,
+					})
+				}
+				sort.Slice(req.paths, func(i, j int) bool {
+					return req.paths[i].ID < req.paths[j].ID
+				})
+			}
+			close(req.done)
+		default:
+			return
+		}
 	}
 }
 

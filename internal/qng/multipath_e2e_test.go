@@ -306,6 +306,13 @@ func TestMultipathTwoPathE2E(t *testing.T) {
 	if err := path.Validated(ctx); err != nil {
 		t.Fatalf("path 1 never validated: %v", err)
 	}
+	paths := clientConn.Paths()
+	if len(paths) != 1 {
+		t.Fatalf("client Paths() len = %d, want 1; paths=%v", len(paths), paths)
+	}
+	if paths[0].ID != 1 || !paths[0].Validated {
+		t.Fatalf("client Paths()[0] = %+v, want path 1 validated", paths[0])
+	}
 
 	// (3) Real application data over PathID 1: client -> server. The datagram is
 	// packed into a 1-RTT packet addressed to the server's path-1 connection ID
