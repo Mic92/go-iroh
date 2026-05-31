@@ -99,6 +99,13 @@ func NewCustomMappedAddr() CustomMappedAddr {
 // Addr returns the underlying IPv6 address.
 func (m EndpointIDMappedAddr) Addr() netip.Addr { return m.a }
 
+// EndpointIDMappedAddrFromAddr wraps an existing endpoint-id mapped IPv6
+// address. It is used to reverse-look-up the endpoint id via
+// [Socket.LookupEndpointID].
+func EndpointIDMappedAddrFromAddr(a netip.Addr) EndpointIDMappedAddr {
+	return EndpointIDMappedAddr{a: a}
+}
+
 // Addr returns the underlying IPv6 address.
 func (m RelayMappedAddr) Addr() netip.Addr { return m.a }
 

@@ -460,6 +460,60 @@ func TestEndpointWithCustomTransport(t *testing.T) {
 	}
 }
 
+func TestEndpointIDMappedSendFansOut(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Close(ctx)
+
+	dst, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dst.Close()
+
+	remote, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &endpointQNTFakeConn{
+		addr: socket.IPAddr(dst.LocalAddr().(*net.UDPAddr).AddrPort()),
+		done: make(chan struct{}),
+	}
+	events := ep.remotes.AddConnection(remote.Public(), fake)
+	select {
+	case <-events:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	mapped := ep.sock.EndpointIDMappedAddrFor(remote.Public())
+	const payload = "endpoint-id-fanout"
+	n, err := ep.magic.WriteTo([]byte(payload), net.UDPAddrFromAddrPort(mapped.AddrPort()))
+	if err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("WriteTo n = %d, want %d", n, len(payload))
+	}
+
+	if err := dst.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 64)
+	rn, _, err := dst.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("dst.ReadFrom: %v", err)
+	}
+	if string(buf[:rn]) != payload {
+		t.Fatalf("payload = %q, want %q", buf[:rn], payload)
+	}
+}
+
 func TestEndpointLocalNATTraversalCandidates(t *testing.T) {
 	ctx := context.Background()
 

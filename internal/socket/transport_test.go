@@ -284,6 +284,56 @@ func TestMagicConnCustomRecvRewrite(t *testing.T) {
 	}
 }
 
+func TestMagicConnEndpointIDSend(t *testing.T) {
+	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+
+	sock := socket.NewSocket()
+	m := socket.NewMagicConn(sock, udp)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Serve(ctx)
+	defer m.Close()
+
+	sk, err := base.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public()
+	mapped := sock.EndpointIDMappedAddrFor(id)
+
+	got := make(chan []byte, 1)
+	m.SetEndpointSender(func(remote base.EndpointId, p []byte) bool {
+		if !remote.Equal(id) {
+			t.Errorf("remote = %s, want %s", remote, id)
+		}
+		got <- append([]byte(nil), p...)
+		return true
+	})
+
+	const payload = "endpoint-id-send"
+	n, err := m.WriteTo([]byte(payload), net.UDPAddrFromAddrPort(mapped.AddrPort()))
+	if err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("WriteTo n = %d, want %d", n, len(payload))
+	}
+
+	select {
+	case b := <-got:
+		if string(b) != payload {
+			t.Fatalf("payload = %q, want %q", b, payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for endpoint sender")
+	}
+}
+
 // TestMagicConnReadDeadline checks ReadFrom honors a past read deadline by
 // returning a timeout net.Error rather than blocking.
 func TestMagicConnReadDeadline(t *testing.T) {

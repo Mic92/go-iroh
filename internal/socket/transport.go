@@ -4,8 +4,11 @@ import (
 	"context"
 	"net"
 	"net/netip"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/tmc/go-iroh/base"
 )
 
 // Transports multiplexes the magic socket's network paths: a direct-IP
@@ -45,6 +48,9 @@ type MagicConn struct {
 
 	readDeadline  deadline
 	writeDeadline deadline
+
+	endpointMu     sync.RWMutex
+	endpointSender func(base.EndpointId, []byte) bool
 }
 
 // NewMagicConn returns a MagicConn whose sole transport is an [IpTransport]
@@ -90,6 +96,15 @@ func NewMagicConnWithTransports(sock *Socket, udp *net.UDPConn, actor *RelayActo
 
 // Relay returns the relay transport, or nil if no relay actor was configured.
 func (m *MagicConn) Relay() *RelayTransport { return m.transports.relay }
+
+// SetEndpointSender sets the callback used for endpoint-id mapped addresses.
+// The callback should route p through the remote endpoint's actor and report
+// whether it accepted the datagram. A nil callback restores blackhole behavior.
+func (m *MagicConn) SetEndpointSender(send func(base.EndpointId, []byte) bool) {
+	m.endpointMu.Lock()
+	m.endpointSender = send
+	m.endpointMu.Unlock()
+}
 
 // Serve runs the magic socket's receive loops until ctx is cancelled or the
 // underlying socket is closed. It blocks; run it in its own goroutine.
@@ -172,33 +187,79 @@ func (m *MagicConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	}
 	switch Classify(ap.Addr()) {
 	case KindIP:
-		if _, err := m.transports.ip.send(p, ap); err != nil {
-			// Intermittent send errors are treated as a lost datagram, not a
-			// fatal socket error (transports.rs:1176).
-			return len(p), nil
+		m.sendAddr(IPAddr(ap), p)
+		return len(p), nil
+	case KindEndpointID:
+		if id, ok := m.sock.LookupEndpointID(EndpointIDMappedAddrFromAddr(ap.Addr())); ok {
+			m.endpointMu.RLock()
+			send := m.endpointSender
+			m.endpointMu.RUnlock()
+			if send != nil {
+				send(id, p)
+			}
 		}
 		return len(p), nil
 	case KindRelay:
-		if m.transports.relay != nil {
-			// A full send queue or unknown relay address is treated as a lost
-			// datagram, not an error (transports.rs:1176).
-			m.transports.relay.Send(RelayMappedAddr{a: ap.Addr()}, p)
+		if addr, ok := relayAddrForMapped(m.sock, ap.Addr()); ok {
+			m.sendAddr(addr, p)
 		}
 		return len(p), nil
 	case KindCustom:
 		if c, ok := m.sock.LookupCustom(CustomMappedAddr{a: ap.Addr()}); ok {
-			for _, t := range m.transports.custom {
-				if t.Send(c, nil, p) {
-					break
-				}
-			}
+			m.sendAddr(CustomAddr(c), p)
 		}
 		return len(p), nil
 	default:
-		// EndpointId paths require machinery of later slices. Until then the
-		// datagram is blackholed.
 		return len(p), nil
 	}
+}
+
+// relayAddrForMapped returns the relay Addr for mapped.
+func relayAddrForMapped(sock *Socket, mapped netip.Addr) (Addr, bool) {
+	if rk, ok := sock.LookupRelay(RelayMappedAddrFromAddr(mapped)); ok {
+		return RelayAddr(rk.URL, rk.EID), true
+	}
+	return Addr{}, false
+}
+
+// sendAddr routes p to one concrete transport address. It reports whether the
+// datagram was accepted by a transport. Errors are loss, not socket failures.
+func (m *MagicConn) sendAddr(addr Addr, p []byte) bool {
+	switch addr.Kind() {
+	case AddrIP:
+		ap, _ := addr.IP()
+		if !ap.IsValid() || ap.Port() == 0 {
+			return false
+		}
+		_, err := m.transports.ip.send(p, ap)
+		return err == nil
+	case AddrRelay:
+		if m.transports.relay == nil {
+			return false
+		}
+		url, eid, _ := addr.Relay()
+		mapped := m.sock.RelayMappedAddrFor(url, eid)
+		return m.transports.relay.Send(mapped, p)
+	case AddrCustom:
+		c, _ := addr.Custom()
+		for _, t := range m.transports.custom {
+			if t.Send(c, nil, p) {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+// SendAddr routes p to one concrete magic-socket transport address. It is used
+// by RemoteStateActor endpoint-id fanout.
+func (m *MagicConn) SendAddr(addr Addr, p []byte) bool {
+	if m.sock.IsClosed() {
+		return false
+	}
+	return m.sendAddr(addr, p)
 }
 
 // LocalAddr returns the bound local address of the underlying UDP socket. It

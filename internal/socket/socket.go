@@ -18,6 +18,10 @@ import (
 // [Transports]. It is safe for concurrent use. The zero Socket is not usable;
 // use [NewSocket].
 type Socket struct {
+	// endpointAddrs maps endpoint ids to endpoint-id mapped addresses used for
+	// initial packets before a concrete path is selected.
+	endpointAddrs *AddrMap[base.EndpointId, EndpointIDMappedAddr]
+
 	// relayAddrs maps (relay url, endpoint id) pairs to relay mapped addresses.
 	// The map key is the relay key's string form, because base.RelayUrl wraps a
 	// pointer and is not reliably comparable across separately-parsed URLs.
@@ -53,6 +57,10 @@ type RelayKey struct {
 // NewSocket returns a ready Socket with empty mapped-address tables.
 func NewSocket() *Socket {
 	return &Socket{
+		endpointAddrs: NewAddrMap[base.EndpointId, EndpointIDMappedAddr](
+			NewEndpointIDMappedAddr,
+			func(v EndpointIDMappedAddr) netip.Addr { return v.Addr() },
+		),
 		relayAddrs: NewAddrMap[string, RelayMappedAddr](
 			NewRelayMappedAddr,
 			func(v RelayMappedAddr) netip.Addr { return v.Addr() },
@@ -73,6 +81,18 @@ func (s *Socket) Close() { s.closed.Store(true) }
 
 // IsClosed reports whether the socket has been closed.
 func (s *Socket) IsClosed() bool { return s.closed.Load() }
+
+// EndpointIDMappedAddrFor returns the endpoint-id mapped address for id,
+// allocating one on first use.
+func (s *Socket) EndpointIDMappedAddrFor(id base.EndpointId) EndpointIDMappedAddr {
+	return s.endpointAddrs.Get(id)
+}
+
+// LookupEndpointID returns the endpoint id for an endpoint-id mapped address, if
+// known.
+func (s *Socket) LookupEndpointID(m EndpointIDMappedAddr) (base.EndpointId, bool) {
+	return s.endpointAddrs.Lookup(m.Addr())
+}
 
 // RelayMappedAddrFor returns the relay mapped address for the (url, eid) pair,
 // allocating one on first use.

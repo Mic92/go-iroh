@@ -366,6 +366,12 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	// endpoint's address-lookup services (slice G), passed down as a func value
 	// so internal/socket does not import iroh.
 	ep.remotes = socket.NewRemoteMap(serveCtx, socket.BiasedRttPathSelector{}, ep.resolveFunc())
+	ep.magic.SetEndpointSender(func(id base.EndpointId, p []byte) bool {
+		err := ep.remotes.Actor(id).SendDatagram(p, func(addr socket.Addr, data []byte) bool {
+			return ep.magic.SendAddr(addr, data)
+		})
+		return err == nil
+	})
 
 	// Select a home relay. net_report-based selection (latency probing) is a
 	// later slice; until then the lexically-first configured relay is the home
