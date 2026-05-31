@@ -260,11 +260,27 @@ func (r *Router) Shutdown(ctx context.Context) error {
 	r.cancel()
 
 	// Give handlers a chance to close connections gracefully before the endpoint
-	// force-closes them.
+	// force-closes them. Rust awaits all protocol shutdown futures
+	// concurrently; do the same so one slow protocol does not block the rest.
+	var shutdownWG sync.WaitGroup
 	for _, h := range r.handlers {
 		if sh, ok := h.(ShutdownHandler); ok {
-			sh.Shutdown(ctx)
+			shutdownWG.Add(1)
+			go func(sh ShutdownHandler) {
+				defer shutdownWG.Done()
+				sh.Shutdown(ctx)
+			}(sh)
 		}
+	}
+	handlersDone := make(chan struct{})
+	go func() {
+		shutdownWG.Wait()
+		close(handlersDone)
+	}()
+	select {
+	case <-handlersDone:
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	closeErr := r.ep.Close(ctx)

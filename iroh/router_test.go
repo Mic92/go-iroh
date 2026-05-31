@@ -50,6 +50,21 @@ func (h *shutdownEcho) wasShutdown() bool {
 	return h.done
 }
 
+type blockingShutdown struct {
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (h blockingShutdown) Accept(context.Context, *Conn) error { return nil }
+
+func (h blockingShutdown) Shutdown(ctx context.Context) {
+	close(h.started)
+	select {
+	case <-h.release:
+	case <-ctx.Done():
+	}
+}
+
 // TestRouterEcho is the slice-H Router gate: two endpoints connect over a direct
 // loopback path; the server registers an echo ProtocolHandler via a Router; the
 // client connects and exchanges a stream echo dispatched by ALPN through the
@@ -163,4 +178,45 @@ func TestRouterUnsupportedALPN(t *testing.T) {
 		t.Fatalf("good connect after bad: %v", err)
 	}
 	conn.CloseWithError(0, "")
+}
+
+func TestRouterShutdownHandlersRunConcurrently(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	server, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	release := make(chan struct{})
+	h1 := blockingShutdown{started: make(chan struct{}), release: release}
+	h2 := blockingShutdown{started: make(chan struct{}), release: release}
+	router, err := NewRouter(server).
+		Accept([]byte("iroh-shutdown-a/0"), h1).
+		Accept([]byte("iroh-shutdown-b/0"), h2).
+		Spawn()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- router.Shutdown(ctx)
+	}()
+
+	select {
+	case <-h1.started:
+	case <-time.After(time.Second):
+		t.Fatal("first handler Shutdown was not called")
+	}
+	select {
+	case <-h2.started:
+	case <-time.After(time.Second):
+		t.Fatal("second handler Shutdown was not called concurrently")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
 }
