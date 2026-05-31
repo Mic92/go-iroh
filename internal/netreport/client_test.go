@@ -45,6 +45,27 @@ func TestPreferredRelaySelectsLowestLatency(t *testing.T) {
 	}
 }
 
+func TestPreferredRelayUsesLatencyOnlyQAD(t *testing.T) {
+	c := newTestClient(t)
+	now := time.Unix(0, 0)
+	c.now = func() time.Time { return now }
+
+	a := mustRelay(t, "https://a.example/")
+	b := mustRelay(t, "https://b.example/")
+	r := &Report{}
+	r.update(&probeReport{probe: ProbeQADv4, relay: a, latency: ms(20)})
+	r.update(&probeReport{probe: ProbeHTTPS, relay: b, latency: ms(50)})
+
+	c.addReportHistoryAndSetPreferredRelay(r)
+
+	if got := r.PreferredRelay.String(); got != "https://a.example/" {
+		t.Errorf("PreferredRelay = %q, want a from latency-only QAD", got)
+	}
+	if r.UDPv4 || r.GlobalV4.IsValid() {
+		t.Fatalf("latency-only QAD set UDPv4=%v GlobalV4=%v", r.UDPv4, r.GlobalV4)
+	}
+}
+
 func TestPreferredRelayHysteresis(t *testing.T) {
 	// First report makes A preferred. A second report adds a slightly faster B,
 	// but not 1/3 faster, so A should stick. A third report adds a much faster

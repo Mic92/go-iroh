@@ -13,11 +13,11 @@ import (
 //
 // The zero Report is a valid empty report.
 type Report struct {
-	// UDPv4 reports whether a QAD IPv4 round trip completed. Always false until
-	// the qng observed-address extension lands; see the package doc.
+	// UDPv4 reports whether a QAD IPv4 round trip completed and reported an
+	// observed IPv4 address.
 	UDPv4 bool
-	// UDPv6 reports whether a QAD IPv6 round trip completed. Always false until
-	// the qng observed-address extension lands; see the package doc.
+	// UDPv6 reports whether a QAD IPv6 round trip completed and reported an
+	// observed IPv6 address.
 	UDPv6 bool
 
 	// MappingVariesByDestV4 reports whether the observed public IPv4 address
@@ -34,13 +34,11 @@ type Report struct {
 	// RelayLatency holds per-relay, per-probe latencies.
 	RelayLatency RelayLatencies
 
-	// GlobalV4 is the host's public IPv4 address as seen by a relay. Always
-	// absent until the qng observed-address extension lands; see the package
-	// doc.
+	// GlobalV4 is the host's public IPv4 address as seen by a relay. It is
+	// absent when no QAD IPv4 observed-address report arrived.
 	GlobalV4 netip.AddrPort
-	// GlobalV6 is the host's public IPv6 address as seen by a relay. Always
-	// absent until the qng observed-address extension lands; see the package
-	// doc.
+	// GlobalV6 is the host's public IPv6 address as seen by a relay. It is
+	// absent when no QAD IPv6 observed-address report arrived.
 	GlobalV6 netip.AddrPort
 
 	// CaptivePortal reports whether a captive portal is intercepting HTTP, when
@@ -58,8 +56,8 @@ type probeReport struct {
 	latency time.Duration
 
 	// addr is the reflexive address observed by a QAD probe. It is the zero
-	// AddrPort until the qng observed-address extension lands, in which case the
-	// QAD branch records latency only.
+	// AddrPort when no observed-address report arrived, in which case the QAD
+	// branch records latency only.
 	addr netip.AddrPort
 }
 
@@ -70,8 +68,8 @@ func (r *Report) update(report *probeReport) {
 
 	switch report.probe {
 	case ProbeQADv4:
-		// Without the observed-address extension a QAD probe yields no addr, so
-		// we cannot set UDPv4 or GlobalV4. Latency was already recorded above.
+		// Without an observed-address report a QAD probe yields no addr, so we
+		// cannot set UDPv4 or GlobalV4. Latency was already recorded above.
 		if !report.addr.IsValid() {
 			return
 		}
