@@ -762,6 +762,60 @@ func TestQNTOpenValidatedPathNoCandidate(t *testing.T) {
 	}
 }
 
+func TestQNTProcessValidatedPathOpenConsumesOneCandidate(t *testing.T) {
+	local := uint32(4)
+	peer := uint32(8)
+	c := newMaxPathIDTestConn(&local, &peer)
+	c.multipathManager.handleMaxPathID(protocol.PathID(4))
+	addr1 := netip.MustParseAddrPort("198.51.100.1:1234")
+	addr2 := netip.MustParseAddrPort("198.51.100.2:1234")
+
+	if !c.qntQueueValidatedProbe(addr1) || !c.qntQueueValidatedProbe(addr2) {
+		t.Fatal("qntQueueValidatedProbe = false, want true")
+	}
+	if err := c.processQNTValidatedPathOpen(); err != nil {
+		t.Fatalf("processQNTValidatedPathOpen: %v", err)
+	}
+	st := c.multipathOut.paths[protocol.PathID(1)]
+	if st == nil {
+		t.Fatal("QNT path 1 not opened")
+	}
+	if st.qntRoute != addr1 {
+		t.Fatalf("QNT path route = %v, want %v", st.qntRoute, addr1)
+	}
+	if st.validated {
+		t.Fatal("QNT path is validated before route send support exists")
+	}
+	if c.multipathOut.nextPathID != protocol.PathID(2) {
+		t.Fatalf("nextPathID = %d, want 2", c.multipathOut.nextPathID)
+	}
+	got, ok := c.qntPopValidatedProbe()
+	if !ok || got != addr2 {
+		t.Fatalf("remaining validated candidate = %v, %v, want %v, true", got, ok, addr2)
+	}
+}
+
+func TestQNTProcessValidatedPathOpenKeepsCandidateAtPathLimit(t *testing.T) {
+	local := uint32(4)
+	peer := uint32(8)
+	c := newMaxPathIDTestConn(&local, &peer)
+	addr := netip.MustParseAddrPort("198.51.100.1:1234")
+
+	if !c.qntQueueValidatedProbe(addr) {
+		t.Fatal("qntQueueValidatedProbe = false, want true")
+	}
+	if err := c.processQNTValidatedPathOpen(); err != nil {
+		t.Fatalf("processQNTValidatedPathOpen: %v", err)
+	}
+	if c.multipathOut != nil && len(c.multipathOut.paths) != 0 {
+		t.Fatalf("processQNTValidatedPathOpen opened %d paths at path limit, want none", len(c.multipathOut.paths))
+	}
+	got, ok := c.qntPopValidatedProbe()
+	if !ok || got != addr {
+		t.Fatalf("validated candidate after path limit = %v, %v, want %v, true", got, ok, addr)
+	}
+}
+
 func TestQNTDriveMultipathSkipsRoutePaths(t *testing.T) {
 	route := netip.MustParseAddrPort("198.51.100.1:1234")
 	c := &Conn{

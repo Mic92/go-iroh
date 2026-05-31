@@ -850,6 +850,10 @@ runLoop:
 			c.setCloseError(&closeError{err: err})
 			break runLoop
 		}
+		if err := c.processQNTValidatedPathOpen(); err != nil {
+			c.setCloseError(&closeError{err: err})
+			break runLoop
+		}
 		c.processPathStatsRequests()
 		c.processPathSnapshotRequests()
 		c.drainPathDatagrams()

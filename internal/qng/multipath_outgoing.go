@@ -324,6 +324,22 @@ func (c *Conn) processOpenPathRequests() error {
 	}
 }
 
+// processQNTValidatedPathOpen consumes at most one validated QNT candidate and
+// provisions a route-bearing multipath path for it. Run goroutine only.
+func (c *Conn) processQNTValidatedPathOpen() error {
+	_, _, ok, err := c.qntOpenValidatedPathLocked()
+	if errors.Is(err, ErrPathLimit) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if ok {
+		c.scheduleSending()
+	}
+	return nil
+}
+
 // openPathLocked provisions a new non-zero path. Invariant: run goroutine only.
 func (c *Conn) openPathLocked() (*MultipathPath, error) {
 	if c.multipathOut == nil {
