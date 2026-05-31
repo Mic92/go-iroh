@@ -28,6 +28,9 @@ type SentPacketHandler interface {
 	// schedule any send over the path. pid == PathIDZero or an already-present
 	// pid is an error. It is only called once multipath is negotiated.
 	AddPath(pid protocol.PathID) error
+	// RemovePath removes a path provisioned by AddPath. It is used only to roll
+	// back a path open that failed before becoming visible to the connection.
+	RemovePath(pid protocol.PathID)
 	ReceivedPacket(protocol.EncryptionLevel, monotime.Time)
 	ReceivedBytes(_ protocol.ByteCount, rcvTime monotime.Time)
 	DropPackets(_ protocol.EncryptionLevel, rcvTime monotime.Time)

@@ -58,6 +58,13 @@ func (h *ReceivedPacketHandler) AddPath(pid protocol.PathID, logger utils.Logger
 	return nil
 }
 
+func (h *ReceivedPacketHandler) RemovePath(pid protocol.PathID) {
+	if pid == protocol.PathIDZero {
+		return
+	}
+	delete(h.appDataPaths, pid)
+}
+
 // ReceivedPacketForPath records a 1-RTT packet received on application-data path
 // pid (multipath), so its acknowledgement is emitted as a PATH_ACK{pid} from
 // pid's own tracker rather than the connection-level (PathIDZero) ACK. An

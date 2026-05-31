@@ -392,11 +392,14 @@ func (c *Conn) allocatePathLocked(pid protocol.PathID) error {
 		return fmt.Errorf("quic: add send path %d: %w", pid, err)
 	}
 	if err := c.receivedPacketHandler.AddPath(pid, c.logger); err != nil {
+		c.sentPacketHandler.RemovePath(pid)
 		return fmt.Errorf("quic: add recv path %d: %w", pid, err)
 	}
 	// Issue one of our connection IDs for this path (5c), so the peer can address
 	// packets to it. This queues a PATH_NEW_CONNECTION_ID (0x3e78) on path 0.
 	if _, err := c.issuePathConnID(pid); err != nil {
+		c.receivedPacketHandler.RemovePath(pid)
+		c.sentPacketHandler.RemovePath(pid)
 		return fmt.Errorf("quic: issue path %d connection id: %w", pid, err)
 	}
 	return nil

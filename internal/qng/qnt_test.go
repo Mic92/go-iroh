@@ -733,6 +733,49 @@ func TestQNTOpenValidatedPathAllocationErrorPreservesCandidate(t *testing.T) {
 	}
 }
 
+func TestQNTOpenValidatedPathRollsBackCIDIssueFailure(t *testing.T) {
+	c, frames := newQNTRoutePathTestConn(t)
+	c.multipathManager.handleMaxPathID(protocol.PathID(4))
+	gen := &failingConnectionIDGenerator{
+		generator: &protocol.DefaultConnectionIDGenerator{ConnLen: 4},
+		fail:      true,
+	}
+	c.connIDGenerator.generator = gen
+	addr := netip.MustParseAddrPort("198.51.100.1:1234")
+	if !c.qntQueueValidatedProbe(addr) {
+		t.Fatal("qntQueueValidatedProbe = false, want true")
+	}
+
+	pid, route, ok, err := c.qntOpenValidatedPathLocked()
+	if err == nil {
+		t.Fatal("qntOpenValidatedPathLocked err = nil, want CID issue error")
+	}
+	if ok || pid != protocol.PathIDZero || route.IsValid() {
+		t.Fatalf("qntOpenValidatedPathLocked = %d, %v, %v, want zero false", pid, route, ok)
+	}
+	if _, ok := c.sentPacketHandler.PathDebugStats(protocol.PathID(1)); ok {
+		t.Fatal("sent path 1 still allocated after CID issue failure")
+	}
+	if got, ok := c.qntPeekValidatedProbe(); !ok || got != addr {
+		t.Fatalf("validated probe after CID issue failure = %v, %v, want %v true", got, ok, addr)
+	}
+	if len(*frames) != 0 {
+		t.Fatalf("queued %d local path CID frames after failed issue, want 0", len(*frames))
+	}
+
+	gen.fail = false
+	pid, route, ok, err = c.qntOpenValidatedPathLocked()
+	if err != nil {
+		t.Fatalf("qntOpenValidatedPathLocked retry: %v", err)
+	}
+	if !ok || pid != protocol.PathID(1) || route != addr {
+		t.Fatalf("qntOpenValidatedPathLocked retry = %d, %v, %v, want 1, %v, true", pid, route, ok, addr)
+	}
+	if len(*frames) != 1 {
+		t.Fatalf("queued %d local path CID frames after retry, want 1", len(*frames))
+	}
+}
+
 func TestQNTOpenValidatedPathRequiresCanOpenPath(t *testing.T) {
 	local := uint32(4)
 	peer := uint32(8)
@@ -1282,6 +1325,22 @@ func newQNTRoutePathTestConn(t *testing.T) (*Conn, *[]wire.Frame) {
 	g, frames, _ := newTestConnIDGenerator(t)
 	c.connIDGenerator = g
 	return c, frames
+}
+
+type failingConnectionIDGenerator struct {
+	generator ConnectionIDGenerator
+	fail      bool
+}
+
+func (g *failingConnectionIDGenerator) GenerateConnectionID() (ConnectionID, error) {
+	if g.fail {
+		return ConnectionID{}, errors.New("test cid generation failed")
+	}
+	return g.generator.GenerateConnectionID()
+}
+
+func (g *failingConnectionIDGenerator) ConnectionIDLen() int {
+	return g.generator.ConnectionIDLen()
 }
 
 func hasReachOut(frames []*wire.ReachOutFrame, addr netip.AddrPort) bool {

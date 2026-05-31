@@ -260,6 +260,13 @@ func (h *sentPacketHandler) AddPath(pid protocol.PathID) error {
 	return h.addPath(pid)
 }
 
+func (h *sentPacketHandler) RemovePath(pid protocol.PathID) {
+	if pid == protocol.PathIDZero {
+		return
+	}
+	delete(h.appDataPaths, pid)
+}
+
 func (h *sentPacketHandler) addPath(pid protocol.PathID) error {
 	if pid == protocol.PathIDZero {
 		return fmt.Errorf("cannot add path with reserved id %d", protocol.PathIDZero)
