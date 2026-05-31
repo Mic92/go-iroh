@@ -8,7 +8,8 @@ import (
 
 // TestQNTNegotiated checks the negotiation gate: n0 NAT traversal is negotiated
 // only when both peers advertise the n0_nat_traversal transport parameter with a
-// non-zero address limit. Parser admission remains disabled in this slice.
+// non-zero address limit. Connection-level parser admission remains disabled in
+// this slice because the operational state machine is still fail-closed.
 func TestQNTNegotiated(t *testing.T) {
 	const local = uint8(8)
 	const peerLimit = uint8(16)

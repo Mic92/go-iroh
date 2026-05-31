@@ -10,7 +10,7 @@ import (
 
 // These tests pin the inert n0_nat_traversal transport parameter codec against
 // internal/qng/n0ext/reference/transport_parameters.rs. This parameter is the
-// QNT negotiation gate only; frame parser admission remains unchanged.
+// QNT negotiation gate only; decoding it does not flip the parser gate.
 //
 // Reference: N0NatTraversal = 0x3d7f91120401, encoded as
 // id | len(1) | NonZeroU8(max_remote_nat_traversal_addresses).

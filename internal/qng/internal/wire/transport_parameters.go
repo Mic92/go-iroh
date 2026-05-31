@@ -188,8 +188,9 @@ type TransportParameters struct {
 	// MaxRemoteNATTraversalAddresses is the n0_nat_traversal transport
 	// parameter. A nil pointer means QNT was not advertised; a non-nil value is
 	// the maximum number of remote NAT-traversal addresses and must be non-zero.
-	// This is only the inert negotiation codec. QNT frame parsing remains gated
-	// elsewhere until the state machine is implemented.
+	// This is only the inert negotiation codec. Decoding this parameter does not
+	// by itself enable QNT frame admission; connection wiring remains disabled
+	// until the operational state machine is implemented.
 	MaxRemoteNATTraversalAddresses *uint8
 
 	// AddressDiscoveryRole is the QUIC Address Discovery role
