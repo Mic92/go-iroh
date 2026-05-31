@@ -1473,7 +1473,7 @@ func (c *Conn) handleShortHeaderPacket(
 		c.logger.Debugf("sending QNT path response packet to %s", p.remoteAddr)
 		c.logShortHeaderPacketWithDatagramID(probe, protocol.ECNNon, buf.Len(), false, datagramID)
 		c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, p.rcvTime)
-		c.sendQueue.SendProbe(buf, p.remoteAddr)
+		c.sendQNTProbeBuffer(buf, p.remoteAddr)
 	}
 	if addrsEqual(p.remoteAddr, c.RemoteAddr()) {
 		return true, nil
