@@ -268,6 +268,19 @@ func (e *Endpoint) LocalAddr() netip.AddrPort {
 	return e.udp.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
+// localNATTraversalCandidates returns concrete local direct addresses this
+// endpoint can hand to qng's QNT state. The default bind address is unspecified
+// ([::]:port), which is not a usable candidate and must not be advertised.
+// Reflexive QAD addresses are not endpoint state yet; when they are, they should
+// be appended here after the same validity checks.
+func (e *Endpoint) localNATTraversalCandidates() []netip.AddrPort {
+	addr := e.LocalAddr()
+	if !addr.IsValid() || addr.Addr().IsUnspecified() {
+		return nil
+	}
+	return []netip.AddrPort{addr}
+}
+
 // Addr returns the endpoint's [base.EndpointAddr] from currently-known local
 // information: its id, the bound direct address, and (when relays are enabled
 // and a home relay is connected) its home relay URL. Later slices add reflexive

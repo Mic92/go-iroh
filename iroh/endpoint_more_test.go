@@ -80,6 +80,32 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	}
 }
 
+func TestEndpointLocalNATTraversalCandidates(t *testing.T) {
+	ctx := context.Background()
+
+	unspecified, err := Bind(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unspecified.Close(ctx)
+	if got := unspecified.localNATTraversalCandidates(); len(got) != 0 {
+		t.Fatalf("default localNATTraversalCandidates = %v, want none for unspecified bind", got)
+	}
+
+	loopback, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer loopback.Close(ctx)
+	got := loopback.localNATTraversalCandidates()
+	if len(got) != 1 {
+		t.Fatalf("loopback localNATTraversalCandidates len = %d, want 1; got %v", len(got), got)
+	}
+	if got[0] != loopback.LocalAddr() {
+		t.Fatalf("loopback localNATTraversalCandidates = %v, want [%v]", got, loopback.LocalAddr())
+	}
+}
+
 // TestEndpointHomeRelayStatusNoRelay verifies that with relays disabled (the
 // default), the home-relay watcher reports a nil status.
 func TestEndpointHomeRelayStatusNoRelay(t *testing.T) {
