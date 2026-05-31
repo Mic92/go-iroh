@@ -413,9 +413,6 @@ func (c *Conn) driveMultipath(now monotime.Time) error {
 		return nil
 	}
 	for pid, st := range c.multipathOut.paths {
-		if st.qntRoute.IsValid() {
-			continue
-		}
 		connID, ok := c.destConnIDForPath(pid)
 		if !ok {
 			// The peer has not issued a PATH_NEW_CONNECTION_ID for this path yet;
@@ -430,7 +427,7 @@ func (c *Conn) driveMultipath(now monotime.Time) error {
 				frames = append(frames, ackhandler.Frame{Frame: &wire.PathResponseFrame{Data: tok}})
 			}
 			st.pendingResponses = nil
-			if err := c.sendPathPacket(pid, connID, frames, now); err != nil {
+			if err := c.sendPathPacket(pid, connID, st, frames, now); err != nil {
 				return err
 			}
 		}
@@ -523,7 +520,7 @@ func (c *Conn) sendPathChallenge(pid protocol.PathID, connID protocol.Connection
 	st.challenges = append(st.challenges, token)
 	st.challengeSent = true
 	frame := ackhandler.Frame{Frame: &wire.PathChallengeFrame{Data: token}}
-	return c.sendPathPacket(pid, connID, []ackhandler.Frame{frame}, now)
+	return c.sendPathPacket(pid, connID, st, []ackhandler.Frame{frame}, now)
 }
 
 // sendOnPath packs and sends one 1-RTT packet targeting the validated path pid:
@@ -562,7 +559,7 @@ func (c *Conn) sendOnPath(pid protocol.PathID, st *pathOpenState, now monotime.T
 	}
 	c.logShortHeaderPacket(p, ecn, buf.Len())
 	c.registerPackedShortHeaderPacket(p, ecn, now)
-	c.sendQueue.Send(buf, 0, ecn)
+	c.sendPathBuffer(buf, ecn, st)
 	// If there is more queued data on this path, keep the loop cycling.
 	if len(st.sendData) > 0 {
 		c.scheduleSending()
@@ -574,7 +571,7 @@ func (c *Conn) sendOnPath(pid protocol.PathID, st *pathOpenState, now monotime.T
 // (its DCID + its packet number) and sends it. Used for PATH_CHALLENGE, which
 // must not be coalesced with path-0 data because it has to ride the new path's
 // connection ID so the peer attributes the validation to pid.
-func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID, frames []ackhandler.Frame, now monotime.Time) error {
+func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID, st *pathOpenState, frames []ackhandler.Frame, now monotime.Time) error {
 	buf := getPacketBuffer()
 	ecn := c.multipathECNMode()
 	p, err := c.packer.PackPathFramesPacket(buf, pid, connID, frames, c.maxPacketSize(), c.version)
@@ -584,8 +581,21 @@ func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID,
 	}
 	c.logShortHeaderPacket(p, ecn, buf.Len())
 	c.registerPackedShortHeaderPacket(p, ecn, now)
-	c.sendQueue.Send(buf, 0, ecn)
+	c.sendPathBuffer(buf, ecn, st)
 	return nil
+}
+
+func (c *Conn) sendPathBuffer(buf *packetBuffer, ecn protocol.ECN, st *pathOpenState) {
+	if st != nil && st.qntRoute.IsValid() {
+		addr := qntProbeUDPAddr(st.qntRoute)
+		if addr == nil {
+			buf.Release()
+			return
+		}
+		c.sendQNTProbeBuffer(buf, addr)
+		return
+	}
+	c.sendQueue.Send(buf, 0, ecn)
 }
 
 func (c *Conn) multipathECNMode() protocol.ECN {

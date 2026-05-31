@@ -170,6 +170,74 @@ func TestQNTSendProbeBufferReleasesPacketBuffer(t *testing.T) {
 	}
 }
 
+func TestSendPathBufferUsesDefaultQueueForOrdinaryPath(t *testing.T) {
+	buf := getPacketBuffer()
+	buf.Data = append(buf.Data, 1, 2, 3)
+	s := &qntProbeTestSender{available: make(chan struct{})}
+	c := &Conn{sendQueue: s}
+
+	c.sendPathBuffer(buf, protocol.ECNNon, &pathOpenState{})
+
+	if s.sends != 1 {
+		t.Fatalf("Send calls = %d, want 1", s.sends)
+	}
+	if s.probes != 0 {
+		t.Fatalf("SendProbe calls = %d, want 0", s.probes)
+	}
+	if string(s.data) != string([]byte{1, 2, 3}) {
+		t.Fatalf("Send data = %v, want [1 2 3]", s.data)
+	}
+	if s.ecn != protocol.ECNNon {
+		t.Fatalf("Send ECN = %v, want ECNNon", s.ecn)
+	}
+}
+
+func TestSendPathBufferUsesQNTRoute(t *testing.T) {
+	buf := getPacketBuffer()
+	buf.Data = append(buf.Data, 1, 2, 3)
+	s := &qntProbeTestSender{available: make(chan struct{})}
+	c := &Conn{sendQueue: s}
+	route := netip.MustParseAddrPort("[::ffff:198.51.100.7]:4433")
+	want := &net.UDPAddr{IP: net.ParseIP("198.51.100.7"), Port: 4433}
+
+	c.sendPathBuffer(buf, protocol.ECNNon, &pathOpenState{qntRoute: route})
+
+	if s.sends != 0 {
+		t.Fatalf("Send calls = %d, want 0", s.sends)
+	}
+	if s.probes != 1 {
+		t.Fatalf("SendProbe calls = %d, want 1", s.probes)
+	}
+	if !s.addr.IP.Equal(want.IP) || s.addr.Port != want.Port {
+		t.Fatalf("SendProbe addr = %v, want %v", s.addr, want)
+	}
+	if string(s.data) != string([]byte{1, 2, 3}) {
+		t.Fatalf("SendProbe data = %v, want [1 2 3]", s.data)
+	}
+	if buf.refCount != 0 {
+		t.Fatalf("packet buffer refCount = %d, want 0 after synchronous route send", buf.refCount)
+	}
+}
+
+func TestSendPathBufferDropsInvalidQNTRoute(t *testing.T) {
+	buf := getPacketBuffer()
+	buf.Data = append(buf.Data, 1, 2, 3)
+	s := &qntProbeTestSender{available: make(chan struct{})}
+	c := &Conn{sendQueue: s}
+
+	c.sendPathBuffer(buf, protocol.ECNNon, &pathOpenState{qntRoute: netip.MustParseAddrPort("198.51.100.7:0")})
+
+	if s.sends != 0 {
+		t.Fatalf("Send calls = %d, want 0", s.sends)
+	}
+	if s.probes != 0 {
+		t.Fatalf("SendProbe calls = %d, want 0", s.probes)
+	}
+	if buf.refCount != 0 {
+		t.Fatalf("packet buffer refCount = %d, want 0 after invalid route drop", buf.refCount)
+	}
+}
+
 func newQNTProbeTestPacker() *packetPacker {
 	return &packetPacker{
 		cryptoSetup:         qntProbeCryptoSetup{},
@@ -230,13 +298,19 @@ func (m *qntProbePNManager) PopPacketNumberForPath(protocol.PathID) protocol.Pac
 }
 
 type qntProbeTestSender struct {
+	sends     int
 	probes    int
 	data      []byte
 	addr      *net.UDPAddr
+	ecn       protocol.ECN
 	available chan struct{}
 }
 
-func (s *qntProbeTestSender) Send(*packetBuffer, uint16, protocol.ECN) {}
+func (s *qntProbeTestSender) Send(buf *packetBuffer, _ uint16, ecn protocol.ECN) {
+	s.sends++
+	s.data = append([]byte(nil), buf.Data...)
+	s.ecn = ecn
+}
 
 func (s *qntProbeTestSender) SendProbe(buf *packetBuffer, addr net.Addr) {
 	s.probes++

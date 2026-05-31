@@ -853,28 +853,6 @@ func TestQNTProcessValidatedPathOpenKeepsCandidateAtPathLimit(t *testing.T) {
 	}
 }
 
-func TestQNTDriveMultipathSkipsRoutePaths(t *testing.T) {
-	route := netip.MustParseAddrPort("198.51.100.1:1234")
-	c := &Conn{
-		handshakeConfirmed: true,
-		perPathDestConnIDs: map[protocol.PathID]protocol.ConnectionID{
-			1: protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
-		},
-		multipathOut: &multipathOutgoing{
-			paths: map[protocol.PathID]*pathOpenState{
-				1: {id: 1, qntRoute: route, validated: true, sendData: [][]byte{{1, 2, 3}}},
-			},
-			nextPathID: 2,
-		},
-	}
-	if err := c.driveMultipath(monotime.Now()); err != nil {
-		t.Fatalf("driveMultipath: %v", err)
-	}
-	if got := c.multipathOut.paths[1].sendData; len(got) != 1 || !slices.Equal(got[0], []byte{1, 2, 3}) {
-		t.Fatalf("sendData after driveMultipath = %v, want queued datagram unchanged", got)
-	}
-}
-
 func TestQNTSentProbeRequiresChallengeAndSource(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
 	challenge := [8]byte{1, 2, 3, 4, 5, 6, 7, 8}
