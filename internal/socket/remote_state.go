@@ -3,6 +3,7 @@ package socket
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -30,17 +31,13 @@ const (
 )
 
 // ErrExtensionNotNegotiated is returned by hole-punching and other operations
-// that depend on QUIC extensions the qng fork does not implement: multipath
-// (X1), NAT traversal / DISCO (X2), and observed-address reports (X3). See
-// iroh/DESIGN.md §0/§3.4/§5.
-//
-// In this single-path build the actor falls back to the relay path and any
-// pre-validated direct path chosen at dial time; it never opens new paths via
-// hole-punching. This is a documented degradation, not a bug.
+// that depend on a QUIC extension that is not negotiated on an active
+// connection. Endpoint defaults advertise qng multipath; QNT/DISCO
+// hole-punching is still gated separately.
 var ErrExtensionNotNegotiated = errors.New("socket: QUIC extension not negotiated (qng X1/X2/X3 gate)")
 
 // ErrHolepunchNotImplemented is returned when the active connection has
-// negotiated qng multipath, but the QNT hole-punch driver has not been wired.
+// negotiated qng multipath, but the connection cannot open a path from socket.
 var ErrHolepunchNotImplemented = errors.New("socket: hole-punch driver not implemented")
 
 // Connection is the minimal view of a QUIC connection the [RemoteStateActor]
@@ -48,9 +45,9 @@ var ErrHolepunchNotImplemented = errors.New("socket: hole-punch driver not imple
 // stays small on purpose: the actor only reads liveness and RTT.
 //
 // SmoothedRTT returns the connection's active-path smoothed RTT (qng exposes no
-// per-path RTT in this single-path build; see iroh/DESIGN.md O9). Done is closed
-// when the connection ends. RemoteAddr reports the path the connection is on, so
-// the actor can register it as a candidate path.
+// per-path RTT yet). Done is closed when the connection ends. RemoteAddr reports
+// the path the connection is on, so the actor can register it as a candidate
+// path.
 type Connection interface {
 	// SmoothedRTT returns the smoothed round-trip time of the active path.
 	SmoothedRTT() time.Duration
@@ -62,6 +59,10 @@ type Connection interface {
 
 type multipathConnection interface {
 	MultipathNegotiated() bool
+}
+
+type pathOpeningConnection interface {
+	OpenPath(context.Context) error
 }
 
 // ResolveFunc resolves additional transport addresses for a remote endpoint. It
@@ -384,19 +385,38 @@ func (a *RemoteStateActor) reselect() {
 
 // TriggerHolepunch attempts to open a new direct path by NAT traversal. It
 // stays fail-closed until qng multipath is negotiated by at least one active
-// connection. After that gate, this build reports [ErrHolepunchNotImplemented]:
-// the remaining work is the QNT hole-punch driver. The actor falls back to the
-// relay path and any pre-validated direct path. See iroh/DESIGN.md §3.4.
+// connection. After that gate, this build opens and validates one qng multipath
+// path over the connection's existing socket. QNT candidate discovery is still
+// not implemented, so this is only the direct path-open step; the actor falls
+// back to the relay path and any pre-validated direct path when the extension
+// gate is closed. See iroh/DESIGN.md §3.4.
 func (a *RemoteStateActor) TriggerHolepunch() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	var opener pathOpeningConnection
+	negotiated := false
 	for conn := range a.conns {
 		mp, ok := conn.(multipathConnection)
 		if ok && mp.MultipathNegotiated() {
-			return ErrHolepunchNotImplemented
+			negotiated = true
+			if p, ok := conn.(pathOpeningConnection); ok {
+				opener = p
+			}
+			break
 		}
 	}
-	return ErrExtensionNotNegotiated
+	a.mu.Unlock()
+	if negotiated && opener == nil {
+		return ErrHolepunchNotImplemented
+	}
+	if opener == nil {
+		return ErrExtensionNotNegotiated
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), HolepunchAttemptsInterval)
+	defer cancel()
+	if err := opener.OpenPath(ctx); err != nil {
+		return fmt.Errorf("socket: open multipath path: %w", err)
+	}
+	return nil
 }
 
 // SelectedPath returns the actor's currently selected path and whether one is
@@ -417,10 +437,9 @@ func (a *RemoteStateActor) SelectedPath() (Addr, bool) {
 // iroh/src/socket/remote_map/remote_state.rs:782). send's bool result is
 // advisory only.
 //
-// In the live single-path build qng addresses its datagrams to a concrete path
-// directly through the MagicConn, so this method backs the Mixed-EndpointId send
-// path (DESIGN.md §3.1) which is exercised by unit tests rather than the QUIC
-// data plane in this slice.
+// qng addresses datagrams to a concrete path directly through the MagicConn, so
+// this method backs the Mixed-EndpointId send path (DESIGN.md §3.1), which is
+// exercised by unit tests rather than the QUIC data plane in this slice.
 func (a *RemoteStateActor) SendDatagram(p []byte, send func(Addr, []byte) bool) error {
 	a.mu.Lock()
 	var targets []Addr

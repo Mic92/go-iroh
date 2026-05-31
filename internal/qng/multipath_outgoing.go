@@ -30,6 +30,12 @@ import (
 // Conn.OpenPath therefore only enqueues an openPathRequest; the run loop
 // performs the actual provisioning in processOpenPathRequests.
 
+// ErrPathLimit is returned by OpenPath when the peer has not yet advertised a
+// large enough MAX_PATH_ID, or when the requested path would exceed the local
+// limit. The condition can be transient immediately after handshake completion,
+// while the peer's MAX_PATH_ID frame is still in flight.
+var ErrPathLimit = errors.New("quic: path limit prevents opening path")
+
 // pathOpenState tracks the local lifecycle of one non-zero multipath PathID.
 // It mirrors the recovery-irrelevant subset of reference/paths.rs that the
 // initiator drives: sending PATH_CHALLENGEs (on_path_challenges_unconfirmed,
@@ -249,7 +255,7 @@ func (c *Conn) openPathLocked() (*MultipathPath, error) {
 	}
 	pid := c.multipathOut.nextPathID
 	if !c.canOpenPath(pid) {
-		return nil, fmt.Errorf("quic: cannot open path %d (peer max path id not raised that far)", pid)
+		return nil, fmt.Errorf("%w: path %d peer max path id not raised that far", ErrPathLimit, pid)
 	}
 	c.multipathOut.nextPathID++
 
@@ -411,7 +417,7 @@ func (c *Conn) sendOnPath(pid protocol.PathID, st *pathOpenState, now monotime.T
 		datagrams = st.sendData
 	}
 	buf := getPacketBuffer()
-	ecn := protocol.ECNNon
+	ecn := c.multipathECNMode()
 	p, packed, err := c.packer.AppendPacketForPath(buf, pid, datagrams, c.maxPacketSize(), now, c.version)
 	if err != nil {
 		buf.Release()
@@ -444,7 +450,7 @@ func (c *Conn) sendOnPath(pid protocol.PathID, st *pathOpenState, now monotime.T
 // connection ID so the peer attributes the validation to pid.
 func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID, frames []ackhandler.Frame, now monotime.Time) error {
 	buf := getPacketBuffer()
-	ecn := protocol.ECNNon
+	ecn := c.multipathECNMode()
 	p, err := c.packer.PackPathFramesPacket(buf, pid, connID, frames, c.maxPacketSize(), c.version)
 	if err != nil {
 		buf.Release()
@@ -454,6 +460,13 @@ func (c *Conn) sendPathPacket(pid protocol.PathID, connID protocol.ConnectionID,
 	c.registerPackedShortHeaderPacket(p, ecn, now)
 	c.sendQueue.Send(buf, 0, ecn)
 	return nil
+}
+
+func (c *Conn) multipathECNMode() protocol.ECN {
+	if !c.conn.capabilities().ECN {
+		return protocol.ECNUnsupported
+	}
+	return protocol.ECNNon
 }
 
 // handleMultipathPathResponse checks whether a received PATH_RESPONSE validates

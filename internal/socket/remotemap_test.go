@@ -18,6 +18,8 @@ type fakeConn struct {
 	addr                Addr
 	rtt                 time.Duration
 	multipathNegotiated bool
+	openPath            func(context.Context) error
+	openPathCalls       atomic.Int64
 	done                chan struct{}
 	once                sync.Once
 }
@@ -30,7 +32,14 @@ func (c *fakeConn) SmoothedRTT() time.Duration { return c.rtt }
 func (c *fakeConn) Done() <-chan struct{}      { return c.done }
 func (c *fakeConn) RemoteAddr() Addr           { return c.addr }
 func (c *fakeConn) MultipathNegotiated() bool  { return c.multipathNegotiated }
-func (c *fakeConn) Close()                     { c.once.Do(func() { close(c.done) }) }
+func (c *fakeConn) OpenPath(ctx context.Context) error {
+	c.openPathCalls.Add(1)
+	if c.openPath != nil {
+		return c.openPath(ctx)
+	}
+	return nil
+}
+func (c *fakeConn) Close() { c.once.Do(func() { close(c.done) }) }
 
 func testEndpointId(t *testing.T) base.EndpointId {
 	t.Helper()

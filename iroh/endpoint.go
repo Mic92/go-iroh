@@ -112,9 +112,9 @@ func WithRelayMode(mode relay.Mode) Option {
 
 // Bind binds a UDP socket and returns a ready [Endpoint].
 //
-// In this build the endpoint dials and accepts over direct UDP addresses only;
-// relay transport, address discovery, and hole-punching are added by later
-// slices of the connectivity engine (see iroh/DESIGN.md).
+// By default the endpoint enables qng datagrams and advertises the iroh
+// multipath path limit. Direct UDP works without relays; relay transport,
+// address discovery, and QNT hole-punching are separate connectivity features.
 func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	var c config
 	for _, opt := range opts {

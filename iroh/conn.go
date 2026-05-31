@@ -2,6 +2,7 @@ package iroh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -166,9 +167,9 @@ func newConnAdapter(qc *quic.Conn, addr socket.Addr) *connAdapter {
 	return &connAdapter{qc: qc, addr: addr}
 }
 
-// SmoothedRTT returns the connection's active-path smoothed RTT. qng exposes no
-// per-path RTT in this single-path build (iroh/DESIGN.md O9), so this is the RTT
-// of the connection's single active path.
+// SmoothedRTT returns the connection's active-path smoothed RTT. qng negotiates
+// multipath, but this adapter still exposes the connection-level active-path RTT
+// until per-PathID RTT is surfaced.
 func (a *connAdapter) SmoothedRTT() time.Duration { return a.qc.ConnectionStats().SmoothedRTT }
 
 // Done is closed when the connection closes.
@@ -181,6 +182,27 @@ func (a *connAdapter) RemoteAddr() socket.Addr { return a.addr }
 // extension on this connection.
 func (a *connAdapter) MultipathNegotiated() bool {
 	return a.qc.ConnectionState().MultipathNegotiated
+}
+
+// OpenPath opens and validates one qng multipath path over the connection's
+// existing MagicConn socket.
+func (a *connAdapter) OpenPath(ctx context.Context) error {
+	for {
+		p, err := a.qc.OpenPath(nil)
+		if err == nil {
+			return p.Validated(ctx)
+		}
+		if !errors.Is(err, quic.ErrPathLimit) {
+			return err
+		}
+		t := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return context.Cause(ctx)
+		}
+	}
 }
 
 var _ socket.Connection = (*connAdapter)(nil)

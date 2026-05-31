@@ -39,11 +39,9 @@ type PathCandidate struct {
 	Addr Addr
 	// RTT is the smoothed round-trip time observed on the path.
 	//
-	// In this single-path build the RTT comes from qng's
-	// quic.Conn.ConnectionStats().SmoothedRTT for the connection's active path;
-	// qng does not expose per-PathId RTT (no multipath), so every candidate on a
-	// connection reports that connection's active-path RTT. See iroh/DESIGN.md
-	// §3.3 / O9.
+	// The RTT comes from qng's quic.Conn.ConnectionStats().SmoothedRTT for the
+	// connection's active path. qng negotiates multipath, but this layer still
+	// reports connection-level active-path RTT until per-PathID RTT is surfaced.
 	RTT time.Duration
 }
 

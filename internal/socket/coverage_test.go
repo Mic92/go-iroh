@@ -526,8 +526,30 @@ func TestTriggerHolepunchAfterMultipathNegotiated(t *testing.T) {
 	if errors.Is(err, ErrExtensionNotNegotiated) {
 		t.Fatalf("TriggerHolepunch() = %v, still reports extension not negotiated", err)
 	}
-	if !errors.Is(err, ErrHolepunchNotImplemented) {
-		t.Fatalf("TriggerHolepunch() = %v, want ErrHolepunchNotImplemented", err)
+	if err != nil {
+		t.Fatalf("TriggerHolepunch() = %v, want nil", err)
+	}
+	if conn.openPathCalls.Load() != 1 {
+		t.Fatalf("OpenPath calls = %d, want 1", conn.openPathCalls.Load())
+	}
+}
+
+func TestTriggerHolepunchOpenPathError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+	want := errors.New("path refused")
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	conn.multipathNegotiated = true
+	conn.openPath = func(context.Context) error { return want }
+	if _, ok := a.AddConnection(conn); !ok {
+		t.Fatal("AddConnection failed")
+	}
+
+	err := a.TriggerHolepunch()
+	if !errors.Is(err, want) {
+		t.Fatalf("TriggerHolepunch() = %v, want wrapped %v", err, want)
 	}
 }
 
