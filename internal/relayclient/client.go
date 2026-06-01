@@ -75,11 +75,7 @@ func Connect(ctx context.Context, u base.RelayUrl, opts Options) (*Client, error
 		httpClient = &http.Client{Transport: &http.Transport{TLSClientConfig: opts.TLSConfig}}
 	}
 
-	conn, resp, err := websocket.Dial(ctx, dialURL, &websocket.DialOptions{
-		HTTPClient:   httpClient,
-		HTTPHeader:   header,
-		Subprotocols: relayproto.SupportedProtocolVersions(),
-	})
+	conn, resp, err := websocket.Dial(ctx, dialURL, dialOptions(httpClient, header))
 	if err != nil {
 		return nil, fmt.Errorf("relayclient: dial %s: %w", dialURL, err)
 	}
