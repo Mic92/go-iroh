@@ -27,6 +27,14 @@ const (
 	// candidate set has not changed. remote_state.rs:52.
 	HolepunchAttemptsInterval = 5 * time.Second
 
+	// PathMaxIdleTimeout is the idle timeout for a non-relay path.
+	// iroh/src/socket.rs PATH_MAX_IDLE_TIMEOUT.
+	PathMaxIdleTimeout = 15 * time.Second
+
+	// RelayPathMaxIdleTimeout is the idle timeout for a relay path.
+	// iroh/src/socket.rs RELAY_PATH_MAX_IDLE_TIMEOUT.
+	RelayPathMaxIdleTimeout = 30 * time.Second
+
 	// ActorMaxIdleTimeout is how long an actor with no connections stays alive
 	// before it exits and deregisters. remote_state.rs:74.
 	ActorMaxIdleTimeout = 60 * time.Second
@@ -37,10 +45,6 @@ const (
 // connection. Endpoint defaults advertise qng multipath; QNT/DISCO
 // hole-punching is still gated separately.
 var ErrExtensionNotNegotiated = errors.New("socket: QUIC extension not negotiated (qng X1/X2/X3 gate)")
-
-// ErrHolepunchNotImplemented is returned when the active connection has
-// negotiated qng multipath, but the connection cannot open a path from socket.
-var ErrHolepunchNotImplemented = errors.New("socket: hole-punch driver not implemented")
 
 // Connection is the minimal view of a QUIC connection the [RemoteStateActor]
 // needs. The iroh package adapts a qng *quic.Conn to it; tests use a fake. It
@@ -550,15 +554,18 @@ func (a *RemoteStateActor) reselect() {
 	candidates := make([]PathCandidate, 0, len(snapshots))
 	seen := make(map[string]struct{}, len(snapshots))
 	var opened []Addr
+	now := time.Now()
 	for _, snap := range snapshots {
 		cs, ok := a.conns[snap.conn]
 		if !ok {
 			continue
 		}
+		a.paths.SetOpenAt(snap.addr, now)
 		candidates = appendCandidate(candidates, seen, snap.addr, snap.rtt)
 		opened = append(opened, a.syncMultipathPathsLocked(cs, snap.paths)...)
 		candidates = appendMultipathCandidates(candidates, seen, snap.paths, snap.rtt)
 	}
+	closed := a.paths.ExpireIdle(now)
 	a.paths.Prune()
 	current := a.selected
 	selected, ok := a.selector.Select(current, candidates)
@@ -567,12 +574,18 @@ func (a *RemoteStateActor) reselect() {
 		for _, addr := range opened {
 			a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
 		}
+		for _, addr := range closed {
+			a.watcher.Send(PathEvent{Kind: PathEventClosed, Addr: addr})
+		}
 		return
 	}
 	if current != nil && current.String() == selected.String() {
 		a.mu.Unlock()
 		for _, addr := range opened {
 			a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
+		}
+		for _, addr := range closed {
+			a.watcher.Send(PathEvent{Kind: PathEventClosed, Addr: addr})
 		}
 		return
 	}
@@ -581,6 +594,9 @@ func (a *RemoteStateActor) reselect() {
 	a.mu.Unlock()
 	for _, addr := range opened {
 		a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
+	}
+	for _, addr := range closed {
+		a.watcher.Send(PathEvent{Kind: PathEventClosed, Addr: addr})
 	}
 	a.watcher.Send(PathEvent{Kind: PathEventSelected, Addr: selected})
 }
@@ -632,7 +648,7 @@ func (a *RemoteStateActor) TriggerHolepunch() error {
 		return ErrExtensionNotNegotiated
 	}
 	if target == nil {
-		return ErrHolepunchNotImplemented
+		return ErrExtensionNotNegotiated
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), HolepunchAttemptsInterval)
 	defer cancel()
@@ -776,7 +792,7 @@ func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) erro
 		return ErrExtensionNotNegotiated
 	}
 	if target == nil {
-		return ErrHolepunchNotImplemented
+		return ErrExtensionNotNegotiated
 	}
 	for _, addr := range removed {
 		if err := target.RemoveNATTraversalAddress(addr); err != nil {

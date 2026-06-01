@@ -167,3 +167,35 @@ func TestStatusTransitions(t *testing.T) {
 		t.Fatalf("after SetClosed from unknown: %v, want unusable", s)
 	}
 }
+
+func TestExpireIdleUsesPathTimeouts(t *testing.T) {
+	now := time.Unix(1000, 0)
+	direct := ipPath(1)
+	relay := relayPath(t, 0)
+
+	p := NewRemotePathState()
+	p.SetOpenAt(direct, now)
+	p.SetOpenAt(relay, now)
+
+	if closed := p.ExpireIdle(now.Add(PathMaxIdleTimeout - time.Nanosecond)); len(closed) != 0 {
+		t.Fatalf("ExpireIdle before direct timeout closed %v, want none", closed)
+	}
+	closed := p.ExpireIdle(now.Add(PathMaxIdleTimeout))
+	if len(closed) != 1 || closed[0].String() != direct.String() {
+		t.Fatalf("ExpireIdle at direct timeout closed %v, want [%v]", closed, direct)
+	}
+	if s, _ := p.Status(direct); s != PathStatusInactive {
+		t.Fatalf("direct status = %v, want inactive", s)
+	}
+	if s, _ := p.Status(relay); s != PathStatusOpen {
+		t.Fatalf("relay status = %v, want open", s)
+	}
+
+	closed = p.ExpireIdle(now.Add(RelayPathMaxIdleTimeout))
+	if len(closed) != 1 || closed[0].String() != relay.String() {
+		t.Fatalf("ExpireIdle at relay timeout closed %v, want [%v]", closed, relay)
+	}
+	if s, _ := p.Status(relay); s != PathStatusInactive {
+		t.Fatalf("relay status = %v, want inactive", s)
+	}
+}

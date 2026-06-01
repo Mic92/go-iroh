@@ -25,11 +25,6 @@ var ErrNATTraversalNotNegotiated = errors.New("quic: n0 nat traversal not negoti
 // peer's ADD_ADDRESS set is empty.
 var ErrNATTraversalNotEnoughAddresses = errors.New("quic: not enough nat traversal addresses")
 
-// ErrNATTraversalRoundNotImplemented is kept for callers that need to
-// distinguish an unavailable traversal driver from negotiation or address-set
-// failures.
-var ErrNATTraversalRoundNotImplemented = errors.New("quic: nat traversal round not implemented")
-
 // ErrNATTraversalTooManyAddresses is returned when a QNT address set is full.
 var ErrNATTraversalTooManyAddresses = errors.New("quic: too many nat traversal addresses")
 

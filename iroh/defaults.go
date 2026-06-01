@@ -1,6 +1,10 @@
 package iroh
 
-import "time"
+import (
+	"time"
+
+	"github.com/tmc/go-iroh/internal/socket"
+)
 
 // Wire and behavioral constants shared with the Rust iroh implementation.
 // Values are cited to the iroh source so they can be re-verified on upgrades.
@@ -12,11 +16,11 @@ const (
 
 	// PathMaxIdleTimeout is the idle timeout for a non-relay (direct) path.
 	// iroh/src/socket.rs PATH_MAX_IDLE_TIMEOUT.
-	PathMaxIdleTimeout = 15 * time.Second
+	PathMaxIdleTimeout = socket.PathMaxIdleTimeout
 
 	// RelayPathMaxIdleTimeout is the idle timeout for a relay path.
 	// iroh/src/socket.rs RELAY_PATH_MAX_IDLE_TIMEOUT.
-	RelayPathMaxIdleTimeout = 30 * time.Second
+	RelayPathMaxIdleTimeout = socket.RelayPathMaxIdleTimeout
 
 	// MaxMultipathPaths is the QUIC multipath path limit (transport parameter).
 	// iroh/src/socket.rs MAX_MULTIPATH_PATHS.

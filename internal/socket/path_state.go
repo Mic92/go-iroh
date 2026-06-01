@@ -54,6 +54,8 @@ func (s PathStatus) String() string {
 type PathState struct {
 	// Status is the current lifecycle status of the path.
 	Status PathStatus
+	// lastActive records when an open path was last observed as active.
+	lastActive time.Time
 	// closedAt records when an inactive path was last closed; it is only
 	// meaningful when Status is PathStatusInactive and orders inactive-path
 	// pruning (most recently closed kept first).
@@ -129,7 +131,14 @@ func (p *RemotePathState) Add(addr Addr) {
 // SetOpen marks addr as open, adding it if unknown. It mirrors the Rust
 // add_path / on path-open transition (path_state.rs:90).
 func (p *RemotePathState) SetOpen(addr Addr) {
-	p.paths[pathKey(addr)] = pathEntry{addr: addr, state: PathState{Status: PathStatusOpen}}
+	p.SetOpenAt(addr, time.Now())
+}
+
+// SetOpenAt marks addr as open with an explicit activity time. It is used by
+// tests and by the actor heartbeat, which already has a shared timestamp for
+// all observed paths.
+func (p *RemotePathState) SetOpenAt(addr Addr, now time.Time) {
+	p.paths[pathKey(addr)] = pathEntry{addr: addr, state: PathState{Status: PathStatusOpen, lastActive: now}}
 }
 
 // SetClosed transitions addr toward an inactive/unusable status, recording the
@@ -161,6 +170,30 @@ func (p *RemotePathState) SetUnusable(addr Addr) {
 	}
 	e.state.Status = PathStatusUnusable
 	p.paths[k] = e
+}
+
+// ExpireIdle closes open paths that have not been observed within their path
+// idle timeout. Direct and custom paths use [PathMaxIdleTimeout]; relay paths
+// use [RelayPathMaxIdleTimeout].
+func (p *RemotePathState) ExpireIdle(now time.Time) []Addr {
+	var closed []Addr
+	for k, e := range p.paths {
+		if e.state.Status != PathStatusOpen || e.state.lastActive.IsZero() {
+			continue
+		}
+		timeout := PathMaxIdleTimeout
+		if isRelayAddr(e.addr) {
+			timeout = RelayPathMaxIdleTimeout
+		}
+		if now.Sub(e.state.lastActive) < timeout {
+			continue
+		}
+		e.state.Status = PathStatusInactive
+		e.state.closedAt = now
+		p.paths[k] = e
+		closed = append(closed, e.addr)
+	}
+	return closed
 }
 
 // Prune bounds the non-relay path set. It is a no-op when there are fewer than
