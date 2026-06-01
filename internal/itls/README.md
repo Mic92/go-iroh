@@ -34,6 +34,25 @@ schedule files, then re-apply the import rewrites (the `crypto/internal/...` and
 `internal/...` imports become `github.com/tmc/go-iroh/internal/itls/shim/...`)
 and re-apply the RFC 7250 patch. The shims rarely change.
 
+## When to break this fork
+
+Delete `internal/itls/tls` only when upstream Go `crypto/tls` can handle iroh's
+direct peer authentication without local patches. The replacement must provide:
+
+- TLS 1.3 `client_certificate_type` and `server_certificate_type` negotiation
+  for RFC 7250 raw public keys,
+- QUIC support through `tls.QUICClient` and `tls.QUICServer`,
+- parsing of peer certificate messages as DER SubjectPublicKeyInfo instead of
+  X.509 chains when raw public keys are negotiated,
+- mutual raw-public-key authentication with Ed25519 keys,
+- a documented resumption/0-RTT story that does not skip identity verification.
+
+Do not remove this fork merely because `VerifyConnection` exists in stdlib TLS:
+without certificate-type negotiation and SPKI parsing, a bare iroh public key
+still fails before that callback can establish identity. After any attempted
+removal, the root direct-QUIC tests and live Rust interop gates must pass without
+importing `internal/itls/tls`.
+
 ## DESIGN.md
 
 `DESIGN.md` records the source-grounded analysis of exactly which `crypto/tls`

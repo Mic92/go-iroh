@@ -1,9 +1,10 @@
 # internal/qng — quic-go on RFC 7250 TLS
 
-`qng` ("quic-no-go-tls") is a vendored fork of [quic-go](https://github.com/quic-go/quic-go)
-whose only change is that it imports `github.com/tmc/go-iroh/internal/itls/tls`
-(the RFC 7250 raw-public-key TLS, see `../itls`) instead of the standard
-library's `crypto/tls`.
+`qng` ("quic-no-go-tls") is a vendored fork of [quic-go](https://github.com/quic-go/quic-go).
+It started as an import rewrite from the standard library's `crypto/tls` to
+`github.com/tmc/go-iroh/internal/itls/tls` (RFC 7250 raw-public-key TLS), and
+now also carries the iroh/noq QUIC extension surface needed for wire
+compatibility: multipath, QAD observed addresses, and QNT NAT traversal.
 
 ## Why a fork is necessary
 
@@ -22,14 +23,16 @@ types are identical across the graph.
 
 ## What the fork changes
 
-Nothing but import paths. Every file is a verbatim copy of the corresponding
-quic-go file with two string substitutions:
+The base regeneration is mechanical. Every copied quic-go file is rewritten with
+these string substitutions:
 
 - `"crypto/tls"` → `tls "github.com/tmc/go-iroh/internal/itls/tls"`
 - `"github.com/quic-go/quic-go/..."` → `"github.com/tmc/go-iroh/internal/qng/..."`
 
-The vendored TLS exports the QUIC API with byte-identical signatures, so no
-other edits are required.
+After regeneration, go-iroh applies local additions for iroh/noq behavior. Those
+additions are intentionally kept in plainly named files and tests (`multipath_*`,
+`observed_addr_*`, `qnt_*`, `retry_admission_test.go`) where possible, with
+small integration edits in the connection, packet, and transport-parameter paths.
 
 ## Regenerating (on a quic-go bump)
 
@@ -38,10 +41,41 @@ other edits are required.
 2. Run `./internal/qng/regenerate.sh` from the module root.
 3. `go build ./... && go test ./internal/qng/`.
 
-The fork is purely mechanical; the regeneration script reproduces it from the
-module cache. Re-review only if quic-go changes how it constructs the
-`tls.Config` (e.g. cloning), since RFC 7250 fields must survive `Config.Clone`
-— see the `RawPublicKeys` line in `../itls/tls/common.go`.
+The import-rewrite part is mechanical; the regeneration script reproduces it
+from the module cache. Re-review if quic-go changes how it constructs or clones
+`tls.Config`, since RFC 7250 fields must survive `Config.Clone` — see the
+`RawPublicKeys` line in `../itls/tls/common.go`.
+
+Re-apply the n0 extension additions after regeneration, then run the focused qng
+wire tests and the root iroh interop tests.
+
+## When to break this fork
+
+Delete or shrink qng only when upstream code makes a specific part unnecessary.
+Do not remove it just because quic-go has a nearby feature.
+
+The TLS import rewrite can go away when one of these is true:
+
+- Go `crypto/tls` supports TLS 1.3 RFC 7250 raw public keys, including QUIC
+  mode, mutual authentication, and safe resumption behavior for raw-key identity;
+  then upstream quic-go can use stdlib TLS directly.
+- quic-go exposes a stable TLS provider seam that lets go-iroh use
+  `internal/itls/tls` without rewriting quic-go imports.
+
+The iroh/noq extension additions can go away only when upstream quic-go, or
+another upstream Go QUIC backend, provides equivalent public behavior for all
+active iroh requirements:
+
+- multipath negotiation and path frame parsing/packing compatible with noq,
+- QAD observed-address transport parameters and frames,
+- QNT/NAT traversal address advertisement and round/event behavior,
+- per-path idle and keepalive semantics matching Rust iroh/noq,
+- APIs that let the socket and endpoint layers open, select, close, and observe
+  paths without reaching into fork-private state.
+
+Before removing any part of qng, prove the replacement with local qng tests,
+root iroh tests, and the live Rust interop gates. A passing ordinary quic-go
+path-migration test is not enough evidence for iroh/noq parity.
 
 ## Forked version
 
