@@ -66,6 +66,10 @@ type multipathConnection interface {
 	MultipathNegotiated() bool
 }
 
+type pathOpeningConnection interface {
+	OpenPath(context.Context) error
+}
+
 type natTraversalRoundConnection interface {
 	AddNATTraversalAddress(netip.AddrPort) error
 	InitiateNATTraversalRound(context.Context) ([]netip.AddrPort, error)
@@ -284,9 +288,11 @@ func (a *RemoteStateActor) run(ctx context.Context) {
 		case <-heartbeat.C:
 			a.reselect()
 		case <-upgrade.C:
-			// Upgrade tick: try a QNT round when the active connection supports it.
-			// Errors are non-fatal; the actor keeps using the best path it already
-			// knows and tries again on the next cadence.
+			// Upgrade tick: first ask qng to validate a direct RFC 9000 path, then
+			// try a QNT round when the active connection supports it. Errors are
+			// non-fatal; the actor keeps using the best path it already knows and
+			// tries again on the next cadence.
+			_ = a.ValidateDirectPath(context.Background())
 			_ = a.TriggerHolepunch()
 			a.reselect()
 		}
@@ -616,6 +622,41 @@ func seedNATTraversalAddresses(conn Connection, candidates []netip.AddrPort) {
 	for _, addr := range candidates {
 		_ = qnt.AddNATTraversalAddress(addr)
 	}
+}
+
+// ValidateDirectPath asks qng to open and validate one ordinary multipath path
+// over the current direct socket. This is the RFC 9000 path-validation path used
+// before or independent of QNT-discovered NAT candidates.
+func (a *RemoteStateActor) ValidateDirectPath(ctx context.Context) error {
+	a.mu.Lock()
+	conns := make([]Connection, 0, len(a.conns))
+	for conn := range a.conns {
+		conns = append(conns, conn)
+	}
+	a.mu.Unlock()
+
+	negotiated := false
+	var target pathOpeningConnection
+	for _, conn := range conns {
+		mp, ok := conn.(multipathConnection)
+		if !ok || !mp.MultipathNegotiated() {
+			continue
+		}
+		negotiated = true
+		if opener, ok := conn.(pathOpeningConnection); ok {
+			target = opener
+			break
+		}
+	}
+	if !negotiated || target == nil {
+		return ErrExtensionNotNegotiated
+	}
+	ctx, cancel := context.WithTimeout(ctx, HolepunchAttemptsInterval)
+	defer cancel()
+	if err := target.OpenPath(ctx); err != nil {
+		return fmt.Errorf("socket: open direct path: %w", err)
+	}
+	return nil
 }
 
 // TriggerHolepunch attempts to open a new direct path by NAT traversal. It is

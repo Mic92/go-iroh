@@ -511,6 +511,45 @@ func TestTriggerHolepunchSentinel(t *testing.T) {
 	}
 }
 
+func TestValidateDirectPathAfterMultipathNegotiated(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	conn.multipathNegotiated = true
+	if _, ok := a.AddConnection(conn); !ok {
+		t.Fatal("AddConnection failed")
+	}
+
+	if err := a.ValidateDirectPath(ctx); err != nil {
+		t.Fatalf("ValidateDirectPath: %v", err)
+	}
+	if conn.openPathCalls.Load() != 1 {
+		t.Fatalf("OpenPath calls = %d, want 1", conn.openPathCalls.Load())
+	}
+	if conn.initiateRoundCalls.Load() != 0 {
+		t.Fatalf("InitiateNATTraversalRound calls = %d, want 0", conn.initiateRoundCalls.Load())
+	}
+}
+
+func TestValidateDirectPathRequiresMultipath(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointId(t))
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	if _, ok := a.AddConnection(conn); !ok {
+		t.Fatal("AddConnection failed")
+	}
+	if err := a.ValidateDirectPath(ctx); !errors.Is(err, ErrExtensionNotNegotiated) {
+		t.Fatalf("ValidateDirectPath = %v, want %v", err, ErrExtensionNotNegotiated)
+	}
+	if conn.openPathCalls.Load() != 0 {
+		t.Fatalf("OpenPath calls = %d, want 0", conn.openPathCalls.Load())
+	}
+}
+
 func TestTriggerHolepunchAfterMultipathNegotiated(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
