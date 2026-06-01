@@ -36,7 +36,7 @@ func withNetReportInterval(d time.Duration) Option {
 type endpointFakeCustomTransport struct {
 	mu    sync.Mutex
 	sends []endpointFakeCustomSend
-	recv  chan socket.CustomDatagram
+	recv  chan CustomDatagram
 }
 
 type endpointFakeCustomSend struct {
@@ -45,10 +45,10 @@ type endpointFakeCustomSend struct {
 }
 
 func newEndpointFakeCustomTransport() *endpointFakeCustomTransport {
-	return &endpointFakeCustomTransport{recv: make(chan socket.CustomDatagram, 4)}
+	return &endpointFakeCustomTransport{recv: make(chan CustomDatagram, 4)}
 }
 
-func (t *endpointFakeCustomTransport) Serve(ctx context.Context, recv func(socket.CustomDatagram) bool) {
+func (t *endpointFakeCustomTransport) Serve(ctx context.Context, recv func(CustomDatagram) bool) {
 	for {
 		select {
 		case <-ctx.Done():

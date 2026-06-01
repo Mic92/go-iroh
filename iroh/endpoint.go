@@ -75,7 +75,7 @@ type config struct {
 	keyLogWriter    io.Writer
 	transportConfig *QuicTransportConfig
 	hooks           []EndpointHooks
-	custom          []socket.CustomTransport
+	custom          []CustomTransport
 }
 
 // Option configures an [Endpoint] at [Bind] time.
@@ -261,7 +261,7 @@ func WithTransportConfig(tc *QuicTransportConfig) Option {
 // WithCustomTransport adds a custom transport backend to the magic socket.
 // Custom transports own their wire format and exchange datagrams using
 // [base.CustomAddr] values advertised in endpoint addresses.
-func WithCustomTransport(t socket.CustomTransport) Option {
+func WithCustomTransport(t CustomTransport) Option {
 	return func(c *config) error {
 		if t != nil {
 			c.custom = append(c.custom, t)
@@ -345,7 +345,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		})
 	}
 
-	magic := socket.NewMagicConnWithTransports(sock, udp, relayActor, c.custom...)
+	magic := socket.NewMagicConnWithTransports(sock, udp, relayActor, customTransportAdapters(c.custom)...)
 	serveCtx, serveStop := context.WithCancel(context.Background())
 	go magic.Serve(serveCtx)
 
