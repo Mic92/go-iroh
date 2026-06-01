@@ -75,6 +75,7 @@ type config struct {
 	netReportEvery  time.Duration
 	keyLogWriter    io.Writer
 	transportConfig *QuicTransportConfig
+	verifySource    func(net.Addr) bool
 	hooks           []EndpointHooks
 	custom          []CustomTransport
 }
@@ -120,6 +121,17 @@ func WithSecretKey(sk base.SecretKey) Option {
 func WithALPNs(alpns ...[]byte) Option {
 	return func(c *config) error {
 		c.alpns = append(c.alpns, cloneALPNs(alpns)...)
+		return nil
+	}
+}
+
+// WithSourceAddressValidation sets the QUIC Retry policy for unvalidated
+// incoming source addresses. The function receives the unvalidated remote
+// address and returns true when qng should send a Retry packet before allowing
+// the connection through to AcceptIncoming.
+func WithSourceAddressValidation(f func(net.Addr) bool) Option {
+	return func(c *config) error {
+		c.verifySource = f
 		return nil
 	}
 }
@@ -330,7 +342,6 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 			quicConf.MaxIdleTimeout = c.transportConfig.MaxIdleTimeout
 		}
 	}
-
 	// The QUIC transport is driven over the magic socket rather than the raw
 	// UDP socket: a single net.PacketConn that multiplexes every iroh path. The
 	// magic socket always carries the direct-IP transport and, when relays are
@@ -351,14 +362,18 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	go magic.Serve(serveCtx)
 
 	ep := &Endpoint{
-		secretKey:    c.secretKey,
-		alpns:        cloneALPNs(c.alpns),
-		udp:          udp,
-		sock:         sock,
-		magic:        magic,
-		relay:        magic.Relay(),
-		serveStop:    serveStop,
-		transport:    &quic.Transport{Conn: magic, ConnectionIDLength: 8},
+		secretKey: c.secretKey,
+		alpns:     cloneALPNs(c.alpns),
+		udp:       udp,
+		sock:      sock,
+		magic:     magic,
+		relay:     magic.Relay(),
+		serveStop: serveStop,
+		transport: &quic.Transport{
+			Conn:                magic,
+			ConnectionIDLength:  8,
+			VerifySourceAddress: c.verifySource,
+		},
 		quicConf:     quicConf,
 		keyLogWriter: c.keyLogWriter,
 		sessionCache: NewSessionCache(),

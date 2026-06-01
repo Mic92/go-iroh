@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -209,6 +211,70 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 	}
 	defer conn.CloseWithError(0, "")
 
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEndpointSourceAddressValidationRetry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-retry/0"
+
+	srvKey, _ := base.GenerateSecretKey()
+	var retryCalls atomic.Int32
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		WithSourceAddressValidation(func(net.Addr) bool {
+			retryCalls.Add(1)
+			return true
+		}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	done := make(chan error, 1)
+	go func() {
+		in, err := server.AcceptIncoming(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		if !in.RemoteAddrValidated() {
+			done <- errors.New("incoming remote address was not validated by retry")
+			return
+		}
+		accepting, err := in.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		conn, err := accepting.Connection(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		_ = conn.CloseWithError(0, "")
+		done <- nil
+	}()
+
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+	if retryCalls.Load() == 0 {
+		t.Fatal("source-address validation callback was not called")
+	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
