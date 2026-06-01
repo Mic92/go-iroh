@@ -496,10 +496,10 @@ func TestRemoteMapDropIfStopped(t *testing.T) {
 	}
 }
 
-// TestTriggerHolepunchSentinel asserts the qng X2 degradation contract using
-// errors.Is against the exact ErrExtensionNotNegotiated sentinel
-// (remote_state.go:382). Hole-punching is gated behind the unported QNT
-// extension and must fail closed, never silently pretend success.
+// TestTriggerHolepunchSentinel asserts the no-negotiated-extension contract
+// using errors.Is against the exact ErrExtensionNotNegotiated sentinel.
+// Hole-punching must fail closed when no active connection negotiated QNT,
+// never silently pretend success.
 func TestTriggerHolepunchSentinel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -143,12 +143,10 @@ type connState struct {
 // is the Go analog of the Rust RemoteStateActor
 // (iroh/src/socket/remote_map/remote_state.rs).
 //
-// Degradation (qng X1/X2/X3 gate, iroh/DESIGN.md §3.4): hole-punching is gated.
-// [RemoteStateActor.TriggerHolepunch] returns [ErrExtensionNotNegotiated]; the
-// actor never opens new paths. It manages the relay path and any pre-validated
-// direct path chosen at dial time, selecting between them with the
-// [PathSelector]. This is a single-path-aware subset of the full driver, not a
-// stub.
+// QNT/DISCO boundary (iroh/DESIGN.md §3.4): the actor does not build traversal
+// frames itself. It advertises vetted local candidates and asks qng to start NAT
+// traversal rounds; qng owns probe timers, response matching, and route-bearing
+// path opening. Path selection is driven by qng path observability.
 //
 // Create an actor with the RemoteMap; do not construct one directly.
 type RemoteStateActor struct {
@@ -283,9 +281,10 @@ func (a *RemoteStateActor) run(ctx context.Context) {
 		case <-heartbeat.C:
 			a.reselect()
 		case <-upgrade.C:
-			// Upgrade tick: in this build there is no hole-punching to trigger
-			// (ErrExtensionNotNegotiated), so the actor only re-evaluates path
-			// selection over the paths it already has.
+			// Upgrade tick: try a QNT round when the active connection supports it.
+			// Errors are non-fatal; the actor keeps using the best path it already
+			// knows and tries again on the next cadence.
+			_ = a.TriggerHolepunch()
 			a.reselect()
 		}
 		// Keep the idle timer disarmed (reset to a fresh full timeout) while
@@ -316,7 +315,6 @@ func (a *RemoteStateActor) handle(ctx context.Context, msg remoteMessage) {
 // that posts a connClosed message when the connection ends.
 func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
 	sub, _ := a.watcher.Subscribe()
-	m.reply <- sub
 
 	addr := m.conn.RemoteAddr()
 	cs := &connState{conn: m.conn, addr: addr}
@@ -330,6 +328,7 @@ func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
 	localNAT := append([]netip.AddrPort(nil), a.localNAT...)
 	a.mu.Unlock()
 
+	m.reply <- sub
 	seedNATTraversalAddresses(m.conn, localNAT)
 
 	// Watch the connection's lifetime. One goroutine per connection (single-path:
