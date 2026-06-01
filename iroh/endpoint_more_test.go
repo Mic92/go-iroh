@@ -845,19 +845,65 @@ func TestEndpointWithNetReportRefreshes(t *testing.T) {
 	}
 }
 
-func TestEndpointSetALPNsCannotReplaceRunningListener(t *testing.T) {
-	ctx := context.Background()
-	ep, err := Bind(ctx)
+func TestEndpointSetALPNsReplacesRunningListener(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	ep, err := Bind(ctx,
+		WithALPNs([]byte("first/1")),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ep.Close(ctx)
-
-	if err := ep.SetALPNs([][]byte{[]byte("first/1")}); err != nil {
-		t.Fatalf("SetALPNs first: %v", err)
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := ep.SetALPNs([][]byte{[]byte("second/1")}); err == nil {
-		t.Fatal("SetALPNs second succeeded, want documented unsupported error")
+	defer client.Close(ctx)
+
+	firstAccepted := make(chan error, 1)
+	go func() {
+		conn, err := ep.Accept(ctx)
+		if err == nil {
+			if string(conn.ALPN()) != "first/1" {
+				err = errors.New("first accept negotiated wrong ALPN")
+			}
+			conn.CloseWithError(0, "")
+		}
+		firstAccepted <- err
+	}()
+	addr := base.NewEndpointAddr(ep.ID()).WithIP(ep.LocalAddr())
+	first, err := client.Connect(ctx, addr, []byte("first/1"))
+	if err != nil {
+		t.Fatalf("first connect: %v", err)
+	}
+	first.CloseWithError(0, "")
+	if err := <-firstAccepted; err != nil {
+		t.Fatalf("first accept: %v", err)
+	}
+
+	if err := ep.SetALPNs([][]byte{[]byte("second/1")}); err != nil {
+		t.Fatalf("SetALPNs second: %v", err)
+	}
+	secondAccepted := make(chan error, 1)
+	go func() {
+		conn, err := ep.Accept(ctx)
+		if err == nil {
+			if string(conn.ALPN()) != "second/1" {
+				err = errors.New("second accept negotiated wrong ALPN")
+			}
+			conn.CloseWithError(0, "")
+		}
+		secondAccepted <- err
+	}()
+	second, err := client.Connect(ctx, addr, []byte("second/1"))
+	if err != nil {
+		t.Fatalf("second connect: %v", err)
+	}
+	second.CloseWithError(0, "")
+	if err := <-secondAccepted; err != nil {
+		t.Fatalf("second accept: %v", err)
 	}
 }
 

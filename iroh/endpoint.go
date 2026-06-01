@@ -118,7 +118,7 @@ func WithSecretKey(sk base.SecretKey) Option {
 // connections. Each ALPN is an arbitrary byte string.
 func WithALPNs(alpns ...[]byte) Option {
 	return func(c *config) error {
-		c.alpns = append(c.alpns, alpns...)
+		c.alpns = append(c.alpns, cloneALPNs(alpns)...)
 		return nil
 	}
 }
@@ -351,7 +351,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 
 	ep := &Endpoint{
 		secretKey:    c.secretKey,
-		alpns:        c.alpns,
+		alpns:        cloneALPNs(c.alpns),
 		udp:          udp,
 		sock:         sock,
 		magic:        magic,
@@ -448,21 +448,30 @@ func (e *Endpoint) startListener() error {
 // Endpoint::set_alpns (iroh/src/endpoint.rs), used by [Router.Spawn] to register
 // every protocol's ALPN at once.
 //
-// SetALPNs must be called before any [Endpoint.Accept]: it starts the listener.
-// It cannot change the ALPNs of an already-started listener; calling it a second
-// time, or after binding with [WithALPNs], returns an error. Pass each ALPN as
-// an arbitrary byte string.
+// SetALPNs replaces the accepted ALPN set. If a listener is already running, it
+// is closed first; established connections are unaffected, while concurrent
+// accepts may observe a transient closed-listener error and retry. Pass each ALPN
+// as an arbitrary byte string.
 func (e *Endpoint) SetALPNs(alpns [][]byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return ErrEndpointClosed
 	}
+	next := cloneALPNs(alpns)
 	if e.listener != nil {
-		return errors.New("iroh: ALPNs already set; cannot change a running listener")
+		if err := e.listener.Close(); err != nil {
+			return fmt.Errorf("iroh: close listener: %w", err)
+		}
+		e.listener = nil
 	}
-	e.alpns = alpns
-	return e.startListener()
+	prev := e.alpns
+	e.alpns = next
+	if err := e.startListener(); err != nil {
+		e.alpns = prev
+		return err
+	}
+	return nil
 }
 
 // ID returns the endpoint's identifier (its ed25519 public key).
@@ -1113,6 +1122,14 @@ func alpnsToStrings(alpns [][]byte) []string {
 	out := make([]string, len(alpns))
 	for i, a := range alpns {
 		out[i] = string(a)
+	}
+	return out
+}
+
+func cloneALPNs(alpns [][]byte) [][]byte {
+	out := make([][]byte, len(alpns))
+	for i, a := range alpns {
+		out[i] = append([]byte(nil), a...)
 	}
 	return out
 }
