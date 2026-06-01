@@ -18,9 +18,8 @@ type ReceivedPacketHandler struct {
 	// no-op with multipath off.
 	appDataPaths map[protocol.PathID]*appDataReceivedPacketTracker
 
-	// lowest1RTTPacket is connection-global today. Under multipath each path
-	// has its own 0-RTT/1-RTT boundary; that split is deferred (Stage 4 spec
-	// risk #7).
+	// lowest1RTTPacket is connection-global: 0-RTT is only accepted before the
+	// first 1-RTT packet, and multipath paths are added after 1-RTT is live.
 	lowest1RTTPacket protocol.PacketNumber
 }
 
