@@ -1,0 +1,69 @@
+package iroh
+
+import (
+	"context"
+	"net/netip"
+	"testing"
+	"time"
+
+	"github.com/tmc/go-iroh/base"
+)
+
+func TestEndpointMetrics(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-metrics/0"
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := Bind(ctx,
+		WithSecretKey(srvKey),
+		WithALPNs([]byte(alpn)),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	accepted := make(chan error, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err == nil {
+			conn.CloseWithError(0, "")
+		}
+		accepted <- err
+	}()
+
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	conn.CloseWithError(0, "")
+	if err := <-accepted; err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+
+	cm := client.Metrics()
+	if cm.ConnectsStarted != 1 || cm.ConnectsAccepted != 1 || cm.ConnectsFailed != 0 {
+		t.Fatalf("client Metrics = %+v, want one successful connect", cm)
+	}
+	sm := server.Metrics()
+	if sm.AcceptsStarted != 1 || sm.AcceptsAccepted != 1 || sm.AcceptsFailed != 0 {
+		t.Fatalf("server Metrics = %+v, want one successful accept", sm)
+	}
+
+	if _, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()), []byte(alpn)); err == nil {
+		t.Fatal("connect without address succeeded")
+	}
+	cm = client.Metrics()
+	if cm.ConnectsStarted != 2 || cm.ConnectsAccepted != 1 || cm.ConnectsFailed != 1 {
+		t.Fatalf("client Metrics after failure = %+v, want failed connect counted", cm)
+	}
+}

@@ -56,6 +56,7 @@ type Endpoint struct {
 	netReport   netReportRunner
 	nextStable  uint64
 	stableIDs   map[*quic.Conn]uint64
+	metrics     endpointMetrics
 }
 
 // config holds the options assembled by [Option] values before [Bind].
@@ -822,6 +823,13 @@ var ErrHandshakeRejected = errors.New("iroh: handshake rejected by hook")
 // (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
 // handshake over a relay mapped address that routes through the relay transport.
 func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []byte) (*Conn, error) {
+	e.metrics.connectsStarted.Add(1)
+	ok := false
+	defer func() {
+		if !ok {
+			e.metrics.connectsFailed.Add(1)
+		}
+	}()
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
 	}
@@ -878,6 +886,8 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 			conn.CloseWithError(0, "rejected by hook")
 			return nil, err
 		}
+		e.metrics.connectsAccepted.Add(1)
+		ok = true
 		return conn, nil
 	}
 	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.Id, firstErr)
@@ -936,15 +946,24 @@ func (e *Endpoint) AcceptIncoming(ctx context.Context) (*Incoming, error) {
 // returns it as a [Conn]. It returns an error if the endpoint is closed or has
 // no configured ALPNs. ctx cancels the wait.
 func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
+	e.metrics.acceptsStarted.Add(1)
 	in, err := e.AcceptIncoming(ctx)
 	if err != nil {
+		e.metrics.acceptsFailed.Add(1)
 		return nil, err
 	}
 	accepting, err := in.Accept()
 	if err != nil {
+		e.metrics.acceptsFailed.Add(1)
 		return nil, err
 	}
-	return accepting.Connection(ctx)
+	conn, err := accepting.Connection(ctx)
+	if err != nil {
+		e.metrics.acceptsFailed.Add(1)
+		return nil, err
+	}
+	e.metrics.acceptsAccepted.Add(1)
+	return conn, nil
 }
 
 func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, error) {
