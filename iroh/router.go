@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 )
 
@@ -49,8 +50,8 @@ type IncomingFilterOutcome int
 const (
 	// FilterAccept accepts the connection and dispatches it to a handler.
 	FilterAccept IncomingFilterOutcome = iota
-	// FilterRetry asks the peer to retry. If the transport cannot emit a QUIC
-	// Retry packet, the connection is closed.
+	// FilterRetry asks the peer to retry. Router evaluates this outcome before
+	// qng constructs a connection, so it emits a real QUIC Retry packet.
 	FilterRetry
 	// FilterReject refuses the connection.
 	FilterReject
@@ -58,9 +59,10 @@ const (
 	FilterIgnore
 )
 
-// IncomingFilter decides whether to accept each incoming connection. It is
-// called synchronously in the accept loop and must be fast and non-blocking. It
-// mirrors the Rust IncomingFilter (iroh/src/protocol.rs).
+// IncomingFilter decides whether to accept each incoming connection. Router
+// evaluates FilterRetry at QUIC Initial admission time, before ALPN negotiation;
+// other outcomes are evaluated in the accept loop after qng has an early
+// connection. It mirrors the Rust IncomingFilter (iroh/src/protocol.rs).
 type IncomingFilter func(*Incoming) IncomingFilterOutcome
 
 // RouterBuilder accumulates protocol registrations for a [Router]. Create one
@@ -114,7 +116,22 @@ func (b *RouterBuilder) Spawn() (*Router, error) {
 	for a := range b.handlers {
 		alpns = append(alpns, []byte(a))
 	}
+	prevVerify := b.ep.sourceAddressValidation()
+	if b.filter != nil {
+		b.ep.setSourceAddressValidation(func(addr net.Addr) bool {
+			if prevVerify != nil && prevVerify(addr) {
+				return true
+			}
+			retry := false
+			in := &Incoming{ep: b.ep, remote: addr, preRetry: &retry}
+			if b.filter(in) == FilterRetry {
+				retry = true
+			}
+			return retry
+		})
+	}
 	if err := b.ep.SetALPNs(alpns); err != nil {
+		b.ep.setSourceAddressValidation(prevVerify)
 		return nil, fmt.Errorf("iroh: router spawn: %w", err)
 	}
 
@@ -123,9 +140,12 @@ func (b *RouterBuilder) Spawn() (*Router, error) {
 		ep:       b.ep,
 		handlers: b.handlers,
 		filter:   b.filter,
-		logger:   logger,
-		cancel:   cancel,
-		ctx:      ctx,
+		restoreSourceValidation: func() {
+			b.ep.setSourceAddressValidation(prevVerify)
+		},
+		logger: logger,
+		cancel: cancel,
+		ctx:    ctx,
 	}
 	r.wg.Add(1)
 	go r.acceptLoop(ctx)
@@ -142,10 +162,11 @@ func (b *RouterBuilder) Spawn() (*Router, error) {
 // from the router's. A panic in a handler goroutine is recovered, logged, and
 // stops the accept loop (the protocol-router wire contract, iroh/DESIGN.md §2).
 type Router struct {
-	ep       *Endpoint
-	handlers map[string]ProtocolHandler
-	filter   IncomingFilter
-	logger   *slog.Logger
+	ep                      *Endpoint
+	handlers                map[string]ProtocolHandler
+	filter                  IncomingFilter
+	restoreSourceValidation func()
+	logger                  *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -270,6 +291,10 @@ func (r *Router) Shutdown(ctx context.Context) error {
 	}
 	r.shutdown = true
 	r.mu.Unlock()
+
+	if r.restoreSourceValidation != nil {
+		r.restoreSourceValidation()
+	}
 
 	// Stop accepting and cancel handler contexts.
 	r.cancel()

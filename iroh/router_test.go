@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -153,6 +154,75 @@ func TestRouterEcho(t *testing.T) {
 	}
 	if !h.wasShutdown() {
 		t.Error("handler Shutdown hook was not called")
+	}
+}
+
+func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-router-retry/0"
+
+	srvKey, _ := base.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var retryCalls atomic.Int32
+	var acceptedValidated atomic.Bool
+	router, err := NewRouter(server).
+		Accept([]byte(alpn), echoHandler{}).
+		IncomingFilter(func(in *Incoming) IncomingFilterOutcome {
+			if in.RemoteAddrValidated() {
+				acceptedValidated.Store(true)
+				return FilterAccept
+			}
+			retryCalls.Add(1)
+			if err := in.Retry(); err != nil {
+				t.Errorf("Retry: %v", err)
+			}
+			return FilterAccept
+		}).
+		Spawn()
+	if err != nil {
+		t.Fatalf("spawn router: %v", err)
+	}
+	defer router.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+	s, err := conn.OpenStream(ctx)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	if _, err := s.Write([]byte("retry")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_ = s.Close()
+	got, err := io.ReadAll(s)
+	if err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if string(got) != "retry" {
+		t.Fatalf("echo = %q, want retry", got)
+	}
+	if retryCalls.Load() == 0 {
+		t.Fatal("filter did not request pre-connection retry")
+	}
+	if !acceptedValidated.Load() {
+		t.Fatal("post-retry incoming was not remote-address validated")
 	}
 }
 

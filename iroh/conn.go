@@ -152,13 +152,12 @@ func (a LocalTransportAddr) String() string {
 // Incoming is an incoming connection attempt accepted by an [Endpoint]. Call
 // Accept to continue the handshake, or Refuse/Ignore to close it.
 type Incoming struct {
-	ep *Endpoint
-	qc *quic.Conn
+	ep              *Endpoint
+	qc              *quic.Conn
+	remote          net.Addr
+	remoteValidated bool
+	preRetry        *bool
 }
-
-// ErrIncomingRetryUnsupported is returned when Retry cannot emit a QUIC Retry
-// packet for an incoming connection.
-var ErrIncomingRetryUnsupported = errors.New("iroh: incoming retry not supported")
 
 // Accept accepts the incoming connection and returns an [Accepting] handle.
 func (in *Incoming) Accept() (*Accepting, error) {
@@ -181,13 +180,19 @@ func (in *Incoming) Refuse() {
 	}
 }
 
-// Retry is not exposed by qng yet; it closes the connection and reports that
-// retry was unavailable.
+// Retry asks the peer to retry this incoming connection. For router filters this
+// is evaluated before qng constructs a connection, so it emits a real QUIC Retry
+// packet. Calling Retry after AcceptIncoming has returned is too late for QUIC
+// Retry and closes the connection.
 func (in *Incoming) Retry() error {
-	if in != nil && in.qc != nil {
-		in.qc.CloseWithError(0, "retry unavailable")
+	if in != nil && in.preRetry != nil {
+		*in.preRetry = true
+		return nil
 	}
-	return ErrIncomingRetryUnsupported
+	if in != nil && in.qc != nil {
+		in.qc.CloseWithError(0, "retry requested after accept")
+	}
+	return nil
 }
 
 // Ignore closes the incoming connection without waiting for completion.
@@ -199,7 +204,13 @@ func (in *Incoming) Ignore() {
 
 // RemoteAddr returns the transport address of the incoming connection.
 func (in *Incoming) RemoteAddr() IncomingAddr {
-	if in == nil || in.qc == nil {
+	if in == nil {
+		return IncomingAddr{}
+	}
+	if in.remote != nil {
+		return newIncomingAddr(in.remote)
+	}
+	if in.qc == nil {
 		return IncomingAddr{}
 	}
 	return newIncomingAddr(in.qc.RemoteAddr())
@@ -207,7 +218,13 @@ func (in *Incoming) RemoteAddr() IncomingAddr {
 
 // RemoteAddrValidated reports whether qng has validated the remote address.
 func (in *Incoming) RemoteAddrValidated() bool {
-	if in == nil || in.qc == nil {
+	if in == nil {
+		return false
+	}
+	if in.preRetry != nil {
+		return in.remoteValidated
+	}
+	if in.qc == nil {
 		return false
 	}
 	return in.qc.RemoteAddrValidated()

@@ -39,6 +39,7 @@ type Endpoint struct {
 	keyLogWriter io.Writer
 	sessionCache *SessionCache
 	disableIP    bool
+	verifySource func(net.Addr) bool
 	hooks        []EndpointHooks
 
 	// remotes is the per-remote state registry. The endpoint owns it: it
@@ -378,6 +379,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		keyLogWriter: c.keyLogWriter,
 		sessionCache: NewSessionCache(),
 		disableIP:    c.disableIP,
+		verifySource: c.verifySource,
 		hooks:        append([]EndpointHooks(nil), c.hooks...),
 		lookup:       c.lookup,
 		closedCh:     make(chan struct{}),
@@ -417,6 +419,19 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		go ep.runNetReport(serveCtx, c.netReportEvery)
 	}
 	return ep, nil
+}
+
+func (e *Endpoint) setSourceAddressValidation(f func(net.Addr) bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.verifySource = f
+	e.transport.VerifySourceAddress = f
+}
+
+func (e *Endpoint) sourceAddressValidation() func(net.Addr) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.verifySource
 }
 
 func endpointNetReportRunner(c config, relayMap *relay.Map) netReportRunner {

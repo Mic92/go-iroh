@@ -1,15 +1,15 @@
 package iroh
 
-import (
-	"errors"
-	"testing"
-)
+import "testing"
 
-func TestIncomingRetryUnsupported(t *testing.T) {
-	for _, in := range []*Incoming{nil, &Incoming{}} {
-		if err := in.Retry(); !errors.Is(err, ErrIncomingRetryUnsupported) {
-			t.Fatalf("Retry error = %v, want %v", err, ErrIncomingRetryUnsupported)
-		}
+func TestIncomingRetryPreConnection(t *testing.T) {
+	retry := false
+	in := &Incoming{preRetry: &retry}
+	if err := in.Retry(); err != nil {
+		t.Fatalf("Retry: %v", err)
+	}
+	if !retry {
+		t.Fatal("Retry did not mark pre-connection incoming for QUIC Retry")
 	}
 }
 

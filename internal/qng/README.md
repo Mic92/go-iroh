@@ -16,9 +16,9 @@ connections wire-compatible with iroh, quic-go must be pointed at the patched TL
 
 quic-go's `crypto/tls` use is woven through its `internal/` tree
 (`internal/handshake`, `internal/qtls`, `internal/protocol`, `internal/qerr`) as
-well as the top-level package. Go's `internal/` visibility rule means a partial
-fork is impossible — the whole transitive package set must be copied so the
-`tls.Config` / `tls.ConnectionState` types are identical across the graph.
+well as the top-level package. Go's `internal/` visibility rule means qng copies
+the whole transitive package set so the `tls.Config` / `tls.ConnectionState`
+types are identical across the graph.
 
 ## What the fork changes
 
