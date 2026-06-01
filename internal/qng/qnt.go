@@ -115,10 +115,10 @@ func (c *Conn) RemoveNATTraversalAddress(addr netip.AddrPort) error {
 	return nil
 }
 
-// InitiateNATTraversalRound starts one client-side QNT round. Once implemented,
-// qng queues REACH_OUT frames, owns NAT probe retry scheduling, matches
-// PATH_RESPONSE frames, and opens validated four-tuples as multipath paths. The
-// returned addresses are informational; qng, not socket, owns probing.
+// InitiateNATTraversalRound starts one client-side QNT round. qng queues
+// REACH_OUT frames, owns NAT probe retry scheduling, matches PATH_RESPONSE
+// frames, and opens validated four-tuples as multipath paths. The returned
+// addresses are informational; qng, not socket, owns probing.
 func (c *Conn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrPort, error) {
 	if !c.qntAPINegotiated() {
 		return nil, ErrNATTraversalNotNegotiated

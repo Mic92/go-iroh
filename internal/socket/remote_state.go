@@ -46,10 +46,9 @@ var ErrHolepunchNotImplemented = errors.New("socket: hole-punch driver not imple
 // needs. The iroh package adapts a qng *quic.Conn to it; tests use a fake. It
 // stays small on purpose: the actor only reads liveness and RTT.
 //
-// SmoothedRTT returns the connection's active-path smoothed RTT (qng exposes no
-// per-path RTT yet). Done is closed when the connection ends. RemoteAddr reports
-// the path the connection is on, so the actor can register it as a candidate
-// path.
+// SmoothedRTT returns the connection's active-path smoothed RTT. Done is closed
+// when the connection ends. RemoteAddr reports the path the connection is on,
+// so the actor can register it as a candidate path.
 type Connection interface {
 	// SmoothedRTT returns the smoothed round-trip time of the active path.
 	SmoothedRTT() time.Duration
