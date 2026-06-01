@@ -3,9 +3,9 @@
 iroh's direct peer-to-peer QUIC connections authenticate with TLS 1.3 **Raw
 Public Keys** (RFC 7250): the ed25519 public key *is* the certificate, with no
 X.509 chain. Go's standard `crypto/tls` does not implement RFC 7250, and
-quic-go drives `crypto/tls` directly with no pluggable seam. To be wire-compatible
-with upstream iroh, go-iroh vendors a patched copy of `crypto/tls` here and (will)
-drive it from a thin quic-go fork.
+quic-go drives `crypto/tls` directly with no pluggable seam. To be
+wire-compatible with upstream iroh, go-iroh vendors a patched copy of
+`crypto/tls` here and drives it from the qng quic-go fork.
 
 ## Layout
 
