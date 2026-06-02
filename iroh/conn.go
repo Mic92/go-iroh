@@ -57,10 +57,6 @@ func newConn(qc *quic.Conn, remoteID key.EndpointID, alpn string, side Side, sta
 	return &Conn{qc: qc, remoteID: remoteID, alpn: alpn, side: side, stableID: stableID}, nil
 }
 
-// ServerConfig is reserved for per-connection server TLS options in
-// [Incoming.AcceptWith]. The zero value uses the endpoint listener config.
-type ServerConfig struct{}
-
 // IncomingAddr is the transport address of an incoming connection attempt.
 type IncomingAddr struct {
 	addr net.Addr
@@ -150,12 +146,6 @@ func (in *Incoming) Accept() (*Accepting, error) {
 		return nil, errors.New("iroh: nil incoming connection")
 	}
 	return &Accepting{ep: in.ep, qc: in.qc}, nil
-}
-
-// AcceptWith accepts the incoming connection. ServerConfig is reserved for the
-// Rust API shape; this build uses the endpoint's listener TLS config.
-func (in *Incoming) AcceptWith(*ServerConfig) (*Accepting, error) {
-	return in.Accept()
 }
 
 // Refuse closes the incoming connection.
