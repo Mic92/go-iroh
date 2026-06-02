@@ -84,6 +84,11 @@ func TestEd25519Conversions(t *testing.T) {
 	if !bytes.Equal(pk.Ed25519(), pub) {
 		t.Fatal("public key conversion mismatch")
 	}
+	pubCopy := pk.Ed25519()
+	pubCopy[0] ^= 0xff
+	if bytes.Equal(pk.Ed25519(), pubCopy) {
+		t.Fatal("public key Ed25519 aliases key storage")
+	}
 	sk, err := SecretKeyFromEd25519(priv)
 	if err != nil {
 		t.Fatalf("SecretKeyFromEd25519: %v", err)
@@ -100,6 +105,11 @@ func TestEd25519Conversions(t *testing.T) {
 	}
 	if err := sk.Public().Verify(msg, sig); err != nil {
 		t.Fatalf("verify converted signature: %v", err)
+	}
+	sigCopy := sig.Ed25519()
+	sigCopy[0] ^= 0xff
+	if bytes.Equal(sig.Ed25519(), sigCopy) {
+		t.Fatal("signature Ed25519 aliases signature storage")
 	}
 }
 
@@ -188,12 +198,19 @@ func TestZ32RoundTrip(t *testing.T) {
 	sk, _ := GenerateSecretKey()
 	k := sk.Public()
 	z := k.Z32()
-	k2, err := PublicKeyFromZ32(z)
+	k2, err := ParsePublicKeyZ32(z)
 	if err != nil {
-		t.Fatalf("PublicKeyFromZ32: %v", err)
+		t.Fatalf("ParsePublicKeyZ32: %v", err)
 	}
 	if !k2.Equal(k) {
 		t.Error("z32 round-trip mismatch")
+	}
+	k3, err := PublicKeyFromZ32(z)
+	if err != nil {
+		t.Fatalf("PublicKeyFromZ32: %v", err)
+	}
+	if !k3.Equal(k) {
+		t.Error("legacy z32 round-trip mismatch")
 	}
 	// z-base-32 of a 32-byte value is 52 chars.
 	if len(z) != 52 {

@@ -85,9 +85,12 @@ func PublicKeyFromSlice(b []byte) (PublicKey, error) {
 // Bytes returns the public key as a 32-byte array.
 func (k PublicKey) Bytes() [PublicKeySize]byte { return k.bytes }
 
-// Ed25519 returns the key as a crypto/ed25519 public key.
+// Ed25519 returns the key as a crypto/ed25519 public key. The returned slice is
+// a copy and may be modified by the caller.
 func (k PublicKey) Ed25519() ed25519.PublicKey {
-	return ed25519.PublicKey(k.bytes[:])
+	out := make(ed25519.PublicKey, PublicKeySize)
+	copy(out, k.bytes[:])
+	return out
 }
 
 // Verify reports whether sig is a valid signature of message by k. It returns
@@ -132,13 +135,20 @@ func (k PublicKey) Z32() string {
 	return encodeZBase32(k.bytes[:])
 }
 
-// PublicKeyFromZ32 parses a key from its z-base-32 encoding.
-func PublicKeyFromZ32(s string) (PublicKey, error) {
+// ParsePublicKeyZ32 parses a key from its z-base-32 encoding.
+func ParsePublicKeyZ32(s string) (PublicKey, error) {
 	b, err := decodeZBase32(s)
 	if err != nil {
 		return PublicKey{}, ErrDecodeBase32
 	}
 	return PublicKeyFromSlice(b)
+}
+
+// PublicKeyFromZ32 parses a key from its z-base-32 encoding.
+//
+// Deprecated: use [ParsePublicKeyZ32].
+func PublicKeyFromZ32(s string) (PublicKey, error) {
+	return ParsePublicKeyZ32(s)
 }
 
 // ParsePublicKey parses a PublicKey from its hex or base32 string form. A string
@@ -325,9 +335,12 @@ func SignatureFromSlice(b []byte) (Signature, error) {
 // Bytes returns the signature as a 64-byte array.
 func (s Signature) Bytes() [SignatureSize]byte { return s.bytes }
 
-// Ed25519 returns the signature bytes used by crypto/ed25519.
+// Ed25519 returns the signature bytes used by crypto/ed25519. The returned
+// slice is a copy and may be modified by the caller.
 func (s Signature) Ed25519() []byte {
-	return s.bytes[:]
+	out := make([]byte, SignatureSize)
+	copy(out, s.bytes[:])
+	return out
 }
 
 // String returns the lowercase-hex encoding of the signature.

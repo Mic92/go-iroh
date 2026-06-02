@@ -8,7 +8,7 @@ import (
 // verify is the regeneratable core of [PublicKey.Verify]. It performs strict
 // Ed25519 verification, matching ed25519-dalek's verify_strict.
 func (k PublicKey) verify(message []byte, sig Signature) error {
-	if !ed25519.Verify(k.Ed25519(), message, sig.Ed25519()) {
+	if !ed25519.Verify(k.bytes[:], message, sig.bytes[:]) {
 		return ErrInvalidSignature
 	}
 	return nil
