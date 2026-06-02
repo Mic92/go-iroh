@@ -133,6 +133,47 @@ func TestTransportAddrStringRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTransportAddrTextRoundTrip(t *testing.T) {
+	relay, _ := ParseRelayURL("https://relay.example.com")
+	relayAddr := RelayAddr{URL: relay}
+	relayText, err := relayAddr.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(relayText) != relayAddr.String() {
+		t.Fatalf("RelayAddr.MarshalText = %q, want %q", relayText, relayAddr.String())
+	}
+	var relayOut RelayAddr
+	if err := relayOut.UnmarshalText(relayText); err != nil {
+		t.Fatal(err)
+	}
+	if relayOut.Compare(relayAddr) != 0 {
+		t.Fatalf("RelayAddr text round-trip = %s, want %s", relayOut, relayAddr)
+	}
+	if err := relayOut.UnmarshalText([]byte("ip:127.0.0.1:9")); err == nil {
+		t.Fatal("RelayAddr.UnmarshalText accepted IPAddr")
+	}
+
+	ipAddr := IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:9")}
+	ipText, err := ipAddr.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ipText) != ipAddr.String() {
+		t.Fatalf("IPAddr.MarshalText = %q, want %q", ipText, ipAddr.String())
+	}
+	var ipOut IPAddr
+	if err := ipOut.UnmarshalText(ipText); err != nil {
+		t.Fatal(err)
+	}
+	if ipOut.Compare(ipAddr) != 0 {
+		t.Fatalf("IPAddr text round-trip = %s, want %s", ipOut, ipAddr)
+	}
+	if err := ipOut.UnmarshalText([]byte("relay:https://relay.example.com/")); err == nil {
+		t.Fatal("IPAddr.UnmarshalText accepted RelayAddr")
+	}
+}
+
 func TestEndpointAddrSortDedup(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()

@@ -76,6 +76,48 @@ func (a RelayAddr) String() string  { return "relay:" + a.URL.String() }
 func (a IPAddr) String() string     { return "ip:" + a.Addr.String() }
 func (a CustomAddr) String() string { return a.customString() }
 
+// MarshalText implements encoding.TextMarshaler using the string encoding
+// described on [TransportAddr].
+func (a RelayAddr) MarshalText() ([]byte, error) {
+	return []byte(a.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler using the string encoding
+// described on [TransportAddr].
+func (a *RelayAddr) UnmarshalText(text []byte) error {
+	parsed, err := ParseTransportAddr(string(text))
+	if err != nil {
+		return err
+	}
+	relay, ok := parsed.(RelayAddr)
+	if !ok {
+		return fmt.Errorf("transport address %q: got %T, want RelayAddr", text, parsed)
+	}
+	*a = relay
+	return nil
+}
+
+// MarshalText implements encoding.TextMarshaler using the string encoding
+// described on [TransportAddr].
+func (a IPAddr) MarshalText() ([]byte, error) {
+	return []byte(a.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler using the string encoding
+// described on [TransportAddr].
+func (a *IPAddr) UnmarshalText(text []byte) error {
+	parsed, err := ParseTransportAddr(string(text))
+	if err != nil {
+		return err
+	}
+	ip, ok := parsed.(IPAddr)
+	if !ok {
+		return fmt.Errorf("transport address %q: got %T, want IPAddr", text, parsed)
+	}
+	*a = ip
+	return nil
+}
+
 // Compare orders relay addresses by their normalized URL string.
 func (a RelayAddr) Compare(other TransportAddr) int {
 	if b, ok := other.(RelayAddr); ok {
