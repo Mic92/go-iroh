@@ -101,6 +101,14 @@ func newIncomingAddr(addr net.Addr) IncomingAddr { return IncomingAddr{addr: add
 // Addr returns the underlying network address.
 func (a IncomingAddr) Addr() net.Addr { return a.addr }
 
+// Network returns the address network.
+func (a IncomingAddr) Network() string {
+	if a.addr == nil {
+		return ""
+	}
+	return a.addr.Network()
+}
+
 // AddrPort returns addr as a UDP address, when it is one.
 func (a IncomingAddr) AddrPort() (netip.AddrPort, bool) {
 	udp, ok := a.addr.(*net.UDPAddr)
@@ -130,6 +138,14 @@ func newLocalTransportAddr(addr net.Addr) LocalTransportAddr {
 
 // Addr returns the underlying network address.
 func (a LocalTransportAddr) Addr() net.Addr { return a.addr }
+
+// Network returns the address network.
+func (a LocalTransportAddr) Network() string {
+	if a.addr == nil {
+		return ""
+	}
+	return a.addr.Network()
+}
 
 // AddrPort returns addr as a UDP address, when it is one.
 func (a LocalTransportAddr) AddrPort() (netip.AddrPort, bool) {

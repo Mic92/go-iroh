@@ -24,4 +24,6 @@ var (
 	_ io.Closer          = (*Conn)(nil)
 	_ deadlines          = (*Stream)(nil)
 	_ connAddrs          = (*Conn)(nil)
+	_ net.Addr           = IncomingAddr{}
+	_ net.Addr           = LocalTransportAddr{}
 )
