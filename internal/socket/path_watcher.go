@@ -83,7 +83,9 @@ type pathSub struct {
 	lagged bool        // a Lagged event is pending delivery
 	closed bool
 
-	ch chan PathEvent
+	ch   chan PathEvent
+	done chan struct{}
+	once sync.Once
 }
 
 // NewPathWatcher returns an empty broadcast with no subscribers.
@@ -98,7 +100,10 @@ func NewPathWatcher() *PathWatcher {
 func (w *PathWatcher) Subscribe() (<-chan PathEvent, func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	s := &pathSub{ch: make(chan PathEvent)}
+	s := &pathSub{
+		ch:   make(chan PathEvent, PathBroadcastCapacity+1),
+		done: make(chan struct{}),
+	}
 	s.cond = sync.NewCond(&s.mu)
 	if w.closed {
 		close(s.ch)
@@ -192,12 +197,14 @@ func (s *pathSub) close() {
 	s.closed = true
 	s.cond.Signal()
 	s.mu.Unlock()
+	s.once.Do(func() { close(s.done) })
 }
 
 // deliver is the per-subscriber delivery goroutine. It pops events from the ring
 // buffer and sends them on the channel, prepending a single Lagged event
 // whenever one is pending. It exits and closes the channel when the subscriber
-// is closed and its ring is drained.
+// is closed and its ring is drained. If the subscriber stops reading, close
+// interrupts an in-flight send instead of waiting forever for the drain.
 func (s *pathSub) deliver() {
 	for {
 		s.mu.Lock()
@@ -219,6 +226,16 @@ func (s *pathSub) deliver() {
 			s.ring = s.ring[1:]
 		}
 		s.mu.Unlock()
-		s.ch <- out
+		select {
+		case s.ch <- out:
+			continue
+		default:
+		}
+		select {
+		case s.ch <- out:
+		case <-s.done:
+			close(s.ch)
+			return
+		}
 	}
 }

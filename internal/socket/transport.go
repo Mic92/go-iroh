@@ -49,6 +49,8 @@ type MagicConn struct {
 	readDeadline  deadline
 	writeDeadline deadline
 
+	recvAddrs map[netip.AddrPort]*net.UDPAddr
+
 	endpointMu     sync.RWMutex
 	endpointSender func(key.EndpointID, []byte) bool
 }
@@ -73,7 +75,7 @@ func NewMagicConnWithRelay(sock *Socket, udp *net.UDPConn, actor *RelayActor) *M
 // NewMagicConnWithTransports returns a MagicConn with direct IP, optional relay,
 // and optional custom transports.
 func NewMagicConnWithTransports(sock *Socket, udp *net.UDPConn, actor *RelayActor, custom ...CustomTransport) *MagicConn {
-	recvCh := make(chan recvBatch, 64)
+	recvCh := make(chan recvBatch, 4)
 	transports := &Transports{ip: NewIpTransport(udp, recvCh)}
 	if actor != nil {
 		transports.relay = NewRelayTransport(sock, actor, recvCh)
@@ -88,6 +90,7 @@ func NewMagicConnWithTransports(sock *Socket, udp *net.UDPConn, actor *RelayActo
 		transports: transports,
 		udp:        udp,
 		recvCh:     recvCh,
+		recvAddrs:  make(map[netip.AddrPort]*net.UDPAddr),
 	}
 	m.readDeadline.init()
 	m.writeDeadline.init()
@@ -126,18 +129,27 @@ func (m *MagicConn) ReadFrom(p []byte) (int, net.Addr, error) {
 	for {
 		select {
 		case b := <-m.recvCh:
-			addr, ok := m.recvAddr(b.info)
+			addr, ok := m.recvBatchAddr(b)
 			if !ok {
+				b.release()
 				// Unknown relay/custom source: cannot present a stable path to
 				// quic-go. Drop and keep reading.
 				continue
 			}
 			n := copy(p, b.data)
+			b.release()
 			return n, addr, nil
 		case <-m.readDeadline.wait():
 			return 0, nil, timeoutError{}
 		}
 	}
+}
+
+func (m *MagicConn) recvBatchAddr(b recvBatch) (net.Addr, bool) {
+	if b.ip.IsValid() {
+		return m.udpAddr(b.ip), true
+	}
+	return m.recvAddr(b.info)
 }
 
 // recvAddr maps a received datagram's RecvInfo to the net.Addr quic-go sees: the
@@ -148,16 +160,25 @@ func (m *MagicConn) recvAddr(info RecvInfo) (net.Addr, bool) {
 	switch info.Remote.kind {
 	case AddrIP:
 		ap, _ := info.Remote.IP()
-		return net.UDPAddrFromAddrPort(ap), true
+		return m.udpAddr(ap), true
 	case AddrRelay:
 		url, eid, _ := info.Remote.Relay()
-		return mappedUDPAddr(m.sock.RelayMappedAddrFor(url, eid).Addr()), true
+		return m.udpAddr(m.sock.RelayMappedAddrFor(url, eid).AddrPort()), true
 	case AddrCustom:
 		c, _ := info.Remote.Custom()
-		return mappedUDPAddr(m.sock.CustomMappedAddrFor(c).Addr()), true
+		return m.udpAddr(m.sock.CustomMappedAddrFor(c).AddrPort()), true
 	default:
 		return nil, false
 	}
+}
+
+func (m *MagicConn) udpAddr(ap netip.AddrPort) *net.UDPAddr {
+	if addr, ok := m.recvAddrs[ap]; ok {
+		return addr
+	}
+	addr := net.UDPAddrFromAddrPort(ap)
+	m.recvAddrs[ap] = addr
+	return addr
 }
 
 // mappedUDPAddr wraps a mapped IPv6 ULA as a *net.UDPAddr at the fixed dummy
@@ -178,6 +199,13 @@ func mappedUDPAddr(a netip.Addr) *net.UDPAddr {
 func (m *MagicConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if m.sock.IsClosed() {
 		return len(p), nil
+	}
+	if udp, ok := addr.(*net.UDPAddr); ok {
+		ap := udp.AddrPort()
+		if isDefinitelyIP(ap.Addr()) || Classify(ap.Addr()) == KindIP {
+			_, _ = m.transports.ip.send(p, ap)
+			return len(p), nil
+		}
 	}
 	ap, ok := addrPort(addr)
 	if !ok {
@@ -210,6 +238,13 @@ func (m *MagicConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	default:
 		return len(p), nil
 	}
+}
+
+func isDefinitelyIP(addr netip.Addr) bool {
+	if !addr.Is6() {
+		return true
+	}
+	return addr.As16()[0] != 0xfd
 }
 
 // relayAddrForMapped returns the relay Addr for mapped.

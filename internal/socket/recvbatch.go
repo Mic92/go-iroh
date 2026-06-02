@@ -100,6 +100,14 @@ type RecvInfo struct {
 // recv loop to [MagicConn.ReadFrom]. The payload is owned by the batch until it
 // is copied into the caller's buffer.
 type recvBatch struct {
-	data []byte
-	info RecvInfo
+	data      []byte
+	info      RecvInfo
+	ip        netip.AddrPort
+	releaseIP bool
+}
+
+func (b recvBatch) release() {
+	if b.releaseIP {
+		putIPRecvBuffer(b.data)
+	}
 }

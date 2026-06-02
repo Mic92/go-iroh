@@ -11,6 +11,8 @@ import (
 // exceed this; larger reads would be truncated by quic-go anyway.
 const maxDatagramSize = 1452 + 512 // generous: max QUIC packet plus headroom
 
+var ipRecvPool = make(chan []byte, 1024)
+
 // IpTransport is the direct-UDP transport: it reads datagrams from a
 // net.PacketConn and forwards them to the [MagicConn]'s recv channel, and sends
 // datagrams the magic socket routes to it. It is the Go analog of the Rust
@@ -18,14 +20,14 @@ const maxDatagramSize = 1452 + 512 // generous: max QUIC packet plus headroom
 //
 // Create one with [NewIpTransport] and start its recv loop with [IpTransport.Serve].
 type IpTransport struct {
-	conn   net.PacketConn
+	conn   *net.UDPConn
 	recvCh chan<- recvBatch
 }
 
 // NewIpTransport returns an IpTransport over conn that delivers received
 // datagrams to recvCh. The transport does not take ownership of conn; the caller
 // closes it.
-func NewIpTransport(conn net.PacketConn, recvCh chan<- recvBatch) *IpTransport {
+func NewIpTransport(conn *net.UDPConn, recvCh chan<- recvBatch) *IpTransport {
 	return &IpTransport{conn: conn, recvCh: recvCh}
 }
 
@@ -38,13 +40,14 @@ func (t *IpTransport) LocalAddr() net.Addr { return t.conn.LocalAddr() }
 // match iroh/src/socket/transports/ip.rs:221 to_canonical). Empty datagrams and
 // transient errors are skipped; a closed socket ends the loop cleanly.
 func (t *IpTransport) Serve(ctx context.Context) {
-	buf := make([]byte, maxDatagramSize)
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		n, addr, err := t.conn.ReadFrom(buf)
+		buf := getIPRecvBuffer()
+		n, ap, err := t.conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
+			putIPRecvBuffer(buf)
 			if errors.Is(err, net.ErrClosed) || ctx.Err() != nil {
 				return
 			}
@@ -53,23 +56,50 @@ func (t *IpTransport) Serve(ctx context.Context) {
 			continue
 		}
 		if n == 0 {
+			putIPRecvBuffer(buf)
 			// Timeout or platform quirk; nothing to deliver.
-			continue
-		}
-		ap, ok := addrPort(addr)
-		if !ok {
 			continue
 		}
 		// The transport address is internal to iroh and is always the canonical
 		// (unmapped) form. iroh/src/socket/transports/ip.rs:219.
-		remote := IPAddr(ap)
-		data := make([]byte, n)
-		copy(data, buf[:n])
-		select {
-		case t.recvCh <- recvBatch{data: data, info: RecvInfo{Remote: remote}}:
-		case <-ctx.Done():
+		b := recvBatch{data: buf[:n], ip: canonicalAddrPort(ap), releaseIP: true}
+		if !t.enqueue(ctx, b) {
 			return
 		}
+	}
+}
+
+func (t *IpTransport) enqueue(ctx context.Context, b recvBatch) bool {
+	select {
+	case t.recvCh <- b:
+		return true
+	default:
+	}
+	select {
+	case t.recvCh <- b:
+		return true
+	case <-ctx.Done():
+		b.release()
+		return false
+	}
+}
+
+func getIPRecvBuffer() []byte {
+	select {
+	case buf := <-ipRecvPool:
+		return buf
+	default:
+		return make([]byte, maxDatagramSize)
+	}
+}
+
+func putIPRecvBuffer(buf []byte) {
+	if cap(buf) != maxDatagramSize {
+		return
+	}
+	select {
+	case ipRecvPool <- buf[:maxDatagramSize]:
+	default:
 	}
 }
 
@@ -78,8 +108,14 @@ func (t *IpTransport) Serve(ctx context.Context) {
 // iroh/src/socket/transports/ip.rs:310 canonical_addr. It reports the number of
 // bytes written.
 func (t *IpTransport) send(p []byte, dst netip.AddrPort) (int, error) {
-	canon := netip.AddrPortFrom(dst.Addr().Unmap(), dst.Port())
-	return t.conn.WriteTo(p, net.UDPAddrFromAddrPort(canon))
+	return t.conn.WriteToUDPAddrPort(p, canonicalAddrPort(dst))
+}
+
+func canonicalAddrPort(ap netip.AddrPort) netip.AddrPort {
+	if !ap.Addr().Is4In6() {
+		return ap
+	}
+	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
 }
 
 // addrPort extracts a netip.AddrPort from a net.Addr, handling the *net.UDPAddr
