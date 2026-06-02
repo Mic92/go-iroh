@@ -37,27 +37,27 @@ type DNSAddressLookup struct {
 // NewDNSAddressLookup returns a DNSAddressLookup querying origin (for example
 // [dns.N0DNSEndpointOriginProd]) using resolver. If resolver is nil, a default
 // [dns.Resolver] backed by the system DNS configuration is used.
-func NewDNSAddressLookup(origin string, resolver *dns.Resolver) DNSAddressLookup {
+func NewDNSAddressLookup(origin string, resolver *dns.Resolver) *DNSAddressLookup {
 	if resolver == nil {
-		resolver = dns.NewResolver()
+		resolver = &dns.Resolver{}
 	}
-	return DNSAddressLookup{origin: origin, resolver: resolver}
+	return &DNSAddressLookup{origin: origin, resolver: resolver}
 }
 
 // N0DNSAddressLookup returns a DNSAddressLookup using the number0 production
 // discovery origin ([dns.N0DNSEndpointOriginProd]).
-func N0DNSAddressLookup(resolver *dns.Resolver) DNSAddressLookup {
+func N0DNSAddressLookup(resolver *dns.Resolver) *DNSAddressLookup {
 	return NewDNSAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
 }
 
 // Publish is a no-op: DNS records are published indirectly through a
 // [PkarrPublisher].
-func (d DNSAddressLookup) Publish(dns.EndpointData) {}
+func (d *DNSAddressLookup) Publish(dns.EndpointData) {}
 
 // Resolve looks up id in DNS, issuing staggered concurrent queries and
 // returning the first successful result. The returned channel yields a single
 // [Result] (success or error) and is then closed.
-func (d DNSAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
+func (d *DNSAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
 	out := make(chan Result, 1)
 	go func() {
 		defer close(out)
@@ -80,7 +80,7 @@ func (d DNSAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan
 // lookupStaggered issues a first DNS lookup immediately and additional ones
 // after each delay in [dnsStaggerMs] while earlier attempts are still in
 // flight, returning the first success or the last error once all attempts fail.
-func (d DNSAddressLookup) lookupStaggered(ctx context.Context, id key.EndpointID) (dns.EndpointInfo, error) {
+func (d *DNSAddressLookup) lookupStaggered(ctx context.Context, id key.EndpointID) (dns.EndpointInfo, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

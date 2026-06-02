@@ -39,9 +39,6 @@ type Resolver struct {
 	Lookuper TxtLookuper
 }
 
-// NewResolver returns a Resolver backed by the system DNS configuration.
-func NewResolver() *Resolver { return &Resolver{} }
-
 func (r *Resolver) lookuper() TxtLookuper {
 	if r.Lookuper != nil {
 		return r.Lookuper
