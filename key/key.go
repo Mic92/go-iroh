@@ -256,7 +256,8 @@ func (k SecretKey) Sign(msg []byte) Signature {
 	return k.sign(msg)
 }
 
-// Ed25519 returns the key as a crypto/ed25519 private key.
+// Ed25519 returns the key as a crypto/ed25519 private key. The returned key is
+// a copy and satisfies crypto.Signer.
 func (k SecretKey) Ed25519() ed25519.PrivateKey {
 	return append(ed25519.PrivateKey(nil), k.signing...)
 }

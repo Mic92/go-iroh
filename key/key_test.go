@@ -2,6 +2,7 @@ package key
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
@@ -154,6 +155,35 @@ func TestEd25519Conversions(t *testing.T) {
 	sigCopy[0] ^= 0xff
 	if bytes.Equal(sig.Ed25519(), sigCopy) {
 		t.Fatal("signature Ed25519 aliases signature storage")
+	}
+}
+
+func TestSecretKeyEd25519IsCryptoSigner(t *testing.T) {
+	sk, err := GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var signer crypto.Signer = sk.Ed25519()
+
+	pub, ok := signer.Public().(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("signer public key type = %T, want ed25519.PublicKey", signer.Public())
+	}
+	if !bytes.Equal(pub, sk.Public().Ed25519()) {
+		t.Fatal("signer public key mismatch")
+	}
+
+	msg := []byte("hello world")
+	sig, err := signer.Sign(nil, msg, crypto.Hash(0))
+	if err != nil {
+		t.Fatalf("Sign: %v", err)
+	}
+	parsed, err := SignatureFromEd25519(sig)
+	if err != nil {
+		t.Fatalf("SignatureFromEd25519: %v", err)
+	}
+	if err := sk.Public().Verify(msg, parsed); err != nil {
+		t.Fatalf("Verify: %v", err)
 	}
 }
 
