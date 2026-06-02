@@ -2,6 +2,7 @@ package watch
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"testing/synctest"
 )
@@ -102,12 +103,17 @@ func TestStream(t *testing.T) {
 	v := NewValue(0)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ch := v.Watch().Stream(ctx)
-	if got := <-ch; got != 0 {
-		t.Fatalf("first stream value = %d, want 0", got)
+	var got []int
+	for x := range v.Watch().Stream(ctx) {
+		got = append(got, x)
+		if len(got) == 1 {
+			v.Set(1)
+		}
+		if len(got) == 2 {
+			break
+		}
 	}
-	v.Set(1)
-	if got := <-ch; got != 1 {
-		t.Fatalf("stream value = %d, want 1", got)
+	if want := []int{0, 1}; !slices.Equal(got, want) {
+		t.Fatalf("stream values = %v, want %v", got, want)
 	}
 }

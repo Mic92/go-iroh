@@ -2,13 +2,14 @@
 // one or more [Watcher] handles that observe its changes.
 //
 // It is the Go analog of iroh's n0_watcher (Watchable + Watcher). A [Watcher]
-// exposes the current value, a one-shot wait for the next change, and a channel
-// stream of values. The root package re-exports Watcher for APIs such as
+// exposes the current value, a one-shot wait for the next change, and an
+// iterator stream of values. The root package re-exports Watcher for APIs such as
 // Endpoint.WatchAddr.
 package watch
 
 import (
 	"context"
+	"iter"
 	"sync"
 )
 
@@ -93,9 +94,9 @@ type Watcher[T any] interface {
 	// version, returning the new value, or ctx.Err() if the context is done.
 	// The first call returns the current value immediately.
 	Updated(ctx context.Context) (T, error)
-	// Stream returns a channel that yields each new value until ctx is done.
+	// Stream returns an iterator that yields each new value until ctx is done.
 	// The current value is delivered first.
-	Stream(ctx context.Context) <-chan T
+	Stream(ctx context.Context) iter.Seq[T]
 }
 
 type watcher[T any] struct {
@@ -128,23 +129,18 @@ func (w *watcher[T]) Updated(ctx context.Context) (T, error) {
 	}
 }
 
-func (w *watcher[T]) Stream(ctx context.Context) <-chan T {
-	out := make(chan T)
+func (w *watcher[T]) Stream(ctx context.Context) iter.Seq[T] {
 	// Independent cursor so Stream doesn't disturb Updated on the same watcher.
 	sub := &watcher[T]{src: w.src}
-	go func() {
-		defer close(out)
+	return func(yield func(T) bool) {
 		for {
 			v, err := sub.Updated(ctx)
 			if err != nil {
 				return
 			}
-			select {
-			case out <- v:
-			case <-ctx.Done():
+			if !yield(v) {
 				return
 			}
 		}
-	}()
-	return out
+	}
 }
