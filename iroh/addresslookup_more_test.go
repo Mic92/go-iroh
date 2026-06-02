@@ -86,9 +86,9 @@ func TestFilteredAddressLookupResolveAndInner(t *testing.T) {
 	f := NewFilteredAddressLookup(mem, IPOnlyFilter)
 
 	// Inner returns the wrapped lookup: it resolves the entry added to mem.
-	inner, ok := f.Inner().(MemoryLookup)
+	inner, ok := f.Inner().(*MemoryLookup)
 	if !ok {
-		t.Fatalf("Inner() type = %T, want MemoryLookup", f.Inner())
+		t.Fatalf("Inner() type = %T, want *MemoryLookup", f.Inner())
 	}
 	if _, ok := inner.GetEndpointInfo(id); !ok {
 		t.Error("Inner() is not the wrapped MemoryLookup: missing the added entry")
