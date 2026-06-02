@@ -14,7 +14,6 @@ Rust iroh. It is not affiliated with the n0 team.
 |---|---|
 | `key` | endpoint IDs, Ed25519 keys, signatures |
 | `netaddr` | endpoint addresses, transport addresses, relay URLs |
-| `base` | deprecated compatibility aliases for `key` and `netaddr` |
 | `dns` | pkarr TXT encoding and stdlib/DoH/DoT lookupers |
 | `relay` | public relay maps and relay configuration |
 | `watch` | small generic watch values |
