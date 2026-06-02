@@ -222,19 +222,6 @@ func (a *Accepting) RemoteAddr() IncomingAddr {
 	return newIncomingAddr(a.qc.RemoteAddr())
 }
 
-// EarlyConnection returns a connection handle before handshake completion. The
-// peer id is not authenticated until [Conn.HandshakeComplete] closes.
-func (a *Accepting) EarlyConnection() *Conn {
-	if a == nil || a.qc == nil {
-		return nil
-	}
-	var stableID uint64
-	if a.ep != nil {
-		stableID = a.ep.connStableID(a.qc)
-	}
-	return &Conn{qc: a.qc, side: SideServer, stableID: stableID}
-}
-
 // Connection waits for the handshake, verifies the peer id, registers the
 // connection with the endpoint, runs handshake hooks, and returns an
 // established [Conn].

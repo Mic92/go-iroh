@@ -247,18 +247,13 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 			done <- fmt.Errorf("accepting ALPN = %q, %v", got, err)
 			return
 		}
-		early := accepting.EarlyConnection()
-		if early.StableID() == 0 {
-			done <- errors.New("accepting EarlyConnection StableID = 0")
-			return
-		}
 		conn, err := accepting.Connection(ctx)
 		if err != nil {
 			done <- err
 			return
 		}
-		if conn.StableID() != early.StableID() {
-			done <- fmt.Errorf("stable id changed from %d to %d", early.StableID(), conn.StableID())
+		if conn.StableID() == 0 {
+			done <- errors.New("connection StableID = 0")
 			return
 		}
 		if !conn.RemoteID().Equal(client.ID()) {
