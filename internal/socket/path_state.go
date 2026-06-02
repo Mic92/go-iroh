@@ -80,7 +80,7 @@ type RemotePathState struct {
 
 // pathEntry stores a path's [Addr] alongside its [PathState]. The map is keyed
 // by Addr.String() because [Addr] is not directly comparable (it embeds a
-// non-comparable base.CustomAddr).
+// non-comparable netaddr.CustomAddr).
 type pathEntry struct {
 	addr  Addr
 	state PathState

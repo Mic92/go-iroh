@@ -3,7 +3,8 @@ package socket
 import (
 	"net/netip"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // AddrKind tags the variant of an [Addr].
@@ -26,10 +27,10 @@ const (
 // An Addr is never sent on the wire; it is the magic socket's own routing key.
 type Addr struct {
 	kind     AddrKind
-	ip       netip.AddrPort  // AddrIP
-	relayURL base.RelayUrl   // AddrRelay
-	eid      base.EndpointId // AddrRelay
-	custom   base.CustomAddr // AddrCustom
+	ip       netip.AddrPort     // AddrIP
+	relayURL netaddr.RelayUrl   // AddrRelay
+	eid      key.EndpointId     // AddrRelay
+	custom   netaddr.CustomAddr // AddrCustom
 }
 
 // IPAddr returns an [Addr] for a direct IP path. The address is canonicalized
@@ -40,12 +41,12 @@ func IPAddr(ap netip.AddrPort) Addr {
 }
 
 // RelayAddr returns an [Addr] for a relay path reaching eid through url.
-func RelayAddr(url base.RelayUrl, eid base.EndpointId) Addr {
+func RelayAddr(url netaddr.RelayUrl, eid key.EndpointId) Addr {
 	return Addr{kind: AddrRelay, relayURL: url, eid: eid}
 }
 
 // CustomAddr returns an [Addr] for a custom-transport path.
-func CustomAddr(c base.CustomAddr) Addr {
+func CustomAddr(c netaddr.CustomAddr) Addr {
 	return Addr{kind: AddrCustom, custom: c}
 }
 
@@ -74,12 +75,12 @@ func (a Addr) IP() (netip.AddrPort, bool) {
 }
 
 // Relay returns the relay URL, endpoint id, and true if a is an [AddrRelay].
-func (a Addr) Relay() (base.RelayUrl, base.EndpointId, bool) {
+func (a Addr) Relay() (netaddr.RelayUrl, key.EndpointId, bool) {
 	return a.relayURL, a.eid, a.kind == AddrRelay
 }
 
 // Custom returns the custom address and true if a is an [AddrCustom].
-func (a Addr) Custom() (base.CustomAddr, bool) {
+func (a Addr) Custom() (netaddr.CustomAddr, bool) {
 	return a.custom, a.kind == AddrCustom
 }
 
@@ -90,7 +91,7 @@ func (a Addr) Custom() (base.CustomAddr, bool) {
 // value.
 type RecvInfo struct {
 	Remote Addr
-	Local  base.CustomAddr
+	Local  netaddr.CustomAddr
 	// HasLocal reports whether Local is set (custom transports only).
 	HasLocal bool
 }

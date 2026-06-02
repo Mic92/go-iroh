@@ -19,8 +19,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayproto"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // relayPath is the HTTP path of the relay WebSocket endpoint.
@@ -39,7 +40,7 @@ var (
 type Options struct {
 	// SecretKey is the client's secret key, used for the authentication
 	// handshake. Required.
-	SecretKey base.SecretKey
+	SecretKey key.SecretKey
 	// TLSConfig overrides the TLS configuration used for the WSS connection.
 	// If nil, the default WebPKI verification is used.
 	TLSConfig *tls.Config
@@ -55,11 +56,11 @@ type Options struct {
 type Client struct {
 	conn    *websocket.Conn
 	version relayproto.ProtocolVersion
-	url     base.RelayUrl
+	url     netaddr.RelayUrl
 }
 
 // Connect dials the relay at u and completes the protocol handshake.
-func Connect(ctx context.Context, u base.RelayUrl, opts Options) (*Client, error) {
+func Connect(ctx context.Context, u netaddr.RelayUrl, opts Options) (*Client, error) {
 	dialURL, err := websocketURL(u)
 	if err != nil {
 		return nil, err
@@ -124,7 +125,7 @@ func (c *Client) Close() error {
 // handshake runs the challenge-based authentication handshake. The relay sends a
 // ServerChallenge, the client replies with a signed ClientAuth, and the relay
 // responds with ServerConfirmsAuth or ServerDeniesAuth.
-func (c *Client) handshake(ctx context.Context, sk base.SecretKey) error {
+func (c *Client) handshake(ctx context.Context, sk key.SecretKey) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
@@ -178,7 +179,7 @@ func (c *Client) writeFrame(ctx context.Context, data []byte) error {
 
 // websocketURL converts a relay URL (http/https) into the ws/wss dial URL with
 // the relay path, matching the Rust client.
-func websocketURL(u base.RelayUrl) (string, error) {
+func websocketURL(u netaddr.RelayUrl) (string, error) {
 	parsed := u.URL()
 	if parsed == nil {
 		return "", errors.New("relayclient: empty relay url")

@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 // Transports multiplexes the magic socket's network paths: a direct-IP
@@ -34,8 +34,8 @@ type Transports struct {
 // MagicConn satisfies net.PacketConn. It deliberately does not satisfy
 // quic-go's OOBCapablePacketConn: GSO/GRO/ECN are per-platform UDP-socket
 // optimizations that do not generalize across relay and custom transports, so
-// quic-go falls back to its single-packet basicConn path (O1 in iroh/DESIGN.md
-// §6). Correctness does not depend on them.
+// quic-go falls back to its single-packet basicConn path. Correctness does not
+// depend on them.
 //
 // Create one with [NewMagicConn] and start it with [MagicConn.Serve]. The zero
 // value is not usable.
@@ -50,7 +50,7 @@ type MagicConn struct {
 	writeDeadline deadline
 
 	endpointMu     sync.RWMutex
-	endpointSender func(base.EndpointId, []byte) bool
+	endpointSender func(key.EndpointId, []byte) bool
 }
 
 // NewMagicConn returns a MagicConn whose sole transport is an [IpTransport]
@@ -100,7 +100,7 @@ func (m *MagicConn) Relay() *RelayTransport { return m.transports.relay }
 // SetEndpointSender sets the callback used for endpoint-id mapped addresses.
 // The callback should route p through the remote endpoint's actor and report
 // whether it accepted the datagram. A nil callback restores blackhole behavior.
-func (m *MagicConn) SetEndpointSender(send func(base.EndpointId, []byte) bool) {
+func (m *MagicConn) SetEndpointSender(send func(key.EndpointId, []byte) bool) {
 	m.endpointMu.Lock()
 	m.endpointSender = send
 	m.endpointMu.Unlock()
@@ -298,7 +298,7 @@ func (m *MagicConn) SetWriteDeadline(t time.Time) error {
 // it to size the kernel receive buffer and to set the Don't Fragment bit on the
 // direct-IP path. Exposing it does not make MagicConn an OOBCapablePacketConn —
 // that interface also needs ReadMsgUDP/WriteMsgUDP, which MagicConn does not
-// provide — so quic-go still uses its single-packet path (O1, DESIGN.md §6).
+// provide, so quic-go still uses its single-packet path.
 func (m *MagicConn) SyscallConn() (syscall.RawConn, error) { return m.udp.SyscallConn() }
 
 // SetReadBuffer sets the kernel receive buffer size on the underlying UDP

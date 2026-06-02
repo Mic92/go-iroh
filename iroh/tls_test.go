@@ -6,7 +6,6 @@ import (
 	"crypto/x509"
 	"testing"
 
-	"github.com/tmc/go-iroh/base"
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
 	"github.com/tmc/go-iroh/key"
 )
@@ -16,7 +15,7 @@ import (
 // must encode to this exact name, or a go-iroh dialer would address Rust peers
 // with the wrong SNI and fail RFC 7250 server verification.
 func TestServerNameSnapshot(t *testing.T) {
-	sk := base.NewSecretKey([32]byte{})
+	sk := key.NewSecretKey([32]byte{})
 	got := ServerName(sk.Public())
 	const want = "7dl2ff6emqi2qol3l382krodedij45bn3nh479hqo14a32qpr8kg.iroh.invalid"
 	if got != want {
@@ -31,7 +30,7 @@ func TestServerNameRoundTrip(t *testing.T) {
 		var seed [32]byte
 		seed[0] = byte(i)
 		seed[31] = byte(i * 7)
-		id := base.NewSecretKey(seed).Public()
+		id := key.NewSecretKey(seed).Public()
 		name := ServerName(id)
 		got, ok := endpointIdFromServerName(name)
 		if !ok {
@@ -60,8 +59,8 @@ func TestEndpointIdFromServerNameRejects(t *testing.T) {
 }
 
 func TestTLSConfigsMatchIrohRawKeyContract(t *testing.T) {
-	serverKey := base.NewSecretKey([32]byte{1})
-	clientKey := base.NewSecretKey([32]byte{2})
+	serverKey := key.NewSecretKey([32]byte{1})
+	clientKey := key.NewSecretKey([32]byte{2})
 	cache := NewSessionCache()
 	alpns := []string{"iroh-test/0"}
 
@@ -119,10 +118,10 @@ func TestTLSConfigsMatchIrohRawKeyContract(t *testing.T) {
 }
 
 func TestTLSVerifyConnectionIdentityPolicy(t *testing.T) {
-	serverKey := base.NewSecretKey([32]byte{1})
-	clientKey := base.NewSecretKey([32]byte{2})
-	otherClientKey := base.NewSecretKey([32]byte{3})
-	wrongServerKey := base.NewSecretKey([32]byte{4})
+	serverKey := key.NewSecretKey([32]byte{1})
+	clientKey := key.NewSecretKey([32]byte{2})
+	otherClientKey := key.NewSecretKey([32]byte{3})
+	wrongServerKey := key.NewSecretKey([32]byte{4})
 
 	serverTLS, err := serverTLSConfig(serverKey, []string{"iroh-test/0"})
 	if err != nil {

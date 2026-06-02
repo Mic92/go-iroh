@@ -9,9 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayclient"
 	"github.com/tmc/go-iroh/internal/relayproto"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // TestTimeoutError pins the net.Error contract of the read-deadline error: its
@@ -211,11 +212,11 @@ func TestRemotePathStateIsEmptyAndAddrs(t *testing.T) {
 // an IP addr. This backs the recvBatch routing (a RelayAddr surfaces a relay
 // path, a CustomAddr a custom path), recvbatch.go Addr.Relay/Addr.Custom.
 func TestAddrRelayAndCustom(t *testing.T) {
-	u, err := base.ParseRelayUrl("https://relay.example.")
+	u, err := netaddr.ParseRelayUrl("https://relay.example.")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	eid := sk.Public()
 
 	relay := RelayAddr(u, eid)
@@ -228,7 +229,7 @@ func TestAddrRelayAndCustom(t *testing.T) {
 		t.Error("RelayAddr.Custom() ok = true, want false")
 	}
 
-	c := base.CustomAddr{}
+	c := netaddr.CustomAddr{}
 	custom := CustomAddr(c)
 	if _, ok := custom.Custom(); !ok {
 		t.Error("CustomAddr.Custom() ok = false, want true")
@@ -253,13 +254,13 @@ func TestAddrStringForms(t *testing.T) {
 	if got := ip.String(); !strings.HasPrefix(got, "ip:") {
 		t.Errorf("IP Addr.String() = %q, want ip: prefix", got)
 	}
-	u, _ := base.ParseRelayUrl("https://relay.example.")
-	var eid base.EndpointId
+	u, _ := netaddr.ParseRelayUrl("https://relay.example.")
+	var eid key.EndpointId
 	relay := RelayAddr(u, eid)
 	if got := relay.String(); !strings.HasPrefix(got, "relay:") || !strings.Contains(got, "|") {
 		t.Errorf("relay Addr.String() = %q, want relay:...|... form", got)
 	}
-	if got := CustomAddr(base.CustomAddr{}).String(); !strings.HasPrefix(got, "custom:") {
+	if got := CustomAddr(netaddr.CustomAddr{}).String(); !strings.HasPrefix(got, "custom:") {
 		t.Errorf("custom Addr.String() = %q, want custom: prefix", got)
 	}
 	// Out-of-range kind renders "unknown".
@@ -270,7 +271,7 @@ func TestAddrStringForms(t *testing.T) {
 
 // TestActiveRelaySetHomeHome checks the mutex-protected home flag round-trips.
 func TestActiveRelaySetHomeHome(t *testing.T) {
-	r := newActiveRelay(&RelayActor{}, base.RelayUrl{}, false)
+	r := newActiveRelay(&RelayActor{}, netaddr.RelayUrl{}, false)
 	if r.home() {
 		t.Error("newActiveRelay(home=false).home() = true")
 	}
@@ -284,7 +285,7 @@ func TestActiveRelaySetHomeHome(t *testing.T) {
 	}
 
 	// Construct home=true.
-	r2 := newActiveRelay(&RelayActor{}, base.RelayUrl{}, true)
+	r2 := newActiveRelay(&RelayActor{}, netaddr.RelayUrl{}, true)
 	if !r2.home() {
 		t.Error("newActiveRelay(home=true).home() = false")
 	}
@@ -294,8 +295,8 @@ func TestActiveRelaySetHomeHome(t *testing.T) {
 // no route; noteRoute records it (hasRoute=true); dropRoute (EndpointGone)
 // removes it again (relay_actor.go:448,456,468).
 func TestActiveRelayRoutes(t *testing.T) {
-	r := newActiveRelay(&RelayActor{}, base.RelayUrl{}, false)
-	sk, _ := base.GenerateSecretKey()
+	r := newActiveRelay(&RelayActor{}, netaddr.RelayUrl{}, false)
+	sk, _ := key.GenerateSecretKey()
 	eid := sk.Public()
 
 	if r.hasRoute(eid) {
@@ -315,14 +316,14 @@ func TestActiveRelayRoutes(t *testing.T) {
 // a route to an endpoint, or nil when none does (relay_actor.go:301).
 func TestRouteForEndpointLocked(t *testing.T) {
 	a := NewRelayActor(RelayActorConfig{})
-	u1, _ := base.ParseRelayUrl("https://relay1.example.")
-	u2, _ := base.ParseRelayUrl("https://relay2.example.")
+	u1, _ := netaddr.ParseRelayUrl("https://relay1.example.")
+	u2, _ := netaddr.ParseRelayUrl("https://relay2.example.")
 	r1 := newActiveRelay(a, u1, false)
 	r2 := newActiveRelay(a, u2, false)
 	a.active[u1.String()] = r1
 	a.active[u2.String()] = r2
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	eid := sk.Public()
 
 	a.mu.Lock()
@@ -910,7 +911,7 @@ func TestTriggerHolepunchInitiateRoundError(t *testing.T) {
 // 137).
 func TestSocketCustomMappedAddrFor(t *testing.T) {
 	s := NewSocket()
-	c := base.CustomAddr{}
+	c := netaddr.CustomAddr{}
 
 	m1 := s.CustomMappedAddrFor(c)
 	m2 := s.CustomMappedAddrFor(c)
@@ -940,8 +941,8 @@ func TestSocketCustomMappedAddrFor(t *testing.T) {
 // down to a fallback IP path (socket.go:115).
 func TestSocketPathAddr(t *testing.T) {
 	s := NewSocket()
-	u, _ := base.ParseRelayUrl("https://relay.example.")
-	sk, _ := base.GenerateSecretKey()
+	u, _ := netaddr.ParseRelayUrl("https://relay.example.")
+	sk, _ := key.GenerateSecretKey()
 	eid := sk.Public()
 
 	// Real IP -> IP path, port preserved.
@@ -1023,10 +1024,10 @@ func TestRelayTransportServeForwardsRecv(t *testing.T) {
 	client := newFakeRelayClient()
 	// Build the actor but do not run it here: RelayTransport.Serve runs it
 	// exactly once. (startActorWith would run a second Run, double-closing recvCh.)
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	a := NewRelayActor(RelayActorConfig{
 		SecretKey: sk,
-		dialer:    func(context.Context, base.RelayUrl, relayclient.Options) (relayClient, error) { return client, nil },
+		dialer:    func(context.Context, netaddr.RelayUrl, relayclient.Options) (relayClient, error) { return client, nil },
 	})
 	sock := NewSocket()
 	recvCh := make(chan recvBatch, 16)
@@ -1037,11 +1038,11 @@ func TestRelayTransportServeForwardsRecv(t *testing.T) {
 	t.Cleanup(cancel)
 
 	url := testURL(t)
-	src, _ := base.GenerateSecretKey()
+	src, _ := key.GenerateSecretKey()
 	a.SetHomeRelay(url)
 
 	// Kick the active relay alive so it begins draining recv frames.
-	dst, _ := base.GenerateSecretKey()
+	dst, _ := key.GenerateSecretKey()
 	a.Send(RelaySendItem{RemoteEndpoint: dst.Public(), URL: url, Datagrams: relayproto.DatagramsFromBytes([]byte("x"))})
 	waitDatagramSend(t, client)
 
@@ -1082,7 +1083,7 @@ func TestRelayTransportDeliverSegments(t *testing.T) {
 	rt := NewRelayTransport(sock, NewRelayActor(RelayActorConfig{}), recvCh)
 
 	url := testURL(t)
-	src, _ := base.GenerateSecretKey()
+	src, _ := key.GenerateSecretKey()
 	dm := RelayRecvDatagram{
 		URL:       url,
 		Src:       src.Public(),
@@ -1130,7 +1131,7 @@ func TestDefaultRelayDialer(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // abort before any network work
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)

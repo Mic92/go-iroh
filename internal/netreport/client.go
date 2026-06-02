@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	itls "github.com/tmc/go-iroh/internal/itls/tls"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -319,7 +319,7 @@ func (c *Client) addReportHistoryAndSetPreferredRelay(r *Report) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var prevRelay base.RelayUrl
+	var prevRelay netaddr.RelayUrl
 	if c.last != nil {
 		prevRelay = c.last.PreferredRelay
 		// Carry forward mapping-varies info when this report lacks it.

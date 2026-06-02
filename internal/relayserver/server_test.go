@@ -6,30 +6,31 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayclient"
 	"github.com/tmc/go-iroh/internal/relayproto"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func TestRelayServerForwardsDatagramAndPong(t *testing.T) {
 	ts := httptest.NewServer(New())
 	defer ts.Close()
 
-	u, err := base.ParseRelayUrl(ts.URL)
+	u, err := netaddr.ParseRelayUrl(ts.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	sk1, _ := base.GenerateSecretKey()
+	sk1, _ := key.GenerateSecretKey()
 	c1, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: sk1})
 	if err != nil {
 		t.Fatalf("connect c1: %v", err)
 	}
 	defer c1.Close()
 
-	sk2, _ := base.GenerateSecretKey()
+	sk2, _ := key.GenerateSecretKey()
 	c2, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: sk2})
 	if err != nil {
 		t.Fatalf("connect c2: %v", err)

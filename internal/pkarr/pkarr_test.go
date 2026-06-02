@@ -6,12 +6,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
 func TestSignedPacketRoundTrip(t *testing.T) {
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestSignedPacketRoundTrip(t *testing.T) {
 }
 
 func TestSignedPacketWireLayout(t *testing.T) {
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestSignedPacketWireLayout(t *testing.T) {
 }
 
 func TestSignedPacketVerifyRejectsTamper(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	pkt, err := FromTxtStrings(sk, "_iroh", []string{"addr=127.0.0.1:1"}, 30)
 	if err != nil {
 		t.Fatal(err)
@@ -128,7 +128,7 @@ func TestSignedPacketTooShort(t *testing.T) {
 }
 
 func TestRelayPayloadRoundTrip(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	pkt, err := FromTxtStrings(sk, "_iroh", []string{"addr=127.0.0.1:1"}, 30)
 	if err != nil {
 		t.Fatal(err)
@@ -155,7 +155,7 @@ func TestTimestampMonotonic(t *testing.T) {
 }
 
 func TestMoreRecentThan(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	older, _ := FromTxtStrings(sk, "_iroh", []string{"addr=127.0.0.1:1"}, 30)
 	newer, _ := FromTxtStrings(sk, "_iroh", []string{"addr=127.0.0.1:2"}, 30)
 	if !newer.MoreRecentThan(older) {

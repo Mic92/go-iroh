@@ -3,11 +3,11 @@ package relayproto
 import (
 	"testing"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 func TestClientAuthRoundTrip(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	var challenge ServerChallenge
 	for i := range challenge.Challenge {
 		challenge.Challenge[i] = byte(i)
@@ -35,7 +35,7 @@ func TestClientAuthRoundTrip(t *testing.T) {
 }
 
 func TestClientAuthVerifyRejectsWrongChallenge(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	c1 := ServerChallenge{Challenge: [16]byte{1, 2, 3}}
 	c2 := ServerChallenge{Challenge: [16]byte{4, 5, 6}}
 	auth := NewClientAuth(sk, c1)
@@ -94,8 +94,8 @@ func TestServerDeniesAuthRoundTrip(t *testing.T) {
 func TestClientAuthPostcardLayout(t *testing.T) {
 	// Verify the exact postcard body layout: 32-byte pubkey, then varint(64)=0x40,
 	// then 64 signature bytes. Frame type ClientAuth = 1 (one varint byte 0x01).
-	sk := base.NewSecretKey([32]byte{1})
-	auth := ClientAuth{PublicKey: sk.Public(), Signature: base.NewSignature([64]byte{})}
+	sk := key.NewSecretKey([32]byte{1})
+	auth := ClientAuth{PublicKey: sk.Public(), Signature: key.NewSignature([64]byte{})}
 	encoded := auth.AppendTo(nil)
 	wantLen := 1 + 32 + 1 + 64 // frametype + pubkey + varint(64) + sig
 	if len(encoded) != wantLen {

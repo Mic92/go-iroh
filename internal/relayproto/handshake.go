@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 	"lukechampine.com/blake3"
 )
 
@@ -45,12 +45,12 @@ func (c ServerChallenge) AppendTo(dst []byte) []byte {
 // ClientAuth is the client's authentication response: its public key and a
 // signature of the challenge's message-to-sign.
 type ClientAuth struct {
-	PublicKey base.PublicKey
-	Signature base.Signature
+	PublicKey key.PublicKey
+	Signature key.Signature
 }
 
 // NewClientAuth builds a ClientAuth for challenge using secretKey.
-func NewClientAuth(secretKey base.SecretKey, challenge ServerChallenge) ClientAuth {
+func NewClientAuth(secretKey key.SecretKey, challenge ServerChallenge) ClientAuth {
 	msg := challenge.messageToSign()
 	return ClientAuth{
 		PublicKey: secretKey.Public(),
@@ -117,19 +117,19 @@ func ParseHandshakeFrame(content []byte) (any, error) {
 		copy(c.Challenge[:], body)
 		return &c, nil
 	case FrameClientAuth:
-		if len(body) < base.PublicKeyLength {
+		if len(body) < key.PublicKeyLength {
 			return nil, ErrHandshakeDeserial
 		}
-		pk, err := base.PublicKeyFromSlice(body[:base.PublicKeyLength])
+		pk, err := key.PublicKeyFromSlice(body[:key.PublicKeyLength])
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrHandshakeDeserial, err)
 		}
-		body = body[base.PublicKeyLength:]
+		body = body[key.PublicKeyLength:]
 		n, rest, err := readPostcardVarint(body)
-		if err != nil || n != uint64(base.SignatureLength) || len(rest) != base.SignatureLength {
+		if err != nil || n != uint64(key.SignatureLength) || len(rest) != key.SignatureLength {
 			return nil, ErrHandshakeDeserial
 		}
-		sig, err := base.SignatureFromSlice(rest)
+		sig, err := key.SignatureFromSlice(rest)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrHandshakeDeserial, err)
 		}

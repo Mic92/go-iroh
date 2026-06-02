@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayproto"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // fakeRelay is a minimal in-process relay server speaking enough of the protocol
@@ -93,9 +94,9 @@ func fakeRelay(t *testing.T, deny bool) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func relayURL(t *testing.T, ts *httptest.Server) base.RelayUrl {
+func relayURL(t *testing.T, ts *httptest.Server) netaddr.RelayUrl {
 	t.Helper()
-	u, err := base.ParseRelayUrl(ts.URL)
+	u, err := netaddr.ParseRelayUrl(ts.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func TestClientConnectAndEcho(t *testing.T) {
 	ts := fakeRelay(t, false)
 	defer ts.Close()
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	ctx := context.Background()
 	c, err := Connect(ctx, relayURL(t, ts), Options{SecretKey: sk})
 	if err != nil {
@@ -115,7 +116,7 @@ func TestClientConnectAndEcho(t *testing.T) {
 	defer c.Close()
 
 	// Send a datagram destined for some peer.
-	dst, _ := base.GenerateSecretKey()
+	dst, _ := key.GenerateSecretKey()
 	payload := []byte("hello relay")
 	err = c.Send(ctx, relayproto.ClientToRelayMsg{
 		Type:          relayproto.FrameClientToRelayDatagram,
@@ -145,7 +146,7 @@ func TestClientHandshakeDenied(t *testing.T) {
 	ts := fakeRelay(t, true)
 	defer ts.Close()
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if err == nil {
 		t.Fatal("expected handshake denial error")
@@ -161,7 +162,7 @@ func TestWebsocketURL(t *testing.T) {
 		{"http://localhost:8080", "ws://localhost:8080/relay"},
 	}
 	for _, c := range cases {
-		u, err := base.ParseRelayUrl(c.in)
+		u, err := netaddr.ParseRelayUrl(c.in)
 		if err != nil {
 			t.Fatal(err)
 		}

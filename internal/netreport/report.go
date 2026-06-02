@@ -4,7 +4,7 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // Report describes the network environment as measured by a single
@@ -29,7 +29,7 @@ type Report struct {
 
 	// PreferredRelay is the relay with the best recent latency, chosen with
 	// hysteresis. It is the zero RelayUrl when no relay responded.
-	PreferredRelay base.RelayUrl
+	PreferredRelay netaddr.RelayUrl
 
 	// RelayLatency holds per-relay, per-probe latencies.
 	RelayLatency RelayLatencies
@@ -52,7 +52,7 @@ func (r *Report) HasUDP() bool { return r.UDPv4 || r.UDPv6 }
 // probeReport is the result of one probe, fed to [Report.update].
 type probeReport struct {
 	probe   Probe
-	relay   base.RelayUrl
+	relay   netaddr.RelayUrl
 	latency time.Duration
 
 	// addr is the reflexive address observed by a QAD probe. It is the zero
@@ -129,15 +129,15 @@ type RelayLatencies struct {
 	ipv6  map[string]time.Duration
 	https map[string]time.Duration
 	// urls remembers the RelayUrl behind each key so iteration and lookup can
-	// return a base.RelayUrl without re-parsing.
-	urls map[string]base.RelayUrl
+	// return a netaddr.RelayUrl without re-parsing.
+	urls map[string]netaddr.RelayUrl
 }
 
 // updateRelay records latency for url under probe, keeping the minimum seen.
 // Mirrors RelayLatencies::update_relay (report.rs:132).
-func (rl *RelayLatencies) updateRelay(url base.RelayUrl, latency time.Duration, probe Probe) {
+func (rl *RelayLatencies) updateRelay(url netaddr.RelayUrl, latency time.Duration, probe Probe) {
 	if rl.urls == nil {
-		rl.urls = map[string]base.RelayUrl{}
+		rl.urls = map[string]netaddr.RelayUrl{}
 	}
 	key := url.String()
 	rl.urls[key] = url
@@ -164,7 +164,7 @@ func (rl *RelayLatencies) merge(other *RelayLatencies) {
 
 // get returns the lowest latency recorded for url across all probe types and
 // whether any was recorded. Mirrors RelayLatencies::get (report.rs:200).
-func (rl *RelayLatencies) get(url base.RelayUrl) (time.Duration, bool) {
+func (rl *RelayLatencies) get(url netaddr.RelayUrl) (time.Duration, bool) {
 	key := url.String()
 	best := time.Duration(0)
 	found := false
@@ -184,9 +184,9 @@ func (rl *RelayLatencies) isEmpty() bool {
 
 // urlsByKey returns each relay url that has at least one recorded latency, in
 // no particular order. Callers needing determinism must sort.
-func (rl *RelayLatencies) relays() []base.RelayUrl {
+func (rl *RelayLatencies) relays() []netaddr.RelayUrl {
 	seen := map[string]struct{}{}
-	var out []base.RelayUrl
+	var out []netaddr.RelayUrl
 	for _, m := range []map[string]time.Duration{rl.https, rl.ipv4, rl.ipv6} {
 		for key := range m {
 			if _, ok := seen[key]; ok {

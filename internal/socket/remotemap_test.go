@@ -9,7 +9,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // fakeConn is a test [Connection]. Close() ends it; SmoothedRTT and RemoteAddr
@@ -80,20 +81,19 @@ func (c *fakeConn) NATTraversalAddresses() ([]netip.AddrPort, error) {
 }
 func (c *fakeConn) Close() { c.once.Do(func() { close(c.done) }) }
 
-func testEndpointId(t *testing.T) base.EndpointId {
+func testEndpointId(t *testing.T) key.EndpointId {
 	t.Helper()
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
 	return sk.Public()
 }
 
-// TestRemoteMapSingleActorRace is the O12 gate (iroh/DESIGN.md §6): with a tiny
-// idle timeout, actors are constantly idling out and being re-spawned while
-// AddConnection hammers the same id. The registry must always hold exactly one
-// actor per id — never two — even when an AddConnection lands exactly as the
-// idle teardown fires. Run with -race.
+// TestRemoteMapSingleActorRace uses a tiny idle timeout so actors are constantly
+// idling out and being re-spawned while AddConnection hammers the same id. The
+// registry must always hold exactly one actor per id — never two — even when an
+// AddConnection lands exactly as the idle teardown fires. Run with -race.
 func TestRemoteMapSingleActorRace(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -422,10 +422,10 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	resolved := []base.TransportAddr{
-		base.IPAddr{Addr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 7)},
+	resolved := []netaddr.TransportAddr{
+		netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 7)},
 	}
-	resolve := func(ctx context.Context, id base.EndpointId) ([]base.TransportAddr, error) {
+	resolve := func(ctx context.Context, id key.EndpointId) ([]netaddr.TransportAddr, error) {
 		return resolved, nil
 	}
 	m := newRemoteMap(ctx, BiasedRttPathSelector{}, resolve, time.Second)
@@ -437,7 +437,7 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	defer c.Close()
 	m.AddConnection(id, c)
 
-	if err := m.ResolveRemote(base.NewEndpointAddr(id)); err != nil {
+	if err := m.ResolveRemote(netaddr.NewEndpointAddr(id)); err != nil {
 		t.Fatalf("ResolveRemote: %v", err)
 	}
 

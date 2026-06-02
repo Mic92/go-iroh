@@ -5,7 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func v4Addr(port uint16) Addr {
@@ -18,11 +19,11 @@ func v6Addr(port uint16) Addr {
 
 func relayAddr(t *testing.T, host string) Addr {
 	t.Helper()
-	u, err := base.ParseRelayUrl("https://" + host)
+	u, err := netaddr.ParseRelayUrl("https://" + host)
 	if err != nil {
 		t.Fatalf("parse relay url: %v", err)
 	}
-	var eid base.EndpointId
+	var eid key.EndpointId
 	return RelayAddr(u, eid)
 }
 

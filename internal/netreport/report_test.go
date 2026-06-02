@@ -5,12 +5,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
-func mustRelay(t *testing.T, s string) base.RelayUrl {
+func mustRelay(t *testing.T, s string) netaddr.RelayUrl {
 	t.Helper()
-	u, err := base.ParseRelayUrl(s)
+	u, err := netaddr.ParseRelayUrl(s)
 	if err != nil {
 		t.Fatalf("parse relay url %q: %v", s, err)
 	}

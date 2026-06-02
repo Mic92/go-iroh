@@ -6,17 +6,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 // clientKey is SecretKey::from_bytes(&[42u8; 32]) from the Rust snapshot tests.
-func clientKey(t *testing.T) base.EndpointId {
+func clientKey(t *testing.T) key.EndpointId {
 	t.Helper()
 	var seed [32]byte
 	for i := range seed {
 		seed[i] = 42
 	}
-	pub := base.NewSecretKey(seed).Public()
+	pub := key.NewSecretKey(seed).Public()
 	// The Rust snapshot's public key for [42;32].
 	const wantHex = "197f6b23e16c8532c6abc838facd5ea789be0c76b29203340 39bfa8b3d368d61"
 	want := strings.ReplaceAll(wantHex, " ", "")

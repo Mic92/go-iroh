@@ -1,8 +1,9 @@
 // Command iroh is a small utility for working with iroh identities and
 // addresses: generating and inspecting keys, and parsing endpoint info.
 //
-// It exercises the go-iroh base and dns packages and is the subject of the
-// scripttest-based CLI tests (including comparison against the Rust iroh tools).
+// It exercises the go-iroh key, netaddr, and dns packages and is the subject of
+// the scripttest-based CLI tests (including comparison against the Rust iroh
+// tools).
 package main
 
 import (
@@ -14,7 +15,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
 
@@ -67,13 +68,13 @@ func cmdKey(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	switch args[0] {
 	case "gen":
-		var seed [base.SecretKeyLength]byte
+		var seed [key.SecretKeyLength]byte
 		seedSet := false
 		for _, a := range args[1:] {
 			if s, ok := strings.CutPrefix(a, "--seed="); ok {
 				b, err := hex.DecodeString(s)
-				if err != nil || len(b) != base.SecretKeyLength {
-					return fmt.Errorf("key gen: --seed must be %d hex bytes", base.SecretKeyLength)
+				if err != nil || len(b) != key.SecretKeyLength {
+					return fmt.Errorf("key gen: --seed must be %d hex bytes", key.SecretKeyLength)
 				}
 				copy(seed[:], b)
 				seedSet = true
@@ -84,7 +85,7 @@ func cmdKey(args []string, stdin io.Reader, stdout io.Writer) error {
 				return err
 			}
 		}
-		sk := base.NewSecretKey(seed)
+		sk := key.NewSecretKey(seed)
 		b := sk.Bytes()
 		fmt.Fprintln(stdout, hex.EncodeToString(b[:]))
 		return nil
@@ -92,7 +93,7 @@ func cmdKey(args []string, stdin io.Reader, stdout io.Writer) error {
 		if len(args) < 2 {
 			return fmt.Errorf("key public: missing secret hex")
 		}
-		sk, err := base.ParseSecretKey(args[1])
+		sk, err := key.ParseSecretKey(args[1])
 		if err != nil {
 			return fmt.Errorf("key public: %w", err)
 		}
@@ -102,7 +103,7 @@ func cmdKey(args []string, stdin io.Reader, stdout io.Writer) error {
 		if len(args) < 2 {
 			return fmt.Errorf("key z32: missing key")
 		}
-		pk, err := base.ParsePublicKey(args[1])
+		pk, err := key.ParsePublicKey(args[1])
 		if err != nil {
 			return fmt.Errorf("key z32: %w", err)
 		}
@@ -117,7 +118,7 @@ func cmdID(args []string, stdout io.Writer) error {
 	if len(args) < 2 || args[0] != "parse" {
 		return fmt.Errorf("id: usage: id parse <key>")
 	}
-	pk, err := base.ParsePublicKey(args[1])
+	pk, err := key.ParsePublicKey(args[1])
 	if err != nil {
 		return fmt.Errorf("id parse: %w", err)
 	}
@@ -141,7 +142,7 @@ func cmdSign(args []string, stdout io.Writer) error {
 	if len(args) < 2 {
 		return fmt.Errorf("sign: usage: sign <secret-hex> <msg>")
 	}
-	sk, err := base.ParseSecretKey(args[0])
+	sk, err := key.ParseSecretKey(args[0])
 	if err != nil {
 		return fmt.Errorf("sign: %w", err)
 	}
@@ -155,7 +156,7 @@ func cmdVerify(args []string, stdout io.Writer) error {
 	if len(args) < 3 {
 		return fmt.Errorf("verify: usage: verify <pub> <sig-hex> <msg>")
 	}
-	pk, err := base.ParsePublicKey(args[0])
+	pk, err := key.ParsePublicKey(args[0])
 	if err != nil {
 		return fmt.Errorf("verify: %w", err)
 	}
@@ -163,7 +164,7 @@ func cmdVerify(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("verify: bad signature hex: %w", err)
 	}
-	sig, err := base.SignatureFromSlice(sigBytes)
+	sig, err := key.SignatureFromSlice(sigBytes)
 	if err != nil {
 		return fmt.Errorf("verify: %w", err)
 	}

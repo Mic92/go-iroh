@@ -9,7 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // Actor timing constants. These match the Rust reference
@@ -113,7 +114,7 @@ type natTraversalAddressConnection interface {
 //
 // It is the hook for the Rust RemoteStateActor::resolve_remote path
 // (remote_state.rs:843), wired in slice G's address lookup.
-type ResolveFunc func(ctx context.Context, id base.EndpointId) ([]base.TransportAddr, error)
+type ResolveFunc func(ctx context.Context, id key.EndpointId) ([]netaddr.TransportAddr, error)
 
 // remoteMessage is the actor inbox message. Exactly one field is set.
 type remoteMessage struct {
@@ -132,7 +133,7 @@ type addConnectionMsg struct {
 // resolveMsg asks the actor to resolve more addresses for the remote and add
 // them as candidate paths. reply receives nil on success or the lookup error.
 type resolveMsg struct {
-	addrs base.EndpointAddr
+	addrs netaddr.EndpointAddr
 	reply chan<- error
 }
 
@@ -150,14 +151,14 @@ type connState struct {
 // is the Go analog of the Rust RemoteStateActor
 // (iroh/src/socket/remote_map/remote_state.rs).
 //
-// QNT/DISCO boundary (iroh/DESIGN.md §3.4): the actor does not build traversal
-// frames itself. It advertises vetted local candidates and asks qng to start NAT
-// traversal rounds; qng owns probe timers, response matching, and route-bearing
-// path opening. Path selection is driven by qng path observability.
+// The actor does not build NAT traversal frames itself. It advertises vetted
+// local candidates and asks qng to start traversal rounds; qng owns probe
+// timers, response matching, and route-bearing path opening. Path selection is
+// driven by qng path observability.
 //
 // Create an actor with the RemoteMap; do not construct one directly.
 type RemoteStateActor struct {
-	id       base.EndpointId
+	id       key.EndpointId
 	selector PathSelector
 	resolve  ResolveFunc
 	idle     time.Duration
@@ -185,7 +186,7 @@ type RemoteStateActor struct {
 // newRemoteStateActor creates and starts an actor for id. The returned actor is
 // already running its loop in a goroutine; it stops when ctx is cancelled or it
 // idles out, calling onExit on the way out.
-func newRemoteStateActor(ctx context.Context, id base.EndpointId, selector PathSelector, resolve ResolveFunc, idle time.Duration, onExit func()) *RemoteStateActor {
+func newRemoteStateActor(ctx context.Context, id key.EndpointId, selector PathSelector, resolve ResolveFunc, idle time.Duration, onExit func()) *RemoteStateActor {
 	if selector == nil {
 		selector = BiasedRttPathSelector{}
 	}
@@ -209,7 +210,7 @@ func newRemoteStateActor(ctx context.Context, id base.EndpointId, selector PathS
 }
 
 // ID returns the remote endpoint this actor manages.
-func (a *RemoteStateActor) ID() base.EndpointId { return a.id }
+func (a *RemoteStateActor) ID() key.EndpointId { return a.id }
 
 // donec is closed when the actor goroutine has exited.
 func (a *RemoteStateActor) donec() <-chan struct{} { return a.done }
@@ -237,7 +238,7 @@ func (a *RemoteStateActor) AddConnection(conn Connection) (events <-chan PathEve
 // [ResolveFunc] and register them as candidate paths. It blocks until resolution
 // completes, returning the lookup error if any. With no resolver and no addrs it
 // returns nil immediately.
-func (a *RemoteStateActor) ResolveRemote(addr base.EndpointAddr) error {
+func (a *RemoteStateActor) ResolveRemote(addr netaddr.EndpointAddr) error {
 	reply := make(chan error, 1)
 	select {
 	case a.inbox <- remoteMessage{resolve: &resolveMsg{addrs: addr, reply: reply}}:
@@ -856,8 +857,8 @@ func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) erro
 // advisory only.
 //
 // qng addresses datagrams to a concrete path directly through the MagicConn, so
-// this method backs the Mixed-EndpointId send path (DESIGN.md §3.1), which is
-// exercised by unit tests rather than the QUIC data plane in this slice.
+// this method backs the Mixed-EndpointId send path, which is exercised by unit
+// tests rather than the QUIC data plane in this slice.
 func (a *RemoteStateActor) SendDatagram(p []byte, send func(Addr, []byte) bool) error {
 	a.mu.Lock()
 	var targets []Addr
@@ -890,16 +891,16 @@ func resetTimer(t *time.Timer, d time.Duration) {
 	t.Reset(d)
 }
 
-// transportToAddr converts a base.TransportAddr (the public address type) to the
+// transportToAddr converts a netaddr.TransportAddr (the public address type) to the
 // socket package's internal [Addr], pairing relay addresses with the remote id.
 // It returns ok=false for address kinds the magic socket cannot route.
-func transportToAddr(ta base.TransportAddr, id base.EndpointId) (Addr, bool) {
+func transportToAddr(ta netaddr.TransportAddr, id key.EndpointId) (Addr, bool) {
 	switch v := ta.(type) {
-	case base.IPAddr:
+	case netaddr.IPAddr:
 		return IPAddr(v.Addr), true
-	case base.RelayAddr:
+	case netaddr.RelayAddr:
 		return RelayAddr(v.URL, id), true
-	case base.CustomAddr:
+	case netaddr.CustomAddr:
 		return CustomAddr(v), true
 	default:
 		return Addr{}, false

@@ -12,8 +12,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayproto"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // scriptRelay is a configurable in-process relay server. The handler runs after
@@ -78,7 +79,7 @@ func TestClientVersion(t *testing.T) {
 	ts := fakeRelay(t, false)
 	defer ts.Close()
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	c, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -95,7 +96,7 @@ func TestClientVersion(t *testing.T) {
 func TestConnectInvalidURL(t *testing.T) {
 	// The zero RelayUrl has a nil underlying URL, so websocketURL fails before
 	// any dial is attempted.
-	_, err := Connect(context.Background(), base.RelayUrl{}, Options{})
+	_, err := Connect(context.Background(), netaddr.RelayUrl{}, Options{})
 	if err == nil {
 		t.Fatal("expected error for empty relay url")
 	}
@@ -122,7 +123,7 @@ func TestConnectAuthTokenHeader(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	c, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk, AuthToken: "token123"})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -165,7 +166,7 @@ func TestConnectTLSConfig(t *testing.T) {
 	tlsConfig := &tls.Config{RootCAs: certPool}
 
 	u := relayURL(t, ts) // https:// URL -> wss:// dial
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	c, err := Connect(context.Background(), u, Options{SecretKey: sk, TLSConfig: tlsConfig})
 	if err != nil {
 		t.Fatalf("Connect over TLS: %v", err)
@@ -182,7 +183,7 @@ func TestConnectDialFails(t *testing.T) {
 	u := relayURL(t, ts)
 	ts.Close()
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), u, Options{SecretKey: sk})
 	if err == nil {
 		t.Fatal("expected dial error")
@@ -205,7 +206,7 @@ func TestConnectBadVersionHeader(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if !errors.Is(err, ErrBadVersionHeader) {
 		t.Fatalf("error = %v, want ErrBadVersionHeader", err)
@@ -228,7 +229,7 @@ func TestRecvReadError(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	c, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -249,7 +250,7 @@ func TestHandshakeChallengeReadError(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if !errors.Is(err, ErrHandshake) {
 		t.Fatalf("error = %v, want ErrHandshake", err)
@@ -266,8 +267,8 @@ func TestHandshakeSignsChallenge(t *testing.T) {
 	var (
 		challenge   relayproto.ServerChallenge
 		verifyErr   error
-		gotPubKey   base.PublicKey
-		expectedKey base.PublicKey
+		gotPubKey   key.PublicKey
+		expectedKey key.PublicKey
 	)
 	for i := range challenge.Challenge {
 		challenge.Challenge[i] = byte(0xA0 + i)
@@ -297,7 +298,7 @@ func TestHandshakeSignsChallenge(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	expectedKey = sk.Public()
 	c, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if err != nil {
@@ -322,7 +323,7 @@ func TestHandshakeWriteError(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if !errors.Is(err, ErrHandshake) {
 		t.Fatalf("error = %v, want ErrHandshake", err)
@@ -339,7 +340,7 @@ func TestHandshakeConfirmsWithoutChallenge(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	c, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
@@ -355,7 +356,7 @@ func TestHandshakeDeniesWithoutChallenge(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if !errors.Is(err, relayproto.ErrServerDeniedAuth) {
 		t.Fatalf("error = %v, want ErrServerDeniedAuth", err)
@@ -370,14 +371,14 @@ func TestHandshakeUnexpectedFirstFrame(t *testing.T) {
 	// in the challenge slot); handshake reports ErrHandshake.
 	ts := newScriptServer(t, scriptRelay{
 		run: func(t *testing.T, ctx context.Context, conn *websocket.Conn) {
-			sk, _ := base.GenerateSecretKey()
+			sk, _ := key.GenerateSecretKey()
 			var ch relayproto.ServerChallenge
 			bogus := relayproto.NewClientAuth(sk, ch)
 			conn.Write(ctx, websocket.MessageBinary, bogus.AppendTo(nil))
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if !errors.Is(err, ErrHandshake) {
 		t.Fatalf("error = %v, want ErrHandshake", err)
@@ -402,7 +403,7 @@ func TestExpectConfirmationReadError(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if !errors.Is(err, ErrHandshake) {
 		t.Fatalf("error = %v, want ErrHandshake", err)
@@ -418,7 +419,7 @@ func TestExpectConfirmationDenied(t *testing.T) {
 	ts := fakeRelay(t, true)
 	defer ts.Close()
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if !errors.Is(err, relayproto.ErrServerDeniedAuth) {
 		t.Fatalf("error = %v, want ErrServerDeniedAuth", err)
@@ -440,7 +441,7 @@ func TestExpectConfirmationUnexpectedFrame(t *testing.T) {
 		},
 	})
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	_, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk})
 	if !errors.Is(err, ErrHandshake) {
 		t.Fatalf("error = %v, want ErrHandshake", err)
@@ -461,7 +462,7 @@ func TestWebsocketURLPath(t *testing.T) {
 		{"wss://relay.example.com", "wss://relay.example.com/relay"},
 	}
 	for _, c := range cases {
-		u, err := base.ParseRelayUrl(c.in)
+		u, err := netaddr.ParseRelayUrl(c.in)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -476,7 +477,7 @@ func TestWebsocketURLPath(t *testing.T) {
 }
 
 func TestWebsocketURLEmpty(t *testing.T) {
-	_, err := websocketURL(base.RelayUrl{})
+	_, err := websocketURL(netaddr.RelayUrl{})
 	if err == nil {
 		t.Fatal("expected error for empty relay url")
 	}
@@ -491,8 +492,8 @@ func ExampleClient() {
 	ts := exampleRelay()
 	defer ts.Close()
 
-	u, _ := base.ParseRelayUrl(ts.URL)
-	sk, _ := base.GenerateSecretKey()
+	u, _ := netaddr.ParseRelayUrl(ts.URL)
+	sk, _ := key.GenerateSecretKey()
 
 	ctx := context.Background()
 	c, err := Connect(ctx, u, Options{SecretKey: sk})
@@ -502,7 +503,7 @@ func ExampleClient() {
 	}
 	defer c.Close()
 
-	peer, _ := base.GenerateSecretKey()
+	peer, _ := key.GenerateSecretKey()
 	if err := c.Send(ctx, relayproto.ClientToRelayMsg{
 		Type:          relayproto.FrameClientToRelayDatagram,
 		DstEndpointId: peer.Public(),

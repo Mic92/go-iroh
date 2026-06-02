@@ -5,7 +5,8 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // TestMappedAddrBytes pins the mapped-address byte scheme to the Rust
@@ -175,11 +176,11 @@ func TestClassify(t *testing.T) {
 
 func TestPathAddrMappedReverseLookup(t *testing.T) {
 	s := NewSocket()
-	url, err := base.ParseRelayUrl("https://relay.example.com")
+	url, err := netaddr.ParseRelayUrl("https://relay.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +196,7 @@ func TestPathAddrMappedReverseLookup(t *testing.T) {
 		t.Errorf("PathAddr(relay mapped) = (%s, %s), want (%s, %s)", gotURL, gotEID, url, eid)
 	}
 
-	custom := base.NewCustomAddr(7, []byte("peer"))
+	custom := netaddr.NewCustomAddr(7, []byte("peer"))
 	customMapped := s.CustomMappedAddrFor(custom)
 	gotCustom := s.PathAddr(eid, net.UDPAddrFromAddrPort(customMapped.AddrPort()))
 	got, ok := gotCustom.Custom()

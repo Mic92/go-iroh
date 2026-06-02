@@ -3,13 +3,13 @@ package socket
 import (
 	"context"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // CustomDatagram is one datagram received by a [CustomTransport].
 type CustomDatagram struct {
-	Remote   base.CustomAddr
-	Local    base.CustomAddr
+	Remote   netaddr.CustomAddr
+	Local    netaddr.CustomAddr
 	HasLocal bool
 	Data     []byte
 }
@@ -25,7 +25,7 @@ type CustomTransport interface {
 
 	// Send sends p to remote. local is nil when qng did not select a specific
 	// local custom address for the path.
-	Send(remote base.CustomAddr, local *base.CustomAddr, p []byte) bool
+	Send(remote netaddr.CustomAddr, local *netaddr.CustomAddr, p []byte) bool
 }
 
 type customTransport struct {
@@ -55,7 +55,7 @@ func (t *customTransport) Serve(ctx context.Context) {
 	})
 }
 
-func (t *customTransport) Send(remote base.CustomAddr, local *base.CustomAddr, p []byte) bool {
+func (t *customTransport) Send(remote netaddr.CustomAddr, local *netaddr.CustomAddr, p []byte) bool {
 	data := make([]byte, len(p))
 	copy(data, p)
 	return t.transport.Send(remote, local, data)

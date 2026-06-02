@@ -6,7 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // ipPath returns a distinct IP candidate path keyed by index.
@@ -19,11 +20,11 @@ func ipPath(i int) Addr {
 // endpoint ids.
 func relayPath(t *testing.T, i int) Addr {
 	t.Helper()
-	u, err := base.ParseRelayUrl(fmt.Sprintf("https://relay%d.localhost", i))
+	u, err := netaddr.ParseRelayUrl(fmt.Sprintf("https://relay%d.localhost", i))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var eid base.EndpointId
+	var eid key.EndpointId
 	return RelayAddr(u, eid)
 }
 

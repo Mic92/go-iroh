@@ -52,8 +52,3 @@ without certificate-type negotiation and SPKI parsing, a bare iroh public key
 still fails before that callback can establish identity. After any attempted
 removal, the root direct-QUIC tests and live Rust interop gates must pass without
 importing `internal/itls/tls`.
-
-## DESIGN.md
-
-`DESIGN.md` records the source-grounded analysis of exactly which `crypto/tls`
-functions the RFC 7250 patch touches.

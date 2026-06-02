@@ -15,9 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -180,7 +181,7 @@ exit 2
 }
 
 func TestParseRustListenConnectLine(t *testing.T) {
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -227,7 +228,7 @@ func TestParseRustListenConnectLine(t *testing.T) {
 }
 
 func TestStartRustListenPeerReadsConnectLine(t *testing.T) {
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +323,7 @@ func TestLiveRustGoToRustEcho(t *testing.T) {
 		}
 	}
 
-	addr := base.NewEndpointAddr(peer.Ready.EndpointID).WithRelayURL(peer.Ready.RelayURL)
+	addr := netaddr.NewEndpointAddr(peer.Ready.EndpointID).WithRelayURL(peer.Ready.RelayURL)
 	for _, ap := range peer.Ready.Addrs {
 		addr = addr.WithIP(ap)
 	}
@@ -450,10 +451,10 @@ func rustIrohHelp(t *testing.T, bin string) (string, error) {
 }
 
 type rustListenReady struct {
-	EndpointID     base.EndpointId
+	EndpointID     key.EndpointId
 	EndpointIDText string
 	Addrs          []netip.AddrPort
-	RelayURL       base.RelayUrl
+	RelayURL       netaddr.RelayUrl
 	Line           string
 }
 
@@ -672,7 +673,7 @@ func parseRustListenConnectLine(line string) (rustListenReady, bool, error) {
 		}
 		addrs = append(addrs, addr)
 	}
-	relayURL, err := base.ParseRelayUrl(relayText)
+	relayURL, err := netaddr.ParseRelayUrl(relayText)
 	if err != nil {
 		return rustListenReady{}, true, fmt.Errorf("relay URL %q: %w", relayText, err)
 	}
@@ -685,14 +686,14 @@ func parseRustListenConnectLine(line string) (rustListenReady, bool, error) {
 	}, true, nil
 }
 
-func parseRustEndpointID(s string) (base.EndpointId, error) {
-	if id, err := base.PublicKeyFromZ32(s); err == nil {
+func parseRustEndpointID(s string) (key.EndpointId, error) {
+	if id, err := key.PublicKeyFromZ32(s); err == nil {
 		return id, nil
 	}
-	if id, err := base.ParsePublicKey(s); err == nil {
+	if id, err := key.ParsePublicKey(s); err == nil {
 		return id, nil
 	}
-	return base.EndpointId{}, fmt.Errorf("endpoint id %q: invalid public key", s)
+	return key.EndpointId{}, fmt.Errorf("endpoint id %q: invalid public key", s)
 }
 
 func firstLine(s string) string {

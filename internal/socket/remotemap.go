@@ -6,22 +6,22 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // RemoteMap is the registry of per-remote [RemoteStateActor]s, keyed by
-// [base.EndpointId]. It spawns an actor on first reference to a remote and
+// [key.EndpointId]. It spawns an actor on first reference to a remote and
 // removes it when the actor idles out. It is the Go analog of the Rust RemoteMap
 // (iroh/src/socket/remote_map.rs).
 //
-// O12 invariant (iroh/DESIGN.md §6): actor insertion and idle-teardown
-// deregistration are serialized by a single mutex, and an actor only removes
-// itself if it is still the actor registered under its id. So an AddConnection
-// arriving exactly as the 60s idle timeout fires yields exactly one actor: the
-// teardown either runs first (the next reference spawns a fresh actor) or the
-// AddConnection runs first (which resets the actor's idle timer, so it does not
-// tear down). See [RemoteMap.ResolveRemote] / [RemoteMap.AddConnection] and the
-// onExit closure in [RemoteMap.actor].
+// Actor insertion and idle-teardown deregistration are serialized by a single
+// mutex, and an actor only removes itself if it is still the actor registered
+// under its id. So an AddConnection arriving exactly as the 60s idle timeout
+// fires yields exactly one actor: the teardown either runs first (the next
+// reference spawns a fresh actor) or the AddConnection runs first (which resets
+// the actor's idle timer, so it does not tear down). See [RemoteMap.ResolveRemote]
+// / [RemoteMap.AddConnection] and the onExit closure in [RemoteMap.actor].
 //
 // RemoteMap is safe for concurrent use. Create one with [NewRemoteMap].
 type RemoteMap struct {
@@ -31,7 +31,7 @@ type RemoteMap struct {
 	idle     time.Duration // actor idle timeout; ActorMaxIdleTimeout unless overridden for tests
 
 	mu     sync.Mutex
-	actors map[base.EndpointId]*RemoteStateActor
+	actors map[key.EndpointId]*RemoteStateActor
 }
 
 // NewRemoteMap returns a RemoteMap whose actors live until ctx is cancelled or
@@ -53,7 +53,7 @@ func newRemoteMap(ctx context.Context, selector PathSelector, resolve ResolveFun
 		selector: selector,
 		resolve:  resolve,
 		idle:     idle,
-		actors:   make(map[base.EndpointId]*RemoteStateActor),
+		actors:   make(map[key.EndpointId]*RemoteStateActor),
 	}
 }
 
@@ -61,7 +61,7 @@ func newRemoteMap(ctx context.Context, selector PathSelector, resolve ResolveFun
 // The caller must hold m.mu. The spawned actor's onExit removes it from the map
 // under m.mu, but only if it is still the actor registered under id, so a
 // concurrently-spawned successor is never reaped.
-func (m *RemoteMap) actor(id base.EndpointId) *RemoteStateActor {
+func (m *RemoteMap) actor(id key.EndpointId) *RemoteStateActor {
 	if a, ok := m.actors[id]; ok {
 		return a
 	}
@@ -79,7 +79,7 @@ func (m *RemoteMap) actor(id base.EndpointId) *RemoteStateActor {
 }
 
 // Actor returns the running actor for id, spawning one if none exists.
-func (m *RemoteMap) Actor(id base.EndpointId) *RemoteStateActor {
+func (m *RemoteMap) Actor(id key.EndpointId) *RemoteStateActor {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.actor(id)
@@ -112,7 +112,7 @@ func (m *RemoteMap) Len() int {
 // connection resets the actor's idle timer, so this can race the idle teardown
 // safely (O12): if the actor is mid-teardown the send observes its done channel
 // and a fresh actor is spawned on the retry.
-func (m *RemoteMap) AddConnection(remote base.EndpointId, conn Connection) <-chan PathEvent {
+func (m *RemoteMap) AddConnection(remote key.EndpointId, conn Connection) <-chan PathEvent {
 	for {
 		m.mu.Lock()
 		a := m.actor(remote)
@@ -139,7 +139,7 @@ func (m *RemoteMap) AddConnection(remote base.EndpointId, conn Connection) <-cha
 // ResolveRemote asks the actor for addr.Id to resolve and register more
 // candidate paths, spawning the actor if needed. It returns the lookup error if
 // any. It races idle teardown the same way as [RemoteMap.AddConnection].
-func (m *RemoteMap) ResolveRemote(addr base.EndpointAddr) error {
+func (m *RemoteMap) ResolveRemote(addr netaddr.EndpointAddr) error {
 	for {
 		m.mu.Lock()
 		a := m.actor(addr.Id)
@@ -169,7 +169,7 @@ func (m *RemoteMap) ResolveRemote(addr base.EndpointAddr) error {
 // registered under id, so the next reference spawns a fresh actor. The actor's
 // own onExit already does this; dropIfStopped covers the window before onExit
 // has run.
-func (m *RemoteMap) dropIfStopped(id base.EndpointId, a *RemoteStateActor) {
+func (m *RemoteMap) dropIfStopped(id key.EndpointId, a *RemoteStateActor) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.actors[id] == a {

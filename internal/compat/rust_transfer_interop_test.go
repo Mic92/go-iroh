@@ -17,9 +17,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/qlogtest"
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -104,7 +105,7 @@ func TestRustTransferExampleBin(t *testing.T) {
 }
 
 func TestParseRustTransferEndpointBoundJSON(t *testing.T) {
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestParseRustTransferEndpointBoundJSON(t *testing.T) {
 }
 
 func TestParseRustTransferCompletionJSON(t *testing.T) {
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +247,7 @@ func TestParseRustTransferCompletionOutput(t *testing.T) {
 }
 
 func TestStartRustTransferProviderReadsEndpointBound(t *testing.T) {
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +386,7 @@ func runLiveRustTransferGoToRustUpload(t *testing.T, ctx context.Context, bin, g
 		}
 	}
 
-	addr := base.NewEndpointAddr(provider.Ready.EndpointID).WithRelayURL(provider.Ready.RelayURL)
+	addr := netaddr.NewEndpointAddr(provider.Ready.EndpointID).WithRelayURL(provider.Ready.RelayURL)
 	for _, ap := range provider.Ready.DirectAddrs {
 		addr = addr.WithIP(ap)
 	}
@@ -500,10 +501,10 @@ func rustTransferExampleBin() (bin string, checked []string, ok bool) {
 }
 
 type rustTransferReady struct {
-	EndpointID     base.EndpointId
+	EndpointID     key.EndpointId
 	EndpointIDText string
 	DirectAddrs    []netip.AddrPort
-	RelayURL       base.RelayUrl
+	RelayURL       netaddr.RelayUrl
 	HasRelayURL    bool
 	Line           string
 }
@@ -558,7 +559,7 @@ func parseRustTransferEndpointBound(line string) (rustTransferReady, bool, error
 		if *event.RelayURL == "" {
 			return rustTransferReady{}, true, fmt.Errorf("empty relay_url")
 		}
-		relayURL, err := base.ParseRelayUrl(*event.RelayURL)
+		relayURL, err := netaddr.ParseRelayUrl(*event.RelayURL)
 		if err != nil {
 			return rustTransferReady{}, true, fmt.Errorf("relay URL %q: %w", *event.RelayURL, err)
 		}
@@ -571,7 +572,7 @@ func parseRustTransferEndpointBound(line string) (rustTransferReady, bool, error
 type rustTransferCompletion struct {
 	Kind         string
 	Size         uint64
-	RemoteID     base.EndpointId
+	RemoteID     key.EndpointId
 	RemoteIDText string
 	HasRemoteID  bool
 	Line         string

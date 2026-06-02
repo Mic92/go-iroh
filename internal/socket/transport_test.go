@@ -8,9 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 type fakeCustomTransport struct {
@@ -20,8 +21,8 @@ type fakeCustomTransport struct {
 }
 
 type fakeCustomSend struct {
-	remote base.CustomAddr
-	local  *base.CustomAddr
+	remote netaddr.CustomAddr
+	local  *netaddr.CustomAddr
 	data   []byte
 }
 
@@ -40,10 +41,10 @@ func (t *fakeCustomTransport) Serve(ctx context.Context, recv func(socket.Custom
 	}
 }
 
-func (t *fakeCustomTransport) Send(remote base.CustomAddr, local *base.CustomAddr, p []byte) bool {
+func (t *fakeCustomTransport) Send(remote netaddr.CustomAddr, local *netaddr.CustomAddr, p []byte) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	var localCopy *base.CustomAddr
+	var localCopy *netaddr.CustomAddr
 	if local != nil {
 		v := *local
 		localCopy = &v
@@ -209,7 +210,7 @@ func TestMagicConnCustomSend(t *testing.T) {
 	go m.Serve(ctx)
 	defer m.Close()
 
-	remote := base.NewCustomAddr(7, []byte("remote"))
+	remote := netaddr.NewCustomAddr(7, []byte("remote"))
 	mapped := sock.CustomMappedAddrFor(remote)
 	const payload = "custom-send"
 	n, err := m.WriteTo([]byte(payload), net.UDPAddrFromAddrPort(mapped.AddrPort()))
@@ -259,7 +260,7 @@ func TestMagicConnCustomRecvRewrite(t *testing.T) {
 	go m.Serve(ctx)
 	defer m.Close()
 
-	remote := base.NewCustomAddr(9, []byte("peer"))
+	remote := netaddr.NewCustomAddr(9, []byte("peer"))
 	const payload = "custom-recv"
 	custom.recv <- socket.CustomDatagram{Remote: remote, Data: []byte(payload)}
 
@@ -299,7 +300,7 @@ func TestMagicConnEndpointIDSend(t *testing.T) {
 	go m.Serve(ctx)
 	defer m.Close()
 
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +308,7 @@ func TestMagicConnEndpointIDSend(t *testing.T) {
 	mapped := sock.EndpointIDMappedAddrFor(id)
 
 	got := make(chan []byte, 1)
-	m.SetEndpointSender(func(remote base.EndpointId, p []byte) bool {
+	m.SetEndpointSender(func(remote key.EndpointId, p []byte) bool {
 		if !remote.Equal(id) {
 			t.Errorf("remote = %s, want %s", remote, id)
 		}
@@ -348,10 +349,10 @@ func TestMagicConnReadDeadline(t *testing.T) {
 	}
 }
 
-// TestMagicConnNotOOBCapable pins O1 (DESIGN.md §6): MagicConn deliberately does
-// not satisfy quic-go's OOBCapablePacketConn, so quic-go uses its single-packet
-// recv/send path. It does expose SyscallConn for buffer sizing and the DF bit,
-// which alone does not make it OOB-capable.
+// TestMagicConnNotOOBCapable pins that MagicConn deliberately does not satisfy
+// quic-go's OOBCapablePacketConn, so quic-go uses its single-packet recv/send
+// path. It does expose SyscallConn for buffer sizing and the DF bit, which
+// alone does not make it OOB-capable.
 func TestMagicConnNotOOBCapable(t *testing.T) {
 	m, _, stop := newLoopbackMagic(t)
 	defer stop()
@@ -385,8 +386,8 @@ func TestAddrCanonical(t *testing.T) {
 // (url, eid) pair to a stable mapped address and back.
 func TestSocketRelayRoundTrip(t *testing.T) {
 	s := socket.NewSocket()
-	url := base.RelayUrl{}
-	eid := base.PublicKey{}
+	url := netaddr.RelayUrl{}
+	eid := key.PublicKey{}
 
 	m1 := s.RelayMappedAddrFor(url, eid)
 	m2 := s.RelayMappedAddrFor(url, eid)

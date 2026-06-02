@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 // ProtocolVersion is the negotiated relay protocol version for a connection.
@@ -70,10 +70,10 @@ const (
 type RelayToClientMsg struct {
 	Type FrameType
 	// Datagrams / RemoteEndpointId for FrameRelayToClientDatagram(Batch).
-	RemoteEndpointId base.EndpointId
+	RemoteEndpointId key.EndpointId
 	Datagrams        Datagrams
 	// EndpointGone for FrameEndpointGone.
-	EndpointGone base.EndpointId
+	EndpointGone key.EndpointId
 	// Status for FrameStatus.
 	Status Status
 	// Ping/Pong payload for FramePing/FramePong.
@@ -153,23 +153,23 @@ func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClie
 	}
 	switch ft {
 	case FrameRelayToClientDatagram, FrameRelayToClientDatagramBat:
-		if len(rest) < base.PublicKeyLength {
+		if len(rest) < key.PublicKeyLength {
 			return RelayToClientMsg{}, ErrInvalidFrame
 		}
-		id, err := base.PublicKeyFromSlice(rest[:base.PublicKeyLength])
+		id, err := key.PublicKeyFromSlice(rest[:key.PublicKeyLength])
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
-		dg, err := datagramsFromBytes(rest[base.PublicKeyLength:], ft == FrameRelayToClientDatagramBat)
+		dg, err := datagramsFromBytes(rest[key.PublicKeyLength:], ft == FrameRelayToClientDatagramBat)
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
 		return RelayToClientMsg{Type: ft, RemoteEndpointId: id, Datagrams: dg}, nil
 	case FrameEndpointGone:
-		if len(rest) != base.PublicKeyLength {
+		if len(rest) != key.PublicKeyLength {
 			return RelayToClientMsg{}, ErrInvalidFrame
 		}
-		id, err := base.PublicKeyFromSlice(rest)
+		id, err := key.PublicKeyFromSlice(rest)
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
@@ -211,7 +211,7 @@ func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClie
 type ClientToRelayMsg struct {
 	Type FrameType
 	// DstEndpointId / Datagrams for FrameClientToRelayDatagram(Batch).
-	DstEndpointId base.EndpointId
+	DstEndpointId key.EndpointId
 	Datagrams     Datagrams
 	// Ping/Pong payload for FramePing/FramePong.
 	Ping [8]byte
@@ -264,14 +264,14 @@ func ParseClientToRelayMsg(content []byte) (ClientToRelayMsg, error) {
 	}
 	switch ft {
 	case FrameClientToRelayDatagram, FrameClientToRelayDatagramBat:
-		if len(rest) < base.PublicKeyLength {
+		if len(rest) < key.PublicKeyLength {
 			return ClientToRelayMsg{}, ErrInvalidFrame
 		}
-		id, err := base.PublicKeyFromSlice(rest[:base.PublicKeyLength])
+		id, err := key.PublicKeyFromSlice(rest[:key.PublicKeyLength])
 		if err != nil {
 			return ClientToRelayMsg{}, err
 		}
-		dg, err := datagramsFromBytes(rest[base.PublicKeyLength:], ft == FrameClientToRelayDatagramBat)
+		dg, err := datagramsFromBytes(rest[key.PublicKeyLength:], ft == FrameClientToRelayDatagramBat)
 		if err != nil {
 			return ClientToRelayMsg{}, err
 		}

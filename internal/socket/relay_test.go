@@ -7,9 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayclient"
 	"github.com/tmc/go-iroh/internal/relayproto"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // fakeRelayClient is an in-process relay connection used to drive the
@@ -68,9 +69,9 @@ func (c *fakeRelayClient) Close() error {
 	return nil
 }
 
-func testURL(t *testing.T) base.RelayUrl {
+func testURL(t *testing.T) netaddr.RelayUrl {
 	t.Helper()
-	u, err := base.ParseRelayUrl("https://relay.test.example.")
+	u, err := netaddr.ParseRelayUrl("https://relay.test.example.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,10 +82,10 @@ func testURL(t *testing.T) base.RelayUrl {
 // returns the actor and a cancel that stops it.
 func startActorWith(t *testing.T, client *fakeRelayClient) (*RelayActor, context.CancelFunc) {
 	t.Helper()
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	a := NewRelayActor(RelayActorConfig{
 		SecretKey: sk,
-		dialer:    func(context.Context, base.RelayUrl, relayclient.Options) (relayClient, error) { return client, nil },
+		dialer:    func(context.Context, netaddr.RelayUrl, relayclient.Options) (relayClient, error) { return client, nil },
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	go a.Run(ctx)
@@ -144,7 +145,7 @@ func TestActorSendRoutesToRelay(t *testing.T) {
 	client := newFakeRelayClient()
 	a, _ := startActorWith(t, client)
 	url := testURL(t)
-	dst, _ := base.GenerateSecretKey()
+	dst, _ := key.GenerateSecretKey()
 
 	a.SetHomeRelay(url)
 
@@ -175,11 +176,11 @@ func TestActorRecvForwarding(t *testing.T) {
 	client := newFakeRelayClient()
 	a, _ := startActorWith(t, client)
 	url := testURL(t)
-	src, _ := base.GenerateSecretKey()
+	src, _ := key.GenerateSecretKey()
 	a.SetHomeRelay(url)
 
 	// Kick the connection alive by queuing a send so the active relay dials.
-	dst, _ := base.GenerateSecretKey()
+	dst, _ := key.GenerateSecretKey()
 	a.Send(RelaySendItem{RemoteEndpoint: dst.Public(), URL: url, Datagrams: relayproto.DatagramsFromBytes([]byte("x"))})
 	waitDatagramSend(t, client)
 
@@ -210,7 +211,7 @@ func TestActorBatching(t *testing.T) {
 	client := newFakeRelayClient()
 	a, _ := startActorWith(t, client)
 	url := testURL(t)
-	dst, _ := base.GenerateSecretKey()
+	dst, _ := key.GenerateSecretKey()
 	a.SetHomeRelay(url)
 
 	const n = sendDatagramBatchSize + 5
@@ -268,7 +269,7 @@ func TestRelayTransportSendRouting(t *testing.T) {
 	rt := NewRelayTransport(sock, a, recvCh)
 
 	url := testURL(t)
-	peer, _ := base.GenerateSecretKey()
+	peer, _ := key.GenerateSecretKey()
 	a.SetHomeRelay(url)
 	m := sock.RelayMappedAddrFor(url, peer.Public())
 
@@ -307,7 +308,7 @@ func waitDatagramSend(t *testing.T, c *fakeRelayClient) relayproto.ClientToRelay
 // TestRelayDatagramFrameRoundTrip is the wire-compat half of the slice gate: a
 // relay datagram frame round-trips through internal/relayproto unchanged.
 func TestRelayDatagramFrameRoundTrip(t *testing.T) {
-	key, _ := base.GenerateSecretKey()
+	key, _ := key.GenerateSecretKey()
 	in := relayproto.RelayToClientMsg{
 		Type:             relayproto.FrameRelayToClientDatagramBat,
 		RemoteEndpointId: key.Public(),

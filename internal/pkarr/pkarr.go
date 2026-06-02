@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -51,7 +51,7 @@ type SignedPacket struct {
 // FromTxtStrings creates a signed packet containing one TXT record per value,
 // all under the single DNS name relative to the signer's z-base-32 public key
 // (the common case, e.g. name "_iroh"). ttl is the record TTL in seconds.
-func FromTxtStrings(sk base.SecretKey, name string, values []string, ttl uint32) (*SignedPacket, error) {
+func FromTxtStrings(sk key.SecretKey, name string, values []string, ttl uint32) (*SignedPacket, error) {
 	pub := sk.Public()
 	origin := pub.Z32()
 	normalized := normalizeName(origin, name)
@@ -82,11 +82,11 @@ func FromBytes(b []byte) (*SignedPacket, error) {
 	if err := checkLen(b); err != nil {
 		return nil, err
 	}
-	pub, err := base.PublicKeyFromSlice(b[:32])
+	pub, err := key.PublicKeyFromSlice(b[:32])
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidKey, err)
 	}
-	sig, err := base.SignatureFromSlice(b[32:96])
+	sig, err := key.SignatureFromSlice(b[32:96])
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrSignature, err)
 	}
@@ -118,7 +118,7 @@ func FromBytesUnchecked(b []byte) (*SignedPacket, error) {
 
 // FromRelayPayload reconstructs a signed packet from a public key and a relay
 // payload (signature + timestamp + DNS packet, i.e. everything after the key).
-func FromRelayPayload(pub base.PublicKey, payload []byte) (*SignedPacket, error) {
+func FromRelayPayload(pub key.PublicKey, payload []byte) (*SignedPacket, error) {
 	pubBytes := pub.Bytes()
 	b := make([]byte, 0, 32+len(payload))
 	b = append(b, pubBytes[:]...)
@@ -133,14 +133,14 @@ func (p *SignedPacket) Bytes() []byte { return p.bytes }
 func (p *SignedPacket) RelayPayload() []byte { return bytes.Clone(p.bytes[32:]) }
 
 // PublicKey returns the signer's public key.
-func (p *SignedPacket) PublicKey() base.PublicKey {
-	k, _ := base.PublicKeyFromSlice(p.bytes[:32])
+func (p *SignedPacket) PublicKey() key.PublicKey {
+	k, _ := key.PublicKeyFromSlice(p.bytes[:32])
 	return k
 }
 
 // Signature returns the packet signature.
-func (p *SignedPacket) Signature() base.Signature {
-	s, _ := base.SignatureFromSlice(p.bytes[32:96])
+func (p *SignedPacket) Signature() key.Signature {
+	s, _ := key.SignatureFromSlice(p.bytes[32:96])
 	return s
 }
 
