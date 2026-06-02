@@ -122,7 +122,7 @@ func TestEndpointLifecycleAddressSurface(t *testing.T) {
 	}
 
 	external := netip.MustParseAddrPort("203.0.113.44:4444")
-	ep.AddExternalAddr(ctx, external)
+	ep.AddExternalAddr(external)
 	got, err := w.Updated(ctx)
 	if err != nil {
 		t.Fatalf("WatchAddr update: %v", err)
@@ -215,7 +215,7 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 	if got := ep.localNATTraversalCandidates(); len(got) != 0 {
 		t.Fatalf("WithoutIPTransports NAT candidates = %v, want none", got)
 	}
-	ep.AddExternalAddr(ctx, netip.MustParseAddrPort("203.0.113.1:9999"))
+	ep.AddExternalAddr(netip.MustParseAddrPort("203.0.113.1:9999"))
 	if got := ep.Addr().IPAddrs(); len(got) != 0 {
 		t.Fatalf("WithoutIPTransports external Addr IPs = %v, want none", got)
 	}
@@ -251,7 +251,7 @@ func TestEndpointInsertRemoveRelay(t *testing.T) {
 	defer ep.Close(ctx)
 
 	cfg := RelayConfig{AuthToken: "token"}
-	prev, err := ep.InsertRelay(ctx, relayURL, &cfg)
+	prev, err := ep.InsertRelay(relayURL, &cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,15 +259,15 @@ func TestEndpointInsertRemoveRelay(t *testing.T) {
 		t.Fatalf("InsertRelay previous = %v, want %v", prev, relayURL)
 	}
 
-	removed := ep.RemoveRelay(ctx, relayURL)
+	removed := ep.RemoveRelay(relayURL)
 	if removed == nil || removed.AuthToken != "token" {
 		t.Fatalf("RemoveRelay = %+v, want token config", removed)
 	}
-	if got := ep.RemoveRelay(ctx, relayURL); got != nil {
+	if got := ep.RemoveRelay(relayURL); got != nil {
 		t.Fatalf("second RemoveRelay = %+v, want nil", got)
 	}
 
-	prev, err = ep.InsertRelay(ctx, relayURL, nil)
+	prev, err = ep.InsertRelay(relayURL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,10 +285,10 @@ func TestEndpointInsertRelayNoRelayTransport(t *testing.T) {
 	defer ep.Close(ctx)
 
 	relayURL := relay.StagingMap().URLs()[0]
-	if _, err := ep.InsertRelay(ctx, relayURL, nil); !errors.Is(err, ErrNoRelay) {
+	if _, err := ep.InsertRelay(relayURL, nil); !errors.Is(err, ErrNoRelay) {
 		t.Fatalf("InsertRelay error = %v, want ErrNoRelay", err)
 	}
-	if got := ep.RemoveRelay(ctx, relayURL); got != nil {
+	if got := ep.RemoveRelay(relayURL); got != nil {
 		t.Fatalf("RemoveRelay = %+v, want nil", got)
 	}
 }

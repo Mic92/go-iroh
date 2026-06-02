@@ -567,10 +567,8 @@ func (e *Endpoint) setExternalNATTraversalCandidates(addrs ...netip.AddrPort) bo
 
 // AddExternalAddr adds addr to the endpoint's externally reachable addresses
 // and advertises it as a QNT NAT traversal candidate. Invalid, unspecified, or
-// zero-port addresses are ignored. The context is accepted for API parity; this
-// local update does not block.
-func (e *Endpoint) AddExternalAddr(ctx context.Context, addr netip.AddrPort) {
-	_ = ctx
+// zero-port addresses are ignored.
+func (e *Endpoint) AddExternalAddr(addr netip.AddrPort) {
 	if e.disableIP {
 		return
 	}
@@ -793,8 +791,7 @@ var ErrNoRelay = errors.New("iroh: no relays configured")
 
 // InsertRelay adds or replaces a relay server configuration. It returns the
 // previous config for url when one existed.
-func (e *Endpoint) InsertRelay(ctx context.Context, url netaddr.RelayURL, cfg *RelayConfig) (*RelayConfig, error) {
-	_ = ctx
+func (e *Endpoint) InsertRelay(url netaddr.RelayURL, cfg *RelayConfig) (*RelayConfig, error) {
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
 	}
@@ -818,8 +815,7 @@ func (e *Endpoint) InsertRelay(ctx context.Context, url netaddr.RelayURL, cfg *R
 
 // RemoveRelay removes a relay server configuration. It returns the removed
 // config, or nil if url was not configured.
-func (e *Endpoint) RemoveRelay(ctx context.Context, url netaddr.RelayURL) *RelayConfig {
-	_ = ctx
+func (e *Endpoint) RemoveRelay(url netaddr.RelayURL) *RelayConfig {
 	if e.isClosed() || e.relay == nil {
 		return nil
 	}
