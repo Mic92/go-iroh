@@ -8,7 +8,7 @@ import (
 	"github.com/tmc/go-iroh/dns"
 )
 
-func TestDnsAddressLookupDefaultsGolden(t *testing.T) {
+func TestDNSAddressLookupDefaultsGolden(t *testing.T) {
 	if dns.DNSTimeout != 3*time.Second {
 		t.Errorf("dns.DNSTimeout = %v, want 3s", dns.DNSTimeout)
 	}

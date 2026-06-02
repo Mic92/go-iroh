@@ -253,12 +253,12 @@ func TestPkarrDefaults(t *testing.T) {
 	}
 }
 
-// TestN0DnsAddressLookup smoke-tests the number0 production DNS constructor and
+// TestN0DNSAddressLookup smoke-tests the number0 production DNS constructor and
 // its no-op Publish.
-func TestN0DnsAddressLookup(t *testing.T) {
+func TestN0DNSAddressLookup(t *testing.T) {
 	// nil resolver falls back to the system DNS resolver; construction must not
 	// panic and Publish is a no-op.
-	lookup := N0DnsAddressLookup(nil)
+	lookup := N0DNSAddressLookup(nil)
 	lookup.Publish(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
 
 	// With an explicit resolver, resolution uses the configured origin. A canned
@@ -268,7 +268,7 @@ func TestN0DnsAddressLookup(t *testing.T) {
 	info := dns.NewEndpointInfo(id).WithRelayURL(relayURL(t, "https://relay.example/"))
 	resolver := &dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}
 
-	lookup = N0DnsAddressLookup(resolver)
+	lookup = N0DNSAddressLookup(resolver)
 	results := drain(lookup.Resolve(context.Background(), id))
 	if len(results) != 1 || results[0].Err != nil {
 		t.Fatalf("Resolve = %+v, want one success", results)

@@ -8,7 +8,7 @@ import (
 	"github.com/tmc/go-iroh/key"
 )
 
-// DNSProvenance is the provenance string for [DnsAddressLookup] items.
+// DNSProvenance is the provenance string for [DNSAddressLookup] items.
 const DNSProvenance = "dns"
 
 // dnsStaggerMs are the delays, in milliseconds, after which additional DNS
@@ -18,46 +18,46 @@ const DNSProvenance = "dns"
 // iroh/src/address_lookup/dns.rs DNS_STAGGERING_MS.
 var dnsStaggerMs = []int{200, 300, 600, 1000, 2000, 3000}
 
-// DnsAddressLookup resolves endpoint addressing information from DNS. It queries
+// DNSAddressLookup resolves endpoint addressing information from DNS. It queries
 // TXT records under "_iroh.<z32-endpoint-id>.<origin>" using the endpoint's DNS
 // resolver, where <origin> is the discovery origin domain.
 //
 // Publishing to a DNS-backed service is done with a [PkarrPublisher] pointing at
-// a pkarr relay that also serves DNS, so DnsAddressLookup does not publish.
+// a pkarr relay that also serves DNS, so DNSAddressLookup does not publish.
 //
-// The zero value is not usable; create one with [NewDnsAddressLookup] or
-// [N0DnsAddressLookup].
+// The zero value is not usable; create one with [NewDNSAddressLookup] or
+// [N0DNSAddressLookup].
 //
-// It is the Go analog of iroh's DnsAddressLookup.
-type DnsAddressLookup struct {
+// It is the Go analog of iroh's DNSAddressLookup.
+type DNSAddressLookup struct {
 	origin   string
 	resolver *dns.Resolver
 }
 
-// NewDnsAddressLookup returns a DnsAddressLookup querying origin (for example
+// NewDNSAddressLookup returns a DNSAddressLookup querying origin (for example
 // [dns.N0DNSEndpointOriginProd]) using resolver. If resolver is nil, a default
 // [dns.Resolver] backed by the system DNS configuration is used.
-func NewDnsAddressLookup(origin string, resolver *dns.Resolver) DnsAddressLookup {
+func NewDNSAddressLookup(origin string, resolver *dns.Resolver) DNSAddressLookup {
 	if resolver == nil {
 		resolver = dns.NewResolver()
 	}
-	return DnsAddressLookup{origin: origin, resolver: resolver}
+	return DNSAddressLookup{origin: origin, resolver: resolver}
 }
 
-// N0DnsAddressLookup returns a DnsAddressLookup using the number0 production
+// N0DNSAddressLookup returns a DNSAddressLookup using the number0 production
 // discovery origin ([dns.N0DNSEndpointOriginProd]).
-func N0DnsAddressLookup(resolver *dns.Resolver) DnsAddressLookup {
-	return NewDnsAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
+func N0DNSAddressLookup(resolver *dns.Resolver) DNSAddressLookup {
+	return NewDNSAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
 }
 
 // Publish is a no-op: DNS records are published indirectly through a
 // [PkarrPublisher].
-func (d DnsAddressLookup) Publish(dns.EndpointData) {}
+func (d DNSAddressLookup) Publish(dns.EndpointData) {}
 
 // Resolve looks up id in DNS, issuing staggered concurrent queries and
 // returning the first successful result. The returned channel yields a single
 // [Result] (success or error) and is then closed.
-func (d DnsAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
+func (d DNSAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
 	out := make(chan Result, 1)
 	go func() {
 		defer close(out)
@@ -80,7 +80,7 @@ func (d DnsAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan
 // lookupStaggered issues a first DNS lookup immediately and additional ones
 // after each delay in [dnsStaggerMs] while earlier attempts are still in
 // flight, returning the first success or the last error once all attempts fail.
-func (d DnsAddressLookup) lookupStaggered(ctx context.Context, id key.EndpointID) (dns.EndpointInfo, error) {
+func (d DNSAddressLookup) lookupStaggered(ctx context.Context, id key.EndpointID) (dns.EndpointInfo, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

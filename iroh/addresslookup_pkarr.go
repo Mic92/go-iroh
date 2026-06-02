@@ -39,7 +39,7 @@ const (
 
 // PkarrPublisher publishes endpoint addressing information to a pkarr relay
 // over HTTP. It implements [AddressLookup] as a publish-only service; pair it
-// with a [PkarrResolver] or [DnsAddressLookup] to resolve.
+// with a [PkarrResolver] or [DNSAddressLookup] to resolve.
 //
 // Publishing is fire-and-forget: [PkarrPublisher.Publish] updates an internal
 // value and returns immediately while a background goroutine performs the HTTP

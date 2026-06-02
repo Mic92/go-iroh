@@ -18,7 +18,7 @@ import (
 // direct addresses) through one or more lookup services.
 //
 // Multiple implementations coexist: pkarr-relay ([PkarrPublisher] /
-// [PkarrResolver]), DNS ([DnsAddressLookup]), and in-memory ([MemoryLookup]).
+// [PkarrResolver]), DNS ([DNSAddressLookup]), and in-memory ([MemoryLookup]).
 // An [Endpoint] combines them with [AddressLookupServices].
 //
 // It is the Go analog of iroh's AddressLookup trait

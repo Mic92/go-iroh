@@ -223,7 +223,7 @@ func WithDNSResolver(r *dns.Resolver) Option {
 		if c.lookup == nil {
 			c.lookup = &AddressLookupServices{}
 		}
-		c.lookup.Add(NewDnsAddressLookup(dns.N0DNSEndpointOriginProd, r))
+		c.lookup.Add(NewDNSAddressLookup(dns.N0DNSEndpointOriginProd, r))
 		return nil
 	}
 }

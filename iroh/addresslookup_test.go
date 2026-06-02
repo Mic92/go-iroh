@@ -130,13 +130,13 @@ func (f *fakeTxtLookuper) LookupTXT(_ context.Context, _ string) ([]string, erro
 	return f.values, nil
 }
 
-func TestDnsAddressLookupResolve(t *testing.T) {
+func TestDNSAddressLookupResolve(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	info := dns.NewEndpointInfo(id).WithRelayURL(relayURL(t, "https://relay.example/"))
 
 	resolver := &dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}
-	lookup := NewDnsAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
+	lookup := NewDNSAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
 
 	results := drain(lookup.Resolve(context.Background(), id))
 	if len(results) != 1 || results[0].Err != nil {
