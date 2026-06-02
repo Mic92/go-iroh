@@ -933,6 +933,21 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, firstErr)
 }
 
+// Dial dials addr, negotiates alpn, opens a bidirectional stream, and returns it
+// as a [net.Conn].
+func (e *Endpoint) Dial(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (net.Conn, error) {
+	conn, err := e.Connect(ctx, addr, alpn)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := conn.OpenStreamConn(ctx)
+	if err != nil {
+		conn.CloseWithError(0, "")
+		return nil, err
+	}
+	return stream, nil
+}
+
 // ConnectWith dials addr and returns a [Connecting] handle. The current
 // implementation uses the same DialEarly path as [Endpoint.Connect]; future
 // options can expose more pre-handshake controls without changing callers.

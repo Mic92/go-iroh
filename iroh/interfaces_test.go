@@ -26,4 +26,5 @@ var (
 	_ connAddrs          = (*Conn)(nil)
 	_ net.Addr           = IncomingAddr{}
 	_ net.Addr           = LocalTransportAddr{}
+	_ net.Conn           = streamConn{}
 )

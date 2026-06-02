@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"testing"
 	"time"
@@ -91,6 +92,58 @@ func TestConnAddr(t *testing.T) {
 	}
 	if server.RemoteAddr() == nil {
 		t.Fatal("server.RemoteAddr() = nil")
+	}
+}
+
+func TestStreamConn(t *testing.T) {
+	client, server := connPair(t, "iroh-stream-conn/0")
+	defer client.CloseWithError(0, "")
+	defer server.CloseWithError(0, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		c, err := server.AcceptStreamConn(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer c.Close()
+		if c.LocalAddr() == nil || c.RemoteAddr() == nil {
+			done <- errors.New("stream conn missing addresses")
+			return
+		}
+		var _ net.Conn = c
+		b, err := io.ReadAll(c)
+		if err != nil {
+			done <- err
+			return
+		}
+		if string(b) != "hello" {
+			done <- fmt.Errorf("read %q, want hello", string(b))
+			return
+		}
+		done <- nil
+	}()
+
+	c, err := client.OpenStreamConn(ctx)
+	if err != nil {
+		t.Fatalf("OpenStreamConn: %v", err)
+	}
+	if c.LocalAddr() == nil || c.RemoteAddr() == nil {
+		t.Fatal("stream conn missing addresses")
+	}
+	var _ net.Conn = c
+	if _, err := c.Write([]byte("hello")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 

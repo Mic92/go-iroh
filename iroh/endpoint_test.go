@@ -139,6 +139,70 @@ func TestEndpointDirectEcho(t *testing.T) {
 	}
 }
 
+func TestEndpointDialNetConn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-dial/0"
+
+	srvKey, _ := key.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	done := make(chan error, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.CloseWithError(0, "")
+		c, err := conn.AcceptStreamConn(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		defer c.Close()
+		_, err = io.Copy(c, c)
+		done <- err
+	}()
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	c, err := client.Dial(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	var _ net.Conn = c
+	if _, err := c.Write([]byte("ping")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := c.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
+	var buf [4]byte
+	if _, err := io.ReadFull(c, buf[:]); err != nil {
+		t.Fatalf("ReadFull: %v", err)
+	}
+	if string(buf[:]) != "ping" {
+		t.Fatalf("echo = %q, want ping", string(buf[:]))
+	}
+	c.Close()
+	if err := <-done; err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+}
+
 func TestEndpointAcceptIncoming(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

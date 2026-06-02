@@ -324,9 +324,28 @@ func (c *Conn) OpenStreamSync(ctx context.Context) (*Stream, error) {
 	return c.qc.OpenStreamSync(ctx)
 }
 
+// OpenStreamConn opens a bidirectional stream and returns it as a [net.Conn].
+func (c *Conn) OpenStreamConn(ctx context.Context) (net.Conn, error) {
+	s, err := c.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return streamConn{Stream: s, local: c.LocalAddr(), remote: c.RemoteAddr()}, nil
+}
+
 // AcceptStream accepts the next bidirectional stream opened by the peer.
 func (c *Conn) AcceptStream(ctx context.Context) (*Stream, error) {
 	return c.qc.AcceptStream(ctx)
+}
+
+// AcceptStreamConn accepts the next bidirectional stream and returns it as a
+// [net.Conn].
+func (c *Conn) AcceptStreamConn(ctx context.Context) (net.Conn, error) {
+	s, err := c.AcceptStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return streamConn{Stream: s, local: c.LocalAddr(), remote: c.RemoteAddr()}, nil
 }
 
 // OpenUniStreamSync opens a new unidirectional (send) stream.
@@ -402,6 +421,16 @@ func (c *Conn) CloseReason() error {
 		return nil
 	}
 }
+
+type streamConn struct {
+	*Stream
+	local  net.Addr
+	remote net.Addr
+}
+
+func (c streamConn) LocalAddr() net.Addr { return c.local }
+
+func (c streamConn) RemoteAddr() net.Addr { return c.remote }
 
 // connAdapter adapts a qng *quic.Conn to the socket package's
 // [socket.Connection] interface so the per-remote state actor can track its
