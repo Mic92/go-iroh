@@ -183,6 +183,35 @@ func TestEndpointDataAddrsReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestEndpointDataString(t *testing.T) {
+	if got, want := (EndpointData{}).String(), "EndpointData{addrs:[]}"; got != want {
+		t.Fatalf("empty String = %q, want %q", got, want)
+	}
+	ud, _ := NewUserData("hello")
+	data := NewEndpointData(
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")},
+		netaddr.RelayAddr{URL: mustRelay(t, "https://relay.example/")},
+	)
+	data.SetUserData(&ud)
+	want := "EndpointData{addrs:[ip:127.0.0.1:1, relay:https://relay.example/], user-data:hello}"
+	if got := data.String(); got != want {
+		t.Fatalf("String = %q, want %q", got, want)
+	}
+}
+
+func TestEndpointInfoString(t *testing.T) {
+	info := EndpointInfo{
+		ID: testID(t),
+		Data: NewEndpointData(
+			netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")},
+		),
+	}
+	want := "EndpointInfo{id:" + info.ID.String() + ", data:EndpointData{addrs:[ip:127.0.0.1:1]}}"
+	if got := info.String(); got != want {
+		t.Fatalf("String = %q, want %q", got, want)
+	}
+}
+
 func TestTxtAttrsSplitLikeRust(t *testing.T) {
 	id := testID(t)
 	name := "_iroh." + id.Z32() + ".dns.iroh.link."

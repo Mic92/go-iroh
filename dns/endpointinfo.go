@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 	"slices"
+	"strings"
 
 	"github.com/tmc/go-iroh/internal/pkarr"
 	"github.com/tmc/go-iroh/key"
@@ -151,6 +152,25 @@ func (d EndpointData) UserData() *UserData { return d.userData }
 // HasAddrs reports whether any addresses are present.
 func (d EndpointData) HasAddrs() bool { return len(d.addrs) > 0 }
 
+// String returns a diagnostic string for d.
+func (d EndpointData) String() string {
+	var b strings.Builder
+	b.WriteString("EndpointData{addrs:[")
+	for i, a := range d.addrs {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(a.String())
+	}
+	b.WriteString("]")
+	if d.userData != nil {
+		b.WriteString(", user-data:")
+		b.WriteString(d.userData.String())
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
 func (d EndpointData) contains(a netaddr.TransportAddr) bool {
 	return slices.ContainsFunc(d.addrs, func(x netaddr.TransportAddr) bool {
 		return x.Compare(a) == 0
@@ -170,6 +190,11 @@ type EndpointInfo struct {
 	ID key.EndpointID
 	// Data is the addressing and metadata.
 	Data EndpointData
+}
+
+// String returns a diagnostic string for e.
+func (e EndpointInfo) String() string {
+	return "EndpointInfo{id:" + e.ID.String() + ", data:" + e.Data.String() + "}"
 }
 
 // EndpointInfoFromAddr converts an [netaddr.EndpointAddr] into an EndpointInfo.
