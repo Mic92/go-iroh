@@ -90,10 +90,6 @@ func (k PublicKey) Ed25519() ed25519.PublicKey {
 	return ed25519.PublicKey(k.bytes[:])
 }
 
-// AsSlice returns the public key as a byte slice. The slice aliases the key's
-// storage and must not be mutated.
-func (k *PublicKey) AsSlice() []byte { return k.bytes[:] }
-
 // Verify reports whether sig is a valid signature of message by k. It returns
 // nil on success and [ErrInvalidSignature] otherwise.
 //
