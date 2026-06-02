@@ -206,6 +206,32 @@ func TestUserDataTooLong(t *testing.T) {
 	}
 }
 
+func TestUserDataText(t *testing.T) {
+	u, err := NewUserData("hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := u.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(text) != "hello" {
+		t.Fatalf("MarshalText = %q, want hello", text)
+	}
+	var got UserData
+	if err := got.UnmarshalText(text); err != nil {
+		t.Fatal(err)
+	}
+	if got.String() != u.String() {
+		t.Fatalf("UnmarshalText = %q, want %q", got.String(), u.String())
+	}
+
+	long := make([]byte, UserDataMaxLength+1)
+	if err := got.UnmarshalText(long); err == nil {
+		t.Fatal("UnmarshalText accepted over-length user data")
+	}
+}
+
 func testID(t *testing.T) key.EndpointID {
 	t.Helper()
 	id, err := key.ParsePublicKey("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")

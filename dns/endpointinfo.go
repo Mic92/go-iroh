@@ -41,6 +41,21 @@ func NewUserData(s string) (UserData, error) {
 // String returns the user data string.
 func (u UserData) String() string { return u.s }
 
+// MarshalText implements encoding.TextMarshaler.
+func (u UserData) MarshalText() ([]byte, error) {
+	return []byte(u.s), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (u *UserData) UnmarshalText(text []byte) error {
+	parsed, err := NewUserData(string(text))
+	if err != nil {
+		return err
+	}
+	*u = parsed
+	return nil
+}
+
 // EndpointData is the addressing and metadata published about an endpoint: a set
 // of transport addresses (in priority order) and optional [UserData]. It does
 // not include the endpoint's id; see [EndpointInfo].
