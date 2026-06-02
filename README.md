@@ -1,44 +1,108 @@
 # go-iroh
 
-A Go port of [iroh](https://github.com/n0-computer/iroh) — peer-to-peer QUIC
-connectivity: direct connections dialed by public key, with hole punching and
-relay fallback.
+`go-iroh` is a Go implementation of the iroh connectivity layer. It provides
+peer-to-peer QUIC endpoints identified by ed25519 public keys, with direct
+paths, relay fallback, QUIC Retry, multipath, QAD observed addresses, and QNT
+NAT traversal support.
 
-This is a clean-room, idiomatic Go port built on
-[quic-go](https://github.com/quic-go/quic-go) as the QUIC backend. It is not
-affiliated with the n0 team.
+The module is a clean-room Go port targeting wire compatibility with upstream
+Rust iroh. It is not affiliated with the n0 team.
 
-See `package-spec.md` for the package topology, source mapping, and the
-Rust→Go idiom conventions used throughout.
+## Packages
+
+| Package | Purpose |
+|---|---|
+| `base` | endpoint IDs, keys, endpoint addresses, relay URLs |
+| `dns` | pkarr TXT encoding and stdlib/DoH/DoT lookupers |
+| `relay` | public relay maps and relay configuration |
+| `watch` | small generic watch values |
+| `iroh` | Endpoint, Conn, Router, address lookup, metrics |
+| `cmd/iroh-relay` | minimal local relay server |
+| `cmd/iroh-dns-server` | minimal pkarr HTTP server |
+
+The transport internals live under `internal/`: relay protocol/client/server,
+net reports, socket path management, RFC 7250 TLS, and `qng`, the quic-go fork
+used for iroh/noq compatibility.
+
+## Install
+
+```sh
+go get github.com/tmc/go-iroh
+```
+
+This module currently declares Go 1.26 in `go.mod`.
+
+## Use
+
+The `iroh` package is the main entry point:
+
+```go
+ep, err := iroh.Bind(ctx, iroh.WithALPNs([]byte("example/1")))
+if err != nil {
+	return err
+}
+defer ep.Close(ctx)
+
+conn, err := ep.Connect(ctx, peerAddr, []byte("example/1"))
+if err != nil {
+	return err
+}
+defer conn.CloseWithError(0, "")
+```
+
+See [iroh/example_test.go](./iroh/example_test.go) for runnable direct-loopback
+Router and Endpoint examples.
+
+## Wire Compatibility
+
+Relay, pkarr, DoH, and DoT connections use standard WebPKI TLS. Direct
+peer-to-peer QUIC uses TLS 1.3 Raw Public Keys (RFC 7250) with mutual endpoint
+authentication. Go's standard `crypto/tls` does not support RFC 7250, so this
+repository carries `internal/itls/tls` and drives it from `internal/qng`.
+
+`internal/qng` is a quic-go v0.59.1 fork extended for the iroh/noq transport
+surface: multipath, QAD observed-address reporting, QNT NAT traversal, and
+pre-connection QUIC Retry admission. The fork-local READMEs document when those
+forks can be removed.
+
+## Validation
+
+Run the local suite:
+
+```sh
+go test ./...
+```
+
+For release checks, prefer an isolated build cache:
+
+```sh
+GOCACHE=$(mktemp -d /tmp/go-iroh-gocache.XXXXXX) go test -p 1 ./... -count=1
+```
+
+Live Rust interop gates are opt-in because they require a checked-out and built
+Rust iroh tree:
+
+```sh
+GO_IROH_LIVE_RUST_INTEROP=1 \
+IROH_RUST_REPO=/path/to/n0-computer/iroh \
+go test ./internal/compat -run 'TestLiveRust' -count=1 -v
+
+GO_IROH_LIVE_RUST_INTEROP=1 \
+IROH_RUST_REPO=/path/to/n0-computer/iroh \
+go test ./iroh -run TestLiveRustTransferFetchPingDirectPath -count=1 -v
+```
 
 ## Status
 
-| Package | Rust crate | Status |
-|---|---|---|
-| `base` | `iroh-base` | ported, tested |
-| `internal/pkarr` | `iroh-dns` (pkarr) | ported, tested |
-| `dns` | `iroh-dns` | ported, tested (stdlib DNS, DoH, DoT, staggered endpoint lookup) |
-| `internal/relayproto` | `iroh-relay/protos` | ported, tested (golden wire snapshots) |
-| `internal/relayclient` | `iroh-relay/client` | ported, tested (WS/WSS + X.509, wire-compatible) |
-| `internal/relayserver` | `iroh-relay` server | ported, tested (relay datagram forwarding) |
-| `relay` | `iroh-relay` (public) | ported, tested |
-| `watch` | `n0_watcher` | ported, tested |
-| `internal/itls` | `iroh/src/tls` | RFC 7250 raw-public-key TLS ported, tested |
-| `internal/qng` | `noq` / quic-go | forked for RFC 7250, multipath, QNT, QAD; tested |
-| `iroh` (root) | `iroh` | Endpoint/Conn/Router APIs ported, tested |
-| `cmd/iroh-relay` | `iroh-relay` binary | minimal relay server |
-| `cmd/iroh-dns-server` | `iroh-dns-server` binary | minimal pkarr HTTP server |
+The normal local suite covers the public packages, qng transport extensions, and
+local relay/direct behavior. The opt-in Rust gates cover live echo, Rust
+`transfer` provider/upload, direct-path selection, and qlog evidence for QNT
+frames when the host environment provides the required binaries and network
+topology.
 
-## Wire compatibility
-
-Connections to relays, pkarr, and DNS use standard WebPKI TLS. Direct
-peer-to-peer QUIC uses TLS 1.3 Raw Public Keys (RFC 7250) with mutual
-authentication. Go's `crypto/tls` does not support RFC 7250, so go-iroh carries
-`internal/itls/tls` and drives it from the `internal/qng` quic-go fork.
-
-The main local gates are in `go test ./...`. Live Rust interop gates are opt-in
-because they require a checked-out and built Rust iroh tree.
+The wasm-browser target remains deferred to Go's wasm/browser networking
+constraints.
 
 ## License
 
-Dual MIT / Apache-2.0, matching upstream iroh.
+Licensed under either Apache-2.0 or MIT, at your option. See [LICENSE](./LICENSE).
