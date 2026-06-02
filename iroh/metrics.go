@@ -1,6 +1,9 @@
 package iroh
 
-import "sync/atomic"
+import (
+	"encoding/json"
+	"sync/atomic"
+)
 
 // Metrics is a snapshot of endpoint counters.
 type Metrics struct {
@@ -10,6 +13,12 @@ type Metrics struct {
 	AcceptsStarted   uint64
 	AcceptsAccepted  uint64
 	AcceptsFailed    uint64
+}
+
+// String implements expvar.Var, returning the metrics snapshot as JSON.
+func (m Metrics) String() string {
+	b, _ := json.Marshal(m)
+	return string(b)
 }
 
 type endpointMetrics struct {

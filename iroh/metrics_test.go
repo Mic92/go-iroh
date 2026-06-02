@@ -2,6 +2,8 @@ package iroh
 
 import (
 	"context"
+	"encoding/json"
+	"expvar"
 	"net/netip"
 	"testing"
 	"time"
@@ -9,6 +11,18 @@ import (
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
+
+func TestMetricsStringExpvar(t *testing.T) {
+	var _ expvar.Var = Metrics{}
+	m := Metrics{ConnectsStarted: 2, ConnectsAccepted: 1, ConnectsFailed: 1}
+	var got map[string]uint64
+	if err := json.Unmarshal([]byte(m.String()), &got); err != nil {
+		t.Fatalf("Metrics.String is not JSON: %v", err)
+	}
+	if got["ConnectsStarted"] != 2 || got["ConnectsAccepted"] != 1 || got["ConnectsFailed"] != 1 {
+		t.Fatalf("Metrics.String = %s", m.String())
+	}
+}
 
 func TestEndpointMetrics(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
