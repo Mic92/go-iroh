@@ -1116,12 +1116,12 @@ func (e *Endpoint) resolveFunc() socket.ResolveFunc {
 	return func(ctx context.Context, id key.EndpointID) ([]netaddr.TransportAddr, error) {
 		var addrs []netaddr.TransportAddr
 		var lastErr error
-		for res := range lookup.Resolve(ctx, id) {
-			if res.Err != nil {
-				lastErr = res.Err
+		for item, err := range lookup.Resolve(ctx, id) {
+			if err != nil {
+				lastErr = err
 				continue
 			}
-			addrs = append(addrs, res.Item.Addr().Addrs()...)
+			addrs = append(addrs, item.Addr().Addrs()...)
 		}
 		if len(addrs) == 0 && lastErr != nil {
 			return nil, lastErr

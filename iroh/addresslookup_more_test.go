@@ -27,12 +27,12 @@ func TestMemoryLookupFromInfo(t *testing.T) {
 
 	for _, id := range []key.EndpointID{idA, idB} {
 		results := drain(m.Resolve(context.Background(), id))
-		if len(results) != 1 || results[0].Err != nil {
+		if len(results) != 1 || results[0].err != nil {
 			t.Fatalf("Resolve(%s) = %+v, want one success", id, results)
 		}
 		// EndpointInfo accessor returns the discovered info for the right id.
-		if !results[0].Item.EndpointInfo().ID.Equal(id) {
-			t.Errorf("EndpointInfo().ID = %s, want %s", results[0].Item.EndpointInfo().ID, id)
+		if !results[0].item.EndpointInfo().ID.Equal(id) {
+			t.Errorf("EndpointInfo().ID = %s, want %s", results[0].item.EndpointInfo().ID, id)
 		}
 	}
 }
@@ -96,11 +96,11 @@ func TestFilteredAddressLookupResolveAndInner(t *testing.T) {
 
 	// Resolution is delegated unchanged: the memory entry resolves through.
 	results := drain(f.Resolve(context.Background(), id))
-	if len(results) != 1 || results[0].Err != nil {
+	if len(results) != 1 || results[0].err != nil {
 		t.Fatalf("Resolve = %+v, want one success", results)
 	}
-	if !results[0].Item.EndpointID().Equal(id) {
-		t.Errorf("resolved id = %s, want %s", results[0].Item.EndpointID(), id)
+	if !results[0].item.EndpointID().Equal(id) {
+		t.Errorf("resolved id = %s, want %s", results[0].item.EndpointID(), id)
 	}
 }
 
@@ -182,8 +182,8 @@ func TestPkarrPublisherOptions(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		results := drain(res.Resolve(context.Background(), id))
-		if len(results) == 1 && results[0].Err == nil {
-			addr := results[0].Item.Addr()
+		if len(results) == 1 && results[0].err == nil {
+			addr := results[0].item.Addr()
 			if len(addr.RelayURLs()) != 0 {
 				t.Fatalf("relay leaked past IPOnlyFilter: %v", addr.RelayURLs())
 			}
@@ -274,10 +274,10 @@ func TestN0DNSAddressLookup(t *testing.T) {
 
 	lookup = N0DNSAddressLookup(resolver)
 	results := drain(lookup.Resolve(context.Background(), id))
-	if len(results) != 1 || results[0].Err != nil {
+	if len(results) != 1 || results[0].err != nil {
 		t.Fatalf("Resolve = %+v, want one success", results)
 	}
-	if !results[0].Item.EndpointID().Equal(id) {
-		t.Errorf("resolved id = %s, want %s", results[0].Item.EndpointID(), id)
+	if !results[0].item.EndpointID().Equal(id) {
+		t.Errorf("resolved id = %s, want %s", results[0].item.EndpointID(), id)
 	}
 }

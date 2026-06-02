@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"slices"
 	"sync"
 
@@ -29,11 +30,10 @@ type AddressLookup interface {
 	// itself. A service that only resolves leaves this a no-op.
 	Publish(data dns.EndpointData)
 
-	// Resolve looks up addressing information for id. It returns a channel of
-	// [Result] values, closed when the lookup is exhausted, or nil if the
-	// service does not perform resolution. Cancel ctx to stop pending work; the
-	// channel is then closed.
-	Resolve(ctx context.Context, id key.EndpointID) <-chan Result
+	// Resolve looks up addressing information for id. It returns a sequence of
+	// discovered [Item] values and per-service errors, or nil if the service
+	// does not perform resolution. Cancel ctx to stop pending work.
+	Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error]
 }
 
 // Item is a single address-lookup result: the [dns.EndpointInfo] discovered for
@@ -77,17 +77,6 @@ func (i Item) LastUpdated() (uint64, bool) { return i.lastUpdated, i.hasUpdated 
 // Addr converts the item into a [netaddr.EndpointAddr].
 func (i Item) Addr() netaddr.EndpointAddr { return i.info.Addr() }
 
-// Result is one element of an [AddressLookup.Resolve] stream: either an [Item]
-// or an error from a single service. It mirrors the Rust stream's
-// Result<Item, Error>, where a per-service error does not end the merged
-// stream of [AddressLookupServices].
-type Result struct {
-	// Item is the discovered information. It is meaningful only when Err is nil.
-	Item Item
-	// Err is the per-service lookup error, or nil on success.
-	Err error
-}
-
 // LookupError reports a failed address lookup from a single service. The
 // provenance identifies which service failed.
 //
@@ -108,6 +97,11 @@ func (e *LookupError) Unwrap() error { return e.Err }
 // lookupErr wraps err as a [LookupError] from the named service.
 func lookupErr(provenance string, err error) *LookupError {
 	return &LookupError{Provenance: provenance, Err: err}
+}
+
+type lookupResult struct {
+	item Item
+	err  error
 }
 
 // Errors returned by [AddressLookupServices.Resolve] when no service produces a
@@ -229,54 +223,46 @@ func (s *AddressLookupServices) Publish(data dns.EndpointData) {
 }
 
 // Resolve looks up id across all registered services concurrently, merging
-// their streams into the returned channel. Each successful [Item] is delivered
-// as it is produced as a [Result] with a nil Err, letting the caller act on the
-// first usable address while slower services run.
+// their streams into the returned sequence. Each successful [Item] is yielded as
+// it is produced, letting the caller act on the first usable address while
+// slower services run.
 //
-// A per-service error is delivered inline as a [Result] with that error set and
-// does not end the stream. If every service finishes without yielding an item,
-// a final [Result] carries [ErrNoResults] wrapping the per-service errors. If
-// no services are registered, a single [Result] carries
-// [ErrNoServiceConfigured].
+// A per-service error is yielded inline and does not end the sequence. If every
+// configured service finishes without yielding an item, a final
+// [ErrNoResults] wrapping the per-service errors is yielded. If no services are
+// registered, [ErrNoServiceConfigured] is yielded once.
 //
-// Cancel ctx to stop all services and close the channel.
-func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
+// Cancel ctx to stop all services and end the sequence.
+func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
 	s.mu.RLock()
 	services := slices.Clone(s.services)
 	s.mu.RUnlock()
 
-	out := make(chan Result)
-	if len(services) == 0 {
-		go func() {
-			defer close(out)
-			select {
-			case out <- Result{Err: ErrNoServiceConfigured}:
-			case <-ctx.Done():
+	return func(yield func(Item, error) bool) {
+		if len(services) == 0 {
+			if ctx.Err() == nil {
+				yield(Item{}, ErrNoServiceConfigured)
 			}
-		}()
-		return out
-	}
-
-	go func() {
-		defer close(out)
+			return
+		}
 		var wg sync.WaitGroup
-		merged := make(chan Result)
+		merged := make(chan lookupResult)
 		for _, service := range services {
-			ch := service.Resolve(ctx, id)
-			if ch == nil {
+			seq := service.Resolve(ctx, id)
+			if seq == nil {
 				continue
 			}
 			wg.Add(1)
-			go func(ch <-chan Result) {
+			go func(seq iter.Seq2[Item, error]) {
 				defer wg.Done()
-				for r := range ch {
+				for item, err := range seq {
 					select {
-					case merged <- r:
+					case merged <- lookupResult{item: item, err: err}:
 					case <-ctx.Done():
 						return
 					}
 				}
-			}(ch)
+			}(seq)
 		}
 		go func() {
 			wg.Wait()
@@ -290,27 +276,23 @@ func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) 
 			case r, ok := <-merged:
 				if !ok {
 					if !didEmit {
-						select {
-						case out <- Result{Err: fmt.Errorf("%w: %w", ErrNoResults, errors.Join(errs...))}:
-						case <-ctx.Done():
+						if ctx.Err() == nil {
+							yield(Item{}, fmt.Errorf("%w: %w", ErrNoResults, errors.Join(errs...)))
 						}
 					}
 					return
 				}
-				if r.Err != nil {
-					errs = append(errs, r.Err)
+				if r.err != nil {
+					errs = append(errs, r.err)
 				} else {
 					didEmit = true
 				}
-				select {
-				case out <- r:
-				case <-ctx.Done():
+				if !yield(r.item, r.err) {
 					return
 				}
 			case <-ctx.Done():
 				return
 			}
 		}
-	}()
-	return out
+	}
 }

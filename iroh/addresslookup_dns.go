@@ -2,6 +2,7 @@ package iroh
 
 import (
 	"context"
+	"iter"
 	"time"
 
 	"github.com/tmc/go-iroh/dns"
@@ -54,27 +55,21 @@ func N0DNSAddressLookup(resolver *dns.Resolver) *DNSAddressLookup {
 // [PkarrPublisher].
 func (d *DNSAddressLookup) Publish(dns.EndpointData) {}
 
-// Resolve looks up id in DNS, issuing staggered concurrent queries and
-// returning the first successful result. The returned channel yields a single
-// [Result] (success or error) and is then closed.
-func (d *DNSAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
-	out := make(chan Result, 1)
-	go func() {
-		defer close(out)
+// Resolve looks up id in DNS, issuing staggered concurrent queries and yielding
+// the first successful result or an error.
+func (d *DNSAddressLookup) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
+	return func(yield func(Item, error) bool) {
 		info, err := d.lookupStaggered(ctx, id)
 		if err != nil {
-			select {
-			case out <- Result{Err: lookupErr(DNSProvenance, err)}:
-			case <-ctx.Done():
+			if ctx.Err() == nil {
+				yield(Item{}, lookupErr(DNSProvenance, err))
 			}
 			return
 		}
-		select {
-		case out <- Result{Item: NewItem(info, DNSProvenance, nil)}:
-		case <-ctx.Done():
+		if ctx.Err() == nil {
+			yield(NewItem(info, DNSProvenance, nil), nil)
 		}
-	}()
-	return out
+	}
 }
 
 // lookupStaggered issues a first DNS lookup immediately and additional ones

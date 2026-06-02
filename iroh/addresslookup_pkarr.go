@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"net/url"
 	"strings"
@@ -139,7 +140,7 @@ func (p *PkarrPublisher) Publish(data dns.EndpointData) {
 }
 
 // Resolve always returns nil: a publisher does not resolve.
-func (p *PkarrPublisher) Resolve(context.Context, key.EndpointID) <-chan Result { return nil }
+func (p *PkarrPublisher) Resolve(context.Context, key.EndpointID) iter.Seq2[Item, error] { return nil }
 
 // Close stops the background publish goroutine and waits for it to exit.
 func (p *PkarrPublisher) Close() {
@@ -260,30 +261,26 @@ func N0PkarrResolver(cfg *PkarrResolverConfig) (*PkarrResolver, error) {
 func (r *PkarrResolver) Publish(dns.EndpointData) {}
 
 // Resolve fetches the signed packet for id from the pkarr relay and decodes its
-// endpoint info. The returned channel yields a single [Result] and is closed.
-func (r *PkarrResolver) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
-	out := make(chan Result, 1)
-	go func() {
-		defer close(out)
+// endpoint info.
+func (r *PkarrResolver) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
+	return func(yield func(Item, error) bool) {
 		packet, err := r.client.resolve(ctx, id)
 		if err != nil {
-			send(ctx, out, Result{Err: lookupErr(PkarrProvenance, err)})
+			if ctx.Err() == nil {
+				yield(Item{}, lookupErr(PkarrProvenance, err))
+			}
 			return
 		}
 		info, err := dns.EndpointInfoFromPkarrSignedPacket(packet)
 		if err != nil {
-			send(ctx, out, Result{Err: lookupErr(PkarrProvenance, err)})
+			if ctx.Err() == nil {
+				yield(Item{}, lookupErr(PkarrProvenance, err))
+			}
 			return
 		}
-		send(ctx, out, Result{Item: NewItem(info, PkarrProvenance, nil)})
-	}()
-	return out
-}
-
-func send(ctx context.Context, ch chan<- Result, r Result) {
-	select {
-	case ch <- r:
-	case <-ctx.Done():
+		if ctx.Err() == nil {
+			yield(NewItem(info, PkarrProvenance, nil), nil)
+		}
 	}
 }
 

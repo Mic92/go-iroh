@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -17,11 +18,19 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-// drain collects every Result from ch until it is closed.
-func drain(ch <-chan Result) []Result {
-	var out []Result
-	for r := range ch {
-		out = append(out, r)
+type testLookupResult struct {
+	item Item
+	err  error
+}
+
+// drain collects every item/error pair from seq until it is exhausted.
+func drain(seq iter.Seq2[Item, error]) []testLookupResult {
+	var out []testLookupResult
+	if seq == nil {
+		return out
+	}
+	for item, err := range seq {
+		out = append(out, testLookupResult{item: item, err: err})
 	}
 	return out
 }
@@ -83,13 +92,13 @@ func TestMemoryLookup(t *testing.T) {
 	}
 
 	results := drain(m.Resolve(context.Background(), id))
-	if len(results) != 1 || results[0].Err != nil {
+	if len(results) != 1 || results[0].err != nil {
 		t.Fatalf("Resolve = %+v, want one success", results)
 	}
-	if got := results[0].Item.Provenance(); got != MemoryProvenance {
+	if got := results[0].item.Provenance(); got != MemoryProvenance {
 		t.Errorf("provenance = %q, want %q", got, MemoryProvenance)
 	}
-	if _, ok := results[0].Item.LastUpdated(); !ok {
+	if _, ok := results[0].item.LastUpdated(); !ok {
 		t.Error("memory item should report last-updated")
 	}
 
@@ -115,8 +124,8 @@ func TestMemoryLookupAddMerges(t *testing.T) {
 		t.Fatalf("IPAddrs = %v, want two after merge", got.Data.IPAddrs())
 	}
 	results := drain(m.Resolve(context.Background(), id))
-	if results[0].Item.Provenance() != "custom" {
-		t.Errorf("provenance = %q", results[0].Item.Provenance())
+	if results[0].item.Provenance() != "custom" {
+		t.Errorf("provenance = %q", results[0].item.Provenance())
 	}
 }
 
@@ -168,14 +177,14 @@ func TestDNSAddressLookupResolve(t *testing.T) {
 	lookup := NewDNSAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
 
 	results := drain(lookup.Resolve(context.Background(), id))
-	if len(results) != 1 || results[0].Err != nil {
+	if len(results) != 1 || results[0].err != nil {
 		t.Fatalf("Resolve = %+v, want one success", results)
 	}
-	if got := results[0].Item.Provenance(); got != DNSProvenance {
+	if got := results[0].item.Provenance(); got != DNSProvenance {
 		t.Errorf("provenance = %q, want %q", got, DNSProvenance)
 	}
-	if !results[0].Item.EndpointID().Equal(id) {
-		t.Errorf("id = %s, want %s", results[0].Item.EndpointID(), id)
+	if !results[0].item.EndpointID().Equal(id) {
+		t.Errorf("id = %s, want %s", results[0].item.EndpointID(), id)
 	}
 }
 
@@ -239,8 +248,8 @@ func TestPkarrPublishResolveRoundTrip(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		results := drain(res.Resolve(context.Background(), id))
-		if len(results) == 1 && results[0].Err == nil {
-			item = results[0].Item
+		if len(results) == 1 && results[0].err == nil {
+			item = results[0].item
 			break
 		}
 		if time.Now().After(deadline) {
@@ -286,8 +295,8 @@ func TestPkarrPublisherRelayOnlyFilter(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		results := drain(res.Resolve(context.Background(), id))
-		if len(results) == 1 && results[0].Err == nil {
-			addr := results[0].Item.Addr()
+		if len(results) == 1 && results[0].err == nil {
+			addr := results[0].item.Addr()
 			if len(addr.IPAddrs()) != 0 {
 				t.Fatalf("IP address leaked past relay-only filter: %v", addr.IPAddrs())
 			}
@@ -314,29 +323,26 @@ type staticLookup struct {
 
 func (s staticLookup) Publish(dns.EndpointData) {}
 
-func (s staticLookup) Resolve(ctx context.Context, _ key.EndpointID) <-chan Result {
-	out := make(chan Result, 1)
-	go func() {
-		defer close(out)
+func (s staticLookup) Resolve(ctx context.Context, _ key.EndpointID) iter.Seq2[Item, error] {
+	return func(yield func(Item, error) bool) {
 		select {
 		case <-time.After(s.delay):
 		case <-ctx.Done():
 			return
 		}
 		if s.err != nil {
-			out <- Result{Err: lookupErr(s.provenance, s.err)}
+			yield(Item{}, lookupErr(s.provenance, s.err))
 			return
 		}
-		out <- Result{Item: NewItem(*s.info, s.provenance, nil)}
-	}()
-	return out
+		yield(NewItem(*s.info, s.provenance, nil), nil)
+	}
 }
 
 func TestServicesNoServiceConfigured(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	var svcs AddressLookupServices
 	results := drain(svcs.Resolve(context.Background(), sk.Public()))
-	if len(results) != 1 || !errors.Is(results[0].Err, ErrNoServiceConfigured) {
+	if len(results) != 1 || !errors.Is(results[0].err, ErrNoServiceConfigured) {
 		t.Fatalf("Resolve = %+v, want ErrNoServiceConfigured", results)
 	}
 }
@@ -355,9 +361,9 @@ func TestServicesSucceedsAfterOtherErrors(t *testing.T) {
 	results := drain(svcs.Resolve(context.Background(), id))
 	var sawErr, sawOK bool
 	for _, r := range results {
-		if r.Err != nil {
+		if r.err != nil {
 			sawErr = true
-		} else if r.Item.EndpointID().Equal(id) {
+		} else if r.item.EndpointID().Equal(id) {
 			sawOK = true
 		}
 	}
@@ -376,7 +382,7 @@ func TestServicesNoResults(t *testing.T) {
 
 	results := drain(svcs.Resolve(context.Background(), sk.Public()))
 	last := results[len(results)-1]
-	if !errors.Is(last.Err, ErrNoResults) {
+	if !errors.Is(last.err, ErrNoResults) {
 		t.Fatalf("final result = %+v, want ErrNoResults", last)
 	}
 }
@@ -422,7 +428,7 @@ func (r *recordingLookup) Publish(data dns.EndpointData) {
 	r.published = append(r.published, data)
 }
 
-func (r *recordingLookup) Resolve(context.Context, key.EndpointID) <-chan Result { return nil }
+func (r *recordingLookup) Resolve(context.Context, key.EndpointID) iter.Seq2[Item, error] { return nil }
 
 func TestServicesAddPublishesHistorical(t *testing.T) {
 	relay := relayURL(t, "https://relay.example/")

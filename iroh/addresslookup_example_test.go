@@ -20,13 +20,13 @@ func ExampleMemoryLookup() {
 	relay, _ := netaddr.ParseRelayURL("https://relay.example/")
 	lookup.AddEndpointAddr(netaddr.NewEndpointAddr(id).WithRelayURL(relay))
 
-	for r := range lookup.Resolve(context.Background(), id) {
-		if r.Err != nil {
-			fmt.Println("error:", r.Err)
+	for item, err := range lookup.Resolve(context.Background(), id) {
+		if err != nil {
+			fmt.Println("error:", err)
 			continue
 		}
-		fmt.Println("provenance:", r.Item.Provenance())
-		fmt.Println("relays:", r.Item.Addr().RelayURLs())
+		fmt.Println("provenance:", item.Provenance())
+		fmt.Println("relays:", item.Addr().RelayURLs())
 	}
 	// Output:
 	// provenance: memory_lookup
@@ -49,11 +49,11 @@ func ExampleAddressLookupServices() {
 	var services iroh.AddressLookupServices
 	services.Add(mem)
 
-	for r := range services.Resolve(context.Background(), id) {
-		if r.Err != nil {
+	for item, err := range services.Resolve(context.Background(), id) {
+		if err != nil {
 			continue
 		}
-		fmt.Println(r.Item.Addr().RelayURLs())
+		fmt.Println(item.Addr().RelayURLs())
 		break
 	}
 	// Output:

@@ -2,6 +2,7 @@ package iroh
 
 import (
 	"context"
+	"iter"
 	"sync"
 	"time"
 
@@ -116,7 +117,7 @@ func (m *MemoryLookup) RemoveEndpointInfo(id key.EndpointID) (dns.EndpointInfo, 
 func (m *MemoryLookup) Publish(dns.EndpointData) {}
 
 // Resolve returns the stored info for id, or nil if there is no entry.
-func (m *MemoryLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
+func (m *MemoryLookup) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
 	m.mu.RLock()
 	info, ok := m.endpoints[id]
 	m.mu.RUnlock()
@@ -125,10 +126,11 @@ func (m *MemoryLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Re
 	}
 	lastUpdated := uint64(info.lastUpdated.UnixMicro())
 	item := NewItem(dns.EndpointInfo{ID: id, Data: info.data}, m.provenance, &lastUpdated)
-	out := make(chan Result, 1)
-	out <- Result{Item: item}
-	close(out)
-	return out
+	return func(yield func(Item, error) bool) {
+		if ctx.Err() == nil {
+			yield(item, nil)
+		}
+	}
 }
 
 // FilteredAddressLookup wraps an [AddressLookup], applying an [AddrFilter] to
@@ -158,6 +160,6 @@ func (f FilteredAddressLookup) Publish(data dns.EndpointData) {
 }
 
 // Resolve delegates to the inner service.
-func (f FilteredAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
+func (f FilteredAddressLookup) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
 	return f.inner.Resolve(ctx, id)
 }
