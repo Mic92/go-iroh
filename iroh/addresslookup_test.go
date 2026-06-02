@@ -111,6 +111,30 @@ func TestMemoryLookup(t *testing.T) {
 	}
 }
 
+func TestItemLastUpdatedTime(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	info := endpointInfoWithIP(sk.Public(), netip.MustParseAddrPort("127.0.0.1:1"))
+	micros := uint64(1_700_000_000_123_456)
+	item := NewItem(info, "test", &micros)
+
+	gotRaw, ok := item.LastUpdated()
+	if !ok || gotRaw != micros {
+		t.Fatalf("LastUpdated = %d, %v; want %d, true", gotRaw, ok, micros)
+	}
+	gotTime, ok := item.LastUpdatedTime()
+	if !ok {
+		t.Fatal("LastUpdatedTime ok = false, want true")
+	}
+	if want := time.UnixMicro(int64(micros)); !gotTime.Equal(want) {
+		t.Fatalf("LastUpdatedTime = %v, want %v", gotTime, want)
+	}
+
+	unknown := NewItem(info, "test", nil)
+	if got, ok := unknown.LastUpdatedTime(); ok || !got.IsZero() {
+		t.Fatalf("unknown LastUpdatedTime = %v, %v; want zero, false", got, ok)
+	}
+}
+
 func TestMemoryLookupAddMerges(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()

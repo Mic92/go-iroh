@@ -7,6 +7,7 @@ import (
 	"iter"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/key"
@@ -90,6 +91,15 @@ func (i Item) Provenance() string { return i.provenance }
 // LastUpdated returns the time the source last updated this info, in
 // microseconds since the unix epoch, and whether the source tracks it.
 func (i Item) LastUpdated() (uint64, bool) { return i.lastUpdated, i.hasUpdated }
+
+// LastUpdatedTime returns the time the source last updated this info, and
+// whether the source tracks it.
+func (i Item) LastUpdatedTime() (time.Time, bool) {
+	if !i.hasUpdated {
+		return time.Time{}, false
+	}
+	return time.UnixMicro(int64(i.lastUpdated)), true
+}
 
 // Addr converts the item into a [netaddr.EndpointAddr].
 func (i Item) Addr() netaddr.EndpointAddr { return i.info.Addr() }
