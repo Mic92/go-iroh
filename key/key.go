@@ -339,6 +339,42 @@ func (s Signature) Ed25519() []byte {
 // String returns the lowercase-hex encoding of the signature.
 func (s Signature) String() string { return hex.EncodeToString(s.bytes[:]) }
 
+// MarshalText implements encoding.TextMarshaler, producing the hex form.
+func (s Signature) MarshalText() ([]byte, error) {
+	return []byte(s.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler, parsing the hex form.
+func (s *Signature) UnmarshalText(text []byte) error {
+	b, err := hex.DecodeString(string(text))
+	if err != nil {
+		return ErrDecodeHex
+	}
+	parsed, err := SignatureFromSlice(b)
+	if err != nil {
+		return err
+	}
+	*s = parsed
+	return nil
+}
+
+// MarshalBinary implements encoding.BinaryMarshaler, producing the 64 raw
+// signature bytes.
+func (s Signature) MarshalBinary() ([]byte, error) {
+	b := s.bytes
+	return b[:], nil
+}
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler from 64 raw bytes.
+func (s *Signature) UnmarshalBinary(data []byte) error {
+	parsed, err := SignatureFromSlice(data)
+	if err != nil {
+		return err
+	}
+	*s = parsed
+	return nil
+}
+
 // Equal reports whether s and other are the same signature.
 func (s Signature) Equal(other Signature) bool { return s.bytes == other.bytes }
 

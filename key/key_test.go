@@ -72,6 +72,50 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSignatureEncoding(t *testing.T) {
+	sk, err := GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := sk.Sign([]byte("hello world"))
+
+	text, err := sig.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(text) != sig.String() {
+		t.Fatalf("MarshalText = %q, want %q", text, sig.String())
+	}
+	var textSig Signature
+	if err := textSig.UnmarshalText(text); err != nil {
+		t.Fatal(err)
+	}
+	if !textSig.Equal(sig) {
+		t.Fatal("text round-trip mismatch")
+	}
+	if err := textSig.UnmarshalText([]byte("not hex")); !errors.Is(err, ErrDecodeHex) {
+		t.Fatalf("UnmarshalText invalid = %v, want ErrDecodeHex", err)
+	}
+
+	data, err := sig.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) != SignatureSize {
+		t.Fatalf("MarshalBinary len = %d, want %d", len(data), SignatureSize)
+	}
+	var binSig Signature
+	if err := binSig.UnmarshalBinary(data); err != nil {
+		t.Fatal(err)
+	}
+	if !binSig.Equal(sig) {
+		t.Fatal("binary round-trip mismatch")
+	}
+	if err := binSig.UnmarshalBinary(data[:SignatureSize-1]); !errors.Is(err, ErrInvalidSignatureParse) {
+		t.Fatalf("UnmarshalBinary short = %v, want ErrInvalidSignatureParse", err)
+	}
+}
+
 func TestEd25519Conversions(t *testing.T) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
