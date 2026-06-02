@@ -60,7 +60,7 @@ func endpointIDFromTxtName(name string) (key.EndpointID, error) {
 	if labels[0] != IrohTxtName {
 		return key.EndpointID{}, fmt.Errorf("%w, got %q", ErrNotIrohRecord, labels[0])
 	}
-	return key.PublicKeyFromZ32(labels[1])
+	return key.ParsePublicKeyZ32(labels[1])
 }
 
 // txtAttrsFromStrings builds txtAttrs from an endpoint id and "key=value"

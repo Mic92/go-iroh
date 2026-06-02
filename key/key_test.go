@@ -205,13 +205,6 @@ func TestZ32RoundTrip(t *testing.T) {
 	if !k2.Equal(k) {
 		t.Error("z32 round-trip mismatch")
 	}
-	k3, err := PublicKeyFromZ32(z)
-	if err != nil {
-		t.Fatalf("PublicKeyFromZ32: %v", err)
-	}
-	if !k3.Equal(k) {
-		t.Error("legacy z32 round-trip mismatch")
-	}
 	// z-base-32 of a 32-byte value is 52 chars.
 	if len(z) != 52 {
 		t.Errorf("z32 length = %d, want 52", len(z))

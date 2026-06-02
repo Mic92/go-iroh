@@ -27,7 +27,8 @@ func TestTxtAttrRoundTrip(t *testing.T) {
 	data := NewEndpointData(
 		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com")},
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
-	).WithUserData(ud)
+	)
+	data.SetUserData(&ud)
 	id, err := key.ParsePublicKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +68,8 @@ func TestSignedPacketRoundTrip(t *testing.T) {
 	data := NewEndpointData(
 		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com")},
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
-	).WithUserData(ud)
+	)
+	data.SetUserData(&ud)
 	want := EndpointInfo{ID: sk.Public(), Data: data}
 	packet, err := want.ToPkarrSignedPacket(sk, 30)
 	if err != nil {
@@ -93,7 +95,8 @@ func TestSignedPacketRoundTripCustomAddr(t *testing.T) {
 		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com")},
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 		bt, tor,
-	).WithUserData(ud)
+	)
+	data.SetUserData(&ud)
 	want := EndpointInfo{ID: sk.Public(), Data: data}
 	packet, err := want.ToPkarrSignedPacket(sk, 30)
 	if err != nil {
@@ -134,10 +137,12 @@ func TestFromTxtLookupMultiAddr(t *testing.T) {
 func TestTxtStringsOrder(t *testing.T) {
 	// Reference BTreeMap order is relay, addr, user-data (enum order), not lexical.
 	ud, _ := NewUserData("x")
-	info := EndpointInfo{ID: testID(t), Data: NewEndpointData(
+	data := NewEndpointData(
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")},
 		netaddr.RelayAddr{URL: mustRelay(t, "https://r.example.com")},
-	).WithUserData(ud)}
+	)
+	data.SetUserData(&ud)
+	info := EndpointInfo{ID: testID(t), Data: data}
 	got := info.ToTxtStrings()
 	// relay first, then addr, then user-data.
 	if len(got) != 3 || got[0][:6] != "relay=" || got[1][:5] != "addr=" || got[2][:10] != "user-data=" {
@@ -147,11 +152,13 @@ func TestTxtStringsOrder(t *testing.T) {
 
 func TestTxtStringsGolden(t *testing.T) {
 	ud, _ := NewUserData("foobar")
-	info := EndpointInfo{ID: testID(t), Data: NewEndpointData(
+	data := NewEndpointData(
 		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com/")},
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 		netaddr.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6}),
-	).WithUserData(ud)}
+	)
+	data.SetUserData(&ud)
+	info := EndpointInfo{ID: testID(t), Data: data}
 	got := info.ToTxtStrings()
 	want := []string{
 		"relay=https://example.com/",

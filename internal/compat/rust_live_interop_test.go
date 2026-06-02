@@ -687,7 +687,7 @@ func parseRustListenConnectLine(line string) (rustListenReady, bool, error) {
 }
 
 func parseRustEndpointID(s string) (key.EndpointID, error) {
-	if id, err := key.PublicKeyFromZ32(s); err == nil {
+	if id, err := key.ParsePublicKeyZ32(s); err == nil {
 		return id, nil
 	}
 	if id, err := key.ParsePublicKey(s); err == nil {

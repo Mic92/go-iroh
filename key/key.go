@@ -144,13 +144,6 @@ func ParsePublicKeyZ32(s string) (PublicKey, error) {
 	return PublicKeyFromSlice(b)
 }
 
-// PublicKeyFromZ32 parses a key from its z-base-32 encoding.
-//
-// Deprecated: use [ParsePublicKeyZ32].
-func PublicKeyFromZ32(s string) (PublicKey, error) {
-	return ParsePublicKeyZ32(s)
-}
-
 // ParsePublicKey parses a PublicKey from its hex or base32 string form. A string
 // of exactly 64 characters is decoded as lowercase hex; otherwise it is decoded
 // as RFC 4648 base32 (no padding, case-insensitive). [PublicKey.String] always

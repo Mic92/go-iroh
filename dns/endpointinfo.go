@@ -61,14 +61,6 @@ func NewEndpointData(addrs ...netaddr.TransportAddr) EndpointData {
 	return d
 }
 
-// WithUserData returns a copy of d with the user data set.
-//
-// Deprecated: use [EndpointData.SetUserData].
-func (d EndpointData) WithUserData(u UserData) EndpointData {
-	d.userData = &u
-	return d
-}
-
 // AddRelayURL adds a relay URL to the end of the address list, unless already
 // present.
 func (d *EndpointData) AddRelayURL(u netaddr.RelayURL) {
