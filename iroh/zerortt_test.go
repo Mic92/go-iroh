@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // TestEndpoint0RTTResumption is the slice-E gate: a client connects to a server
@@ -63,7 +63,7 @@ func TestEndpoint0RTTResumption(t *testing.T) {
 		}
 	}()
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 
 	// First connection: full handshake. The server issues a session ticket that
 	// the client caches after the handshake.

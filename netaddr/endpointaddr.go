@@ -1,4 +1,4 @@
-package base
+package netaddr
 
 import (
 	"bytes"
@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/tmc/go-iroh/key"
 )
 
 // TransportAddr is a network-level address at which an endpoint may be reached.
@@ -190,27 +192,27 @@ func ParseTransportAddr(s string) (TransportAddr, error) {
 	}
 }
 
-// EndpointAddr combines an endpoint's [EndpointId] with the network-level
+// EndpointAddr combines an endpoint's [key.EndpointId] with the network-level
 // addresses at which it may be reached.
 //
-// To establish a connection both the EndpointId and at least one path (a relay
+// To establish a connection both the key.EndpointId and at least one path (a relay
 // URL or a direct IP address) are needed; an EndpointAddr with no addresses is
 // still usable together with an address-lookup service.
 type EndpointAddr struct {
 	// Id is the endpoint's identifier.
-	Id EndpointId
+	Id key.EndpointId
 	// addrs is the sorted, deduplicated set of transport addresses.
 	addrs []TransportAddr
 }
 
 // NewEndpointAddr creates an EndpointAddr with the given id and no addresses.
-func NewEndpointAddr(id EndpointId) EndpointAddr {
+func NewEndpointAddr(id key.EndpointId) EndpointAddr {
 	return EndpointAddr{Id: id}
 }
 
 // EndpointAddrFromParts creates an EndpointAddr from an id and a set of
 // transport addresses (deduplicated and sorted).
-func EndpointAddrFromParts(id EndpointId, addrs ...TransportAddr) EndpointAddr {
+func EndpointAddrFromParts(id key.EndpointId, addrs ...TransportAddr) EndpointAddr {
 	a := EndpointAddr{Id: id}
 	return a.WithAddrs(addrs...)
 }
@@ -237,7 +239,7 @@ func (a EndpointAddr) WithAddrs(addrs ...TransportAddr) EndpointAddr {
 // slice must not be mutated.
 func (a EndpointAddr) Addrs() []TransportAddr { return a.addrs }
 
-// IsEmpty reports whether only the EndpointId is present.
+// IsEmpty reports whether only the key.EndpointId is present.
 func (a EndpointAddr) IsEmpty() bool { return len(a.addrs) == 0 }
 
 // IPAddrs returns the IP socket addresses of this endpoint.

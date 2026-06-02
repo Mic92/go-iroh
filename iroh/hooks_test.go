@@ -7,16 +7,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 type testHooks struct {
-	before func(context.Context, base.EndpointAddr, []byte) (BeforeConnectOutcome, error)
+	before func(context.Context, netaddr.EndpointAddr, []byte) (BeforeConnectOutcome, error)
 	after  func(context.Context, *Conn) (AfterHandshakeOutcome, error)
 }
 
-func (h testHooks) BeforeConnect(ctx context.Context, addr base.EndpointAddr, alpn []byte) (BeforeConnectOutcome, error) {
+func (h testHooks) BeforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte) (BeforeConnectOutcome, error) {
 	if h.before != nil {
 		return h.before(ctx, addr, alpn)
 	}
@@ -33,7 +33,7 @@ func (h testHooks) AfterHandshake(ctx context.Context, conn *Conn) (AfterHandsha
 func TestEndpointHooksRejectBeforeConnect(t *testing.T) {
 	ctx := context.Background()
 	client, err := Bind(ctx, WithHooks(testHooks{
-		before: func(context.Context, base.EndpointAddr, []byte) (BeforeConnectOutcome, error) {
+		before: func(context.Context, netaddr.EndpointAddr, []byte) (BeforeConnectOutcome, error) {
 			return BeforeConnectReject, nil
 		},
 	}))
@@ -43,7 +43,7 @@ func TestEndpointHooksRejectBeforeConnect(t *testing.T) {
 	defer client.Close(ctx)
 
 	sk, _ := key.GenerateSecretKey()
-	addr := base.NewEndpointAddr(sk.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1"))
+	addr := netaddr.NewEndpointAddr(sk.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1"))
 	if _, err := client.Connect(ctx, addr, []byte("iroh-hooks/0")); !errors.Is(err, ErrConnectRejected) {
 		t.Fatalf("Connect err = %v, want ErrConnectRejected", err)
 	}
@@ -82,7 +82,7 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	conn, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
 	if err != nil {
 		t.Fatal(err)
 	}

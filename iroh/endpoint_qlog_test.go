@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func TestEndpointQLOGDIRWritesConnectionTraces(t *testing.T) {
@@ -53,7 +53,7 @@ func TestEndpointQLOGDIRWritesConnectionTraces(t *testing.T) {
 		accepted <- nil
 	}()
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)

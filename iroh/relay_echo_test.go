@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayserver"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -23,9 +23,9 @@ func newEchoRelayServer(t *testing.T) echoRelayServer {
 }
 
 // url returns the relay URL clients dial.
-func (s echoRelayServer) url(t *testing.T) base.RelayUrl {
+func (s echoRelayServer) url(t *testing.T) netaddr.RelayUrl {
 	t.Helper()
-	u, err := base.ParseRelayUrl(s.ts.URL)
+	u, err := netaddr.ParseRelayUrl(s.ts.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestRelayOnlyEcho(t *testing.T) {
 	}()
 
 	// Relay-only address: id + relay URL, no direct IP.
-	addr := base.NewEndpointAddr(server.ID()).WithRelayURL(relayURL)
+	addr := netaddr.NewEndpointAddr(server.ID()).WithRelayURL(relayURL)
 
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {

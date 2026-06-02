@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 type externalCustomTransport struct {
@@ -18,7 +18,7 @@ func (t *externalCustomTransport) Serve(ctx context.Context, recv func(iroh.Cust
 	<-ctx.Done()
 }
 
-func (t *externalCustomTransport) Send(remote base.CustomAddr, local *base.CustomAddr, p []byte) bool {
+func (t *externalCustomTransport) Send(remote netaddr.CustomAddr, local *netaddr.CustomAddr, p []byte) bool {
 	_, _, _ = remote, local, p
 	t.mu.Lock()
 	t.sent++

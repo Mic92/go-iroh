@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func TestEndpointMetrics(t *testing.T) {
@@ -41,7 +41,7 @@ func TestEndpointMetrics(t *testing.T) {
 		accepted <- err
 	}()
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -60,7 +60,7 @@ func TestEndpointMetrics(t *testing.T) {
 		t.Fatalf("server Metrics = %+v, want one successful accept", sm)
 	}
 
-	if _, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()), []byte(alpn)); err == nil {
+	if _, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()), []byte(alpn)); err == nil {
 		t.Fatal("connect without address succeeded")
 	}
 	cm = client.Metrics()

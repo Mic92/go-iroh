@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // TestMemoryLookupFromInfo checks the pre-populating constructor and the
@@ -170,8 +170,8 @@ func TestPkarrPublisherOptions(t *testing.T) {
 	defer pub.Close()
 
 	pub.Publish(dns.NewEndpointData(
-		base.RelayAddr{URL: relay},
-		base.IPAddr{Addr: ip},
+		netaddr.RelayAddr{URL: relay},
+		netaddr.IPAddr{Addr: ip},
 	))
 
 	res, err := NewPkarrResolver(srv.URL).WithHTTPClient(srv.Client()).Build()
@@ -221,7 +221,7 @@ func TestN0PkarrConstructors(t *testing.T) {
 		t.Fatalf("N0PkarrResolver Build: %v", err)
 	}
 	// A resolver does not publish: Publish is a no-op and must not panic.
-	res.Publish(dns.NewEndpointData(base.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
+	res.Publish(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
 }
 
 func TestPkarrDefaults(t *testing.T) {
@@ -259,7 +259,7 @@ func TestN0DnsAddressLookup(t *testing.T) {
 	// nil resolver falls back to the system DNS resolver; construction must not
 	// panic and Publish is a no-op.
 	lookup := N0DnsAddressLookup(nil)
-	lookup.Publish(dns.NewEndpointData(base.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
+	lookup.Publish(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
 
 	// With an explicit resolver, resolution uses the configured origin. A canned
 	// TXT lookuper makes this deterministic.

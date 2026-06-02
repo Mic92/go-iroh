@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // drain collects every Result from ch until it is closed.
@@ -26,9 +26,9 @@ func drain(ch <-chan Result) []Result {
 	return out
 }
 
-func relayURL(t *testing.T, s string) base.RelayUrl {
+func relayURL(t *testing.T, s string) netaddr.RelayUrl {
 	t.Helper()
-	u, err := base.ParseRelayUrl(s)
+	u, err := netaddr.ParseRelayUrl(s)
 	if err != nil {
 		t.Fatalf("ParseRelayUrl(%q): %v", s, err)
 	}
@@ -47,7 +47,7 @@ func TestMemoryLookup(t *testing.T) {
 		t.Fatal("Resolve of unknown id should return nil channel")
 	}
 
-	addr := base.NewEndpointAddr(id).WithRelayURL(relayURL(t, "https://relay.example/"))
+	addr := netaddr.NewEndpointAddr(id).WithRelayURL(relayURL(t, "https://relay.example/"))
 	m.AddEndpointAddr(addr)
 
 	got, ok := m.GetEndpointInfo(id)
@@ -83,8 +83,8 @@ func TestMemoryLookupAddMerges(t *testing.T) {
 	id := sk.Public()
 	m := NewMemoryLookupWithProvenance("custom")
 
-	m.AddEndpointAddr(base.NewEndpointAddr(id).WithIP(netip.MustParseAddrPort("1.2.3.4:1")))
-	m.AddEndpointAddr(base.NewEndpointAddr(id).WithIP(netip.MustParseAddrPort("5.6.7.8:2")))
+	m.AddEndpointAddr(netaddr.NewEndpointAddr(id).WithIP(netip.MustParseAddrPort("1.2.3.4:1")))
+	m.AddEndpointAddr(netaddr.NewEndpointAddr(id).WithIP(netip.MustParseAddrPort("5.6.7.8:2")))
 
 	got, _ := m.GetEndpointInfo(id)
 	if len(got.IPAddrs()) != 2 {
@@ -199,7 +199,7 @@ func TestPkarrPublishResolveRoundTrip(t *testing.T) {
 	}
 	defer pub.Close()
 
-	data := dns.NewEndpointData(base.RelayAddr{URL: relay})
+	data := dns.NewEndpointData(netaddr.RelayAddr{URL: relay})
 	pub.Publish(data)
 
 	res, err := NewPkarrResolver(srv.URL).WithHTTPClient(srv.Client()).Build()
@@ -250,8 +250,8 @@ func TestPkarrPublisherRelayOnlyFilter(t *testing.T) {
 
 	// Publish both a relay and an IP address; default filter keeps relay only.
 	data := dns.NewEndpointData(
-		base.RelayAddr{URL: relay},
-		base.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:9999")},
+		netaddr.RelayAddr{URL: relay},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:9999")},
 	)
 	pub.Publish(data)
 
@@ -363,8 +363,8 @@ func TestServicesPublishAppliesFilter(t *testing.T) {
 
 	relay := relayURL(t, "https://relay.example/")
 	data := dns.NewEndpointData(
-		base.RelayAddr{URL: relay},
-		base.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")},
+		netaddr.RelayAddr{URL: relay},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")},
 	)
 	svcs.Publish(data)
 
@@ -397,7 +397,7 @@ func (r *recordingLookup) Resolve(context.Context, key.EndpointId) <-chan Result
 
 func TestServicesAddPublishesHistorical(t *testing.T) {
 	relay := relayURL(t, "https://relay.example/")
-	data := dns.NewEndpointData(base.RelayAddr{URL: relay})
+	data := dns.NewEndpointData(netaddr.RelayAddr{URL: relay})
 
 	var svcs AddressLookupServices
 	svcs.Publish(data)
@@ -415,8 +415,8 @@ func TestFilteredAddressLookup(t *testing.T) {
 
 	relay := relayURL(t, "https://relay.example/")
 	data := dns.NewEndpointData(
-		base.RelayAddr{URL: relay},
-		base.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")},
+		netaddr.RelayAddr{URL: relay},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")},
 	)
 	f.Publish(data)
 

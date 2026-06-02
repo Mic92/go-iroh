@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // MemoryProvenance is the default provenance string for [MemoryLookup] items.
@@ -85,8 +85,8 @@ func (m MemoryLookup) AddEndpointInfo(info dns.EndpointInfo) {
 }
 
 // AddEndpointAddr is a convenience wrapper for [MemoryLookup.AddEndpointInfo]
-// taking an [base.EndpointAddr].
-func (m MemoryLookup) AddEndpointAddr(addr base.EndpointAddr) {
+// taking an [netaddr.EndpointAddr].
+func (m MemoryLookup) AddEndpointAddr(addr netaddr.EndpointAddr) {
 	m.AddEndpointInfo(dns.EndpointInfoFromAddr(addr))
 }
 

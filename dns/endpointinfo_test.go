@@ -5,13 +5,13 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
-func mustRelay(t *testing.T, s string) base.RelayUrl {
+func mustRelay(t *testing.T, s string) netaddr.RelayUrl {
 	t.Helper()
-	u, err := base.ParseRelayUrl(s)
+	u, err := netaddr.ParseRelayUrl(s)
 	if err != nil {
 		t.Fatalf("ParseRelayUrl(%q): %v", s, err)
 	}
@@ -25,8 +25,8 @@ func TestTxtAttrRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	data := NewEndpointData(
-		base.RelayAddr{URL: mustRelay(t, "https://example.com")},
-		base.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
+		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 	).WithUserData(ud)
 	id, err := key.ParsePublicKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
@@ -40,11 +40,11 @@ func TestTxtAttrRoundTrip(t *testing.T) {
 
 // TestTxtAttrRoundTripCustomAddr mirrors txt_attr_roundtrip_with_custom_addr.
 func TestTxtAttrRoundTripCustomAddr(t *testing.T) {
-	bt := base.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6})
-	tor := base.NewCustomAddr(42, bytesRepeat(0xab, 32))
+	bt := netaddr.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6})
+	tor := netaddr.NewCustomAddr(42, bytesRepeat(0xab, 32))
 	data := NewEndpointData(
-		base.RelayAddr{URL: mustRelay(t, "https://example.com")},
-		base.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
+		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 		bt,
 		tor,
 	)
@@ -65,8 +65,8 @@ func TestSignedPacketRoundTrip(t *testing.T) {
 	}
 	ud, _ := NewUserData("foobar")
 	data := NewEndpointData(
-		base.RelayAddr{URL: mustRelay(t, "https://example.com")},
-		base.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
+		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 	).WithUserData(ud)
 	want := EndpointInfoFromParts(sk.Public(), data)
 	packet, err := want.ToPkarrSignedPacket(sk, 30)
@@ -86,12 +86,12 @@ func TestSignedPacketRoundTripCustomAddr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	bt := base.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6})
-	tor := base.NewCustomAddr(42, bytesRepeat(0xab, 32))
+	bt := netaddr.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6})
+	tor := netaddr.NewCustomAddr(42, bytesRepeat(0xab, 32))
 	ud, _ := NewUserData("foobar")
 	data := NewEndpointData(
-		base.RelayAddr{URL: mustRelay(t, "https://example.com")},
-		base.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
+		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 		bt, tor,
 	).WithUserData(ud)
 	want := EndpointInfoFromParts(sk.Public(), data)
@@ -136,8 +136,8 @@ func TestTxtStringsOrder(t *testing.T) {
 	// Reference BTreeMap order is relay, addr, user-data (enum order), not lexical.
 	ud, _ := NewUserData("x")
 	info := EndpointInfoFromParts(testID(t), NewEndpointData(
-		base.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")},
-		base.RelayAddr{URL: mustRelay(t, "https://r.example.com")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")},
+		netaddr.RelayAddr{URL: mustRelay(t, "https://r.example.com")},
 	).WithUserData(ud))
 	got := info.ToTxtStrings()
 	// relay first, then addr, then user-data.
@@ -149,9 +149,9 @@ func TestTxtStringsOrder(t *testing.T) {
 func TestTxtStringsGolden(t *testing.T) {
 	ud, _ := NewUserData("foobar")
 	info := EndpointInfoFromParts(testID(t), NewEndpointData(
-		base.RelayAddr{URL: mustRelay(t, "https://example.com/")},
-		base.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
-		base.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6}),
+		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com/")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
+		netaddr.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6}),
 	).WithUserData(ud))
 	got := info.ToTxtStrings()
 	want := []string{
@@ -223,7 +223,7 @@ func assertEndpointInfoEqual(t *testing.T, got, want EndpointInfo) {
 	}
 }
 
-func strs(addrs []base.TransportAddr) []string {
+func strs(addrs []netaddr.TransportAddr) []string {
 	out := make([]string, len(addrs))
 	for i, a := range addrs {
 		out[i] = a.String()

@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func TestConfigWithAuthToken(t *testing.T) {
-	u, _ := base.ParseRelayUrl("https://a.example.com")
+	u, _ := netaddr.ParseRelayUrl("https://a.example.com")
 	c := NewConfig(u, nil)
 	c2 := c.WithAuthToken("token123")
 	if c2.AuthToken != "token123" {
@@ -21,7 +21,7 @@ func TestConfigWithAuthToken(t *testing.T) {
 }
 
 func TestConfigString(t *testing.T) {
-	u, _ := base.ParseRelayUrl("https://a.example.com")
+	u, _ := netaddr.ParseRelayUrl("https://a.example.com")
 	c := NewConfig(u, nil)
 	if c.String() != u.String() {
 		t.Errorf("c.String() = %q, want %q", c.String(), u.String())
@@ -29,7 +29,7 @@ func TestConfigString(t *testing.T) {
 }
 
 func TestMapInsertZeroValue(t *testing.T) {
-	u, _ := base.ParseRelayUrl("https://a.example.com")
+	u, _ := netaddr.ParseRelayUrl("https://a.example.com")
 	var m Map // zero Map, nil relays
 	prev, ok := m.Insert(NewConfig(u, nil))
 	if ok {
@@ -44,8 +44,8 @@ func TestMapInsertZeroValue(t *testing.T) {
 }
 
 func TestMapConfigsSorted(t *testing.T) {
-	ub, _ := base.ParseRelayUrl("https://b.example.com")
-	ua, _ := base.ParseRelayUrl("https://a.example.com")
+	ub, _ := netaddr.ParseRelayUrl("https://b.example.com")
+	ua, _ := netaddr.ParseRelayUrl("https://a.example.com")
 	m := MapFromURLs(ub, ua)
 	configs := m.Configs()
 	if len(configs) != 2 {
@@ -57,9 +57,9 @@ func TestMapConfigsSorted(t *testing.T) {
 }
 
 func TestMapClone(t *testing.T) {
-	u1, _ := base.ParseRelayUrl("https://a.example.com")
-	u2, _ := base.ParseRelayUrl("https://b.example.com")
-	u3, _ := base.ParseRelayUrl("https://c.example.com")
+	u1, _ := netaddr.ParseRelayUrl("https://a.example.com")
+	u2, _ := netaddr.ParseRelayUrl("https://b.example.com")
+	u3, _ := netaddr.ParseRelayUrl("https://c.example.com")
 	m1 := NewMap(NewConfig(u1, nil), NewConfig(u2, nil))
 	m2 := m1.Clone()
 	m2.Insert(NewConfig(u3, nil))
@@ -72,8 +72,8 @@ func TestMapClone(t *testing.T) {
 }
 
 func TestMapString(t *testing.T) {
-	ub, _ := base.ParseRelayUrl("https://b.example.com")
-	ua, _ := base.ParseRelayUrl("https://a.example.com")
+	ub, _ := netaddr.ParseRelayUrl("https://b.example.com")
+	ua, _ := netaddr.ParseRelayUrl("https://a.example.com")
 	m := MapFromURLs(ub, ua)
 	s := m.String()
 	if !strings.HasPrefix(s, "RelayMap{") || !strings.HasSuffix(s, "}") {

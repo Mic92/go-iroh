@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // ExampleMemoryLookup resolves addressing information added out-of-band, such
@@ -17,8 +17,8 @@ func ExampleMemoryLookup() {
 	id := sk.Public()
 
 	lookup := iroh.NewMemoryLookup()
-	relay, _ := base.ParseRelayUrl("https://relay.example/")
-	lookup.AddEndpointAddr(base.NewEndpointAddr(id).WithRelayURL(relay))
+	relay, _ := netaddr.ParseRelayUrl("https://relay.example/")
+	lookup.AddEndpointAddr(netaddr.NewEndpointAddr(id).WithRelayURL(relay))
 
 	for r := range lookup.Resolve(context.Background(), id) {
 		if r.Err != nil {
@@ -38,7 +38,7 @@ func ExampleMemoryLookup() {
 func ExampleAddressLookupServices() {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
-	relay, _ := base.ParseRelayUrl("https://relay.example/")
+	relay, _ := netaddr.ParseRelayUrl("https://relay.example/")
 
 	mem := iroh.NewMemoryLookup()
 	mem.AddEndpointInfo(dns.NewEndpointInfo(id).WithRelayURL(relay))

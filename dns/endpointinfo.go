@@ -5,9 +5,9 @@ import (
 	"net/netip"
 	"slices"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/pkarr"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // IrohTxtName is the DNS record name under which iroh TXT records are published.
@@ -49,13 +49,13 @@ func (u UserData) String() string { return u.s }
 type EndpointData struct {
 	// addrs is the ordered, de-duplicated set of transport addresses. Order is
 	// preserved (it encodes priority) while duplicates are removed.
-	addrs    []base.TransportAddr
+	addrs    []netaddr.TransportAddr
 	userData *UserData
 }
 
 // NewEndpointData returns an EndpointData with the given addresses. Order is
 // preserved; duplicates are removed.
-func NewEndpointData(addrs ...base.TransportAddr) EndpointData {
+func NewEndpointData(addrs ...netaddr.TransportAddr) EndpointData {
 	d := EndpointData{}
 	d.AddAddrs(addrs...)
 	return d
@@ -69,22 +69,22 @@ func (d EndpointData) WithUserData(u UserData) EndpointData {
 
 // AddRelayURL adds a relay URL to the end of the address list, unless already
 // present.
-func (d *EndpointData) AddRelayURL(u base.RelayUrl) {
-	d.AddAddrs(base.RelayAddr{URL: u})
+func (d *EndpointData) AddRelayURL(u netaddr.RelayUrl) {
+	d.AddAddrs(netaddr.RelayAddr{URL: u})
 }
 
 // AddIPAddrs adds IP addresses in order, skipping duplicates and existing ones.
 func (d *EndpointData) AddIPAddrs(addrs ...netip.AddrPort) {
-	conv := make([]base.TransportAddr, len(addrs))
+	conv := make([]netaddr.TransportAddr, len(addrs))
 	for i, a := range addrs {
-		conv[i] = base.IPAddr{Addr: a}
+		conv[i] = netaddr.IPAddr{Addr: a}
 	}
 	d.AddAddrs(conv...)
 }
 
 // AddAddrs adds addresses in order, skipping duplicates and ones already
 // present. Duplicate filtering preserves the existing order.
-func (d *EndpointData) AddAddrs(addrs ...base.TransportAddr) {
+func (d *EndpointData) AddAddrs(addrs ...netaddr.TransportAddr) {
 	for _, a := range addrs {
 		if !d.contains(a) {
 			d.addrs = append(d.addrs, a)
@@ -97,28 +97,28 @@ func (d *EndpointData) SetUserData(u *UserData) { d.userData = u }
 
 // ClearIPAddrs removes all direct IP addresses.
 func (d *EndpointData) ClearIPAddrs() {
-	d.addrs = slices.DeleteFunc(d.addrs, func(a base.TransportAddr) bool {
-		_, ok := a.(base.IPAddr)
+	d.addrs = slices.DeleteFunc(d.addrs, func(a netaddr.TransportAddr) bool {
+		_, ok := a.(netaddr.IPAddr)
 		return ok
 	})
 }
 
 // ClearRelayURLs removes all relay addresses.
 func (d *EndpointData) ClearRelayURLs() {
-	d.addrs = slices.DeleteFunc(d.addrs, func(a base.TransportAddr) bool {
-		_, ok := a.(base.RelayAddr)
+	d.addrs = slices.DeleteFunc(d.addrs, func(a netaddr.TransportAddr) bool {
+		_, ok := a.(netaddr.RelayAddr)
 		return ok
 	})
 }
 
 // Addrs returns the ordered transport addresses. The result must not be mutated.
-func (d EndpointData) Addrs() []base.TransportAddr { return d.addrs }
+func (d EndpointData) Addrs() []netaddr.TransportAddr { return d.addrs }
 
 // RelayURLs returns the relay URLs in order.
-func (d EndpointData) RelayURLs() []base.RelayUrl {
-	var out []base.RelayUrl
+func (d EndpointData) RelayURLs() []netaddr.RelayUrl {
+	var out []netaddr.RelayUrl
 	for _, a := range d.addrs {
-		if r, ok := a.(base.RelayAddr); ok {
+		if r, ok := a.(netaddr.RelayAddr); ok {
 			out = append(out, r.URL)
 		}
 	}
@@ -129,7 +129,7 @@ func (d EndpointData) RelayURLs() []base.RelayUrl {
 func (d EndpointData) IPAddrs() []netip.AddrPort {
 	var out []netip.AddrPort
 	for _, a := range d.addrs {
-		if ip, ok := a.(base.IPAddr); ok {
+		if ip, ok := a.(netaddr.IPAddr); ok {
 			out = append(out, ip.Addr)
 		}
 	}
@@ -142,15 +142,15 @@ func (d EndpointData) UserData() *UserData { return d.userData }
 // HasAddrs reports whether any addresses are present.
 func (d EndpointData) HasAddrs() bool { return len(d.addrs) > 0 }
 
-func (d EndpointData) contains(a base.TransportAddr) bool {
-	return slices.ContainsFunc(d.addrs, func(x base.TransportAddr) bool {
+func (d EndpointData) contains(a netaddr.TransportAddr) bool {
+	return slices.ContainsFunc(d.addrs, func(x netaddr.TransportAddr) bool {
 		return x.Compare(a) == 0
 	})
 }
 
-// EndpointDataFromAddr builds EndpointData from an [base.EndpointAddr], taking
+// EndpointDataFromAddr builds EndpointData from an [netaddr.EndpointAddr], taking
 // its (already de-duplicated, sorted) addresses.
-func EndpointDataFromAddr(addr base.EndpointAddr) EndpointData {
+func EndpointDataFromAddr(addr netaddr.EndpointAddr) EndpointData {
 	return EndpointData{addrs: slices.Clone(addr.Addrs())}
 }
 
@@ -173,13 +173,13 @@ func EndpointInfoFromParts(id key.EndpointId, data EndpointData) EndpointInfo {
 	return EndpointInfo{Id: id, Data: data}
 }
 
-// EndpointInfoFromAddr converts an [base.EndpointAddr] into an EndpointInfo.
-func EndpointInfoFromAddr(addr base.EndpointAddr) EndpointInfo {
+// EndpointInfoFromAddr converts an [netaddr.EndpointAddr] into an EndpointInfo.
+func EndpointInfoFromAddr(addr netaddr.EndpointAddr) EndpointInfo {
 	return EndpointInfo{Id: addr.Id, Data: EndpointDataFromAddr(addr)}
 }
 
 // WithRelayURL adds the relay URL and returns the updated info.
-func (e EndpointInfo) WithRelayURL(u base.RelayUrl) EndpointInfo {
+func (e EndpointInfo) WithRelayURL(u netaddr.RelayUrl) EndpointInfo {
 	e.Data.AddRelayURL(u)
 	return e
 }
@@ -196,13 +196,13 @@ func (e EndpointInfo) WithUserData(u *UserData) EndpointInfo {
 	return e
 }
 
-// Addr converts the info into an [base.EndpointAddr].
-func (e EndpointInfo) Addr() base.EndpointAddr {
-	return base.EndpointAddrFromParts(e.Id, e.Data.addrs...)
+// Addr converts the info into an [netaddr.EndpointAddr].
+func (e EndpointInfo) Addr() netaddr.EndpointAddr {
+	return netaddr.EndpointAddrFromParts(e.Id, e.Data.addrs...)
 }
 
 // RelayURLs returns the endpoint's relay URLs.
-func (e EndpointInfo) RelayURLs() []base.RelayUrl { return e.Data.RelayURLs() }
+func (e EndpointInfo) RelayURLs() []netaddr.RelayUrl { return e.Data.RelayURLs() }
 
 // IPAddrs returns the endpoint's direct IP addresses.
 func (e EndpointInfo) IPAddrs() []netip.AddrPort { return e.Data.IPAddrs() }

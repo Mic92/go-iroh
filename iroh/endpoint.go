@@ -10,13 +10,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/internal/netreport"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/qng/qlog"
 	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 	"github.com/tmc/go-iroh/watch"
 )
@@ -53,7 +53,7 @@ type Endpoint struct {
 	mu          sync.Mutex
 	closed      bool
 	closedCh    chan struct{}
-	addrWatch   *watch.Value[base.EndpointAddr]
+	addrWatch   *watch.Value[netaddr.EndpointAddr]
 	externalNAT []netip.AddrPort
 	netReport   netReportRunner
 	nextStable  uint64
@@ -281,7 +281,7 @@ func WithTransportConfig(tc *QuicTransportConfig) Option {
 
 // WithCustomTransport adds a custom transport backend to the magic socket.
 // Custom transports own their wire format and exchange datagrams using
-// [base.CustomAddr] values advertised in endpoint addresses.
+// [netaddr.CustomAddr] values advertised in endpoint addresses.
 func WithCustomTransport(t CustomTransport) Option {
 	return func(c *config) error {
 		if t != nil {
@@ -677,12 +677,12 @@ func equalAddrPorts(a, b []netip.AddrPort) bool {
 	return true
 }
 
-// Addr returns the endpoint's [base.EndpointAddr] from currently-known local
+// Addr returns the endpoint's [netaddr.EndpointAddr] from currently-known local
 // information: its id, the bound direct address, and (when relays are enabled
 // and a home relay is connected) its home relay URL. Later slices add reflexive
 // addresses.
-func (e *Endpoint) Addr() base.EndpointAddr {
-	a := base.NewEndpointAddr(e.ID())
+func (e *Endpoint) Addr() netaddr.EndpointAddr {
+	a := netaddr.NewEndpointAddr(e.ID())
 	if !e.disableIP {
 		a = a.WithIP(e.LocalAddr())
 	}
@@ -704,7 +704,7 @@ func (e *Endpoint) Addr() base.EndpointAddr {
 
 // WatchAddr returns a watcher over the endpoint's current advertised address.
 // It updates when local external NAT candidates are added or replaced.
-func (e *Endpoint) WatchAddr() watch.Watcher[base.EndpointAddr] {
+func (e *Endpoint) WatchAddr() watch.Watcher[netaddr.EndpointAddr] {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.addrWatch == nil {
@@ -715,14 +715,14 @@ func (e *Endpoint) WatchAddr() watch.Watcher[base.EndpointAddr] {
 
 func (e *Endpoint) updateAddrWatchLocked() {
 	if e.addrWatch != nil {
-		e.addrWatch.Set(e.addrLocked(), func(a, b base.EndpointAddr) bool {
+		e.addrWatch.Set(e.addrLocked(), func(a, b netaddr.EndpointAddr) bool {
 			return a.Id.Equal(b.Id) && equalTransportAddrs(a.Addrs(), b.Addrs())
 		})
 	}
 }
 
-func (e *Endpoint) addrLocked() base.EndpointAddr {
-	a := base.NewEndpointAddr(e.ID())
+func (e *Endpoint) addrLocked() netaddr.EndpointAddr {
+	a := netaddr.NewEndpointAddr(e.ID())
 	if !e.disableIP {
 		a = a.WithIP(e.LocalAddr())
 		for _, addr := range e.externalNAT {
@@ -737,7 +737,7 @@ func (e *Endpoint) addrLocked() base.EndpointAddr {
 	return a
 }
 
-func equalTransportAddrs(a, b []base.TransportAddr) bool {
+func equalTransportAddrs(a, b []netaddr.TransportAddr) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -796,7 +796,7 @@ var ErrNoRelay = errors.New("iroh: no relays configured")
 
 // InsertRelay adds or replaces a relay server configuration. It returns the
 // previous config for url when one existed.
-func (e *Endpoint) InsertRelay(ctx context.Context, url base.RelayUrl, cfg *RelayConfig) (*RelayConfig, error) {
+func (e *Endpoint) InsertRelay(ctx context.Context, url netaddr.RelayUrl, cfg *RelayConfig) (*RelayConfig, error) {
 	_ = ctx
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
@@ -821,7 +821,7 @@ func (e *Endpoint) InsertRelay(ctx context.Context, url base.RelayUrl, cfg *Rela
 
 // RemoveRelay removes a relay server configuration. It returns the removed
 // config, or nil if url was not configured.
-func (e *Endpoint) RemoveRelay(ctx context.Context, url base.RelayUrl) *RelayConfig {
+func (e *Endpoint) RemoveRelay(ctx context.Context, url netaddr.RelayUrl) *RelayConfig {
 	_ = ctx
 	if e.isClosed() || e.relay == nil {
 		return nil
@@ -843,7 +843,7 @@ var ErrEndpointClosed = errors.New("iroh: endpoint closed")
 // endpoint's own id.
 var ErrSelfConnect = errors.New("iroh: cannot connect to self")
 
-// ErrNoAddress is returned when an [base.EndpointAddr] has no usable address:
+// ErrNoAddress is returned when an [netaddr.EndpointAddr] has no usable address:
 // no direct IP and no relay URL (or relays are disabled on this endpoint).
 var ErrNoAddress = errors.New("iroh: no reachable address for endpoint")
 
@@ -859,7 +859,7 @@ var ErrHandshakeRejected = errors.New("iroh: handshake rejected by hook")
 // an established [Conn]. It tries the direct IP addresses in addr in order, then
 // (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
 // handshake over a relay mapped address that routes through the relay transport.
-func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []byte) (*Conn, error) {
+func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte) (*Conn, error) {
 	e.metrics.connectsStarted.Add(1)
 	ok := false
 	defer func() {
@@ -933,7 +933,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr base.EndpointAddr, alpn []b
 // ConnectWith dials addr and returns a [Connecting] handle. The current
 // implementation uses the same DialEarly path as [Endpoint.Connect]; future
 // options can expose more pre-handshake controls without changing callers.
-func (e *Endpoint) ConnectWith(ctx context.Context, addr base.EndpointAddr, alpn []byte, opts ConnectOptions) (*Connecting, error) {
+func (e *Endpoint) ConnectWith(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte, opts ConnectOptions) (*Connecting, error) {
 	_ = opts
 	conn, err := e.Connect(ctx, addr, alpn)
 	if err != nil {
@@ -947,7 +947,7 @@ func (e *Endpoint) ConnectWith(ctx context.Context, addr base.EndpointAddr, alpn
 // enabled) for each relay URL. Each relay target is registered in the
 // mapped-address table so the magic socket routes its QUIC packets to the relay
 // transport.
-func (e *Endpoint) dialTargets(addr base.EndpointAddr) []net.Addr {
+func (e *Endpoint) dialTargets(addr netaddr.EndpointAddr) []net.Addr {
 	var targets []net.Addr
 	if !e.disableIP {
 		for _, ip := range addr.IPAddrs() {
@@ -1033,7 +1033,7 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 	return conn, nil
 }
 
-func (e *Endpoint) beforeConnect(ctx context.Context, addr base.EndpointAddr, alpn []byte) error {
+func (e *Endpoint) beforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte) error {
 	for _, h := range e.hooks {
 		outcome, err := h.BeforeConnect(ctx, addr, alpn)
 		if err != nil {
@@ -1116,8 +1116,8 @@ func (e *Endpoint) resolveFunc() socket.ResolveFunc {
 	if lookup == nil {
 		return nil
 	}
-	return func(ctx context.Context, id key.EndpointId) ([]base.TransportAddr, error) {
-		var addrs []base.TransportAddr
+	return func(ctx context.Context, id key.EndpointId) ([]netaddr.TransportAddr, error) {
+		var addrs []netaddr.TransportAddr
 		var lastErr error
 		for res := range lookup.Resolve(ctx, id) {
 			if res.Err != nil {

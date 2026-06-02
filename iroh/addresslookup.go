@@ -7,14 +7,14 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // AddressLookup is a system for publishing and resolving the addressing
 // information of an [key.EndpointId]. It lets an [Endpoint] connect to a peer
-// knowing only its id, by looking up a [base.EndpointAddr] (a relay URL and/or
+// knowing only its id, by looking up a [netaddr.EndpointAddr] (a relay URL and/or
 // direct addresses) through one or more lookup services.
 //
 // Multiple implementations coexist: pkarr-relay ([PkarrPublisher] /
@@ -74,8 +74,8 @@ func (i Item) Provenance() string { return i.provenance }
 // microseconds since the unix epoch, and whether the source tracks it.
 func (i Item) LastUpdated() (uint64, bool) { return i.lastUpdated, i.hasUpdated }
 
-// Addr converts the item into a [base.EndpointAddr].
-func (i Item) Addr() base.EndpointAddr { return i.info.Addr() }
+// Addr converts the item into a [netaddr.EndpointAddr].
+func (i Item) Addr() netaddr.EndpointAddr { return i.info.Addr() }
 
 // Result is one element of an [AddressLookup.Resolve] stream: either an [Item]
 // or an error from a single service. It mirrors the Rust stream's
@@ -126,15 +126,15 @@ var (
 // in priority order. A nil AddrFilter publishes all addresses unchanged.
 //
 // It is the Go analog of iroh's address_lookup::AddrFilter.
-type AddrFilter func(addrs []base.TransportAddr) []base.TransportAddr
+type AddrFilter func(addrs []netaddr.TransportAddr) []netaddr.TransportAddr
 
 // RelayOnlyFilter keeps only relay addresses. It is the default filter for
 // [PkarrPublisher], avoiding leaking direct IP addresses to a public pkarr
 // relay.
-func RelayOnlyFilter(addrs []base.TransportAddr) []base.TransportAddr {
-	out := make([]base.TransportAddr, 0, len(addrs))
+func RelayOnlyFilter(addrs []netaddr.TransportAddr) []netaddr.TransportAddr {
+	out := make([]netaddr.TransportAddr, 0, len(addrs))
 	for _, a := range addrs {
-		if _, ok := a.(base.RelayAddr); ok {
+		if _, ok := a.(netaddr.RelayAddr); ok {
 			out = append(out, a)
 		}
 	}
@@ -142,10 +142,10 @@ func RelayOnlyFilter(addrs []base.TransportAddr) []base.TransportAddr {
 }
 
 // IPOnlyFilter keeps only direct IP and custom addresses, dropping relays.
-func IPOnlyFilter(addrs []base.TransportAddr) []base.TransportAddr {
-	out := make([]base.TransportAddr, 0, len(addrs))
+func IPOnlyFilter(addrs []netaddr.TransportAddr) []netaddr.TransportAddr {
+	out := make([]netaddr.TransportAddr, 0, len(addrs))
 	for _, a := range addrs {
-		if _, ok := a.(base.RelayAddr); !ok {
+		if _, ok := a.(netaddr.RelayAddr); !ok {
 			out = append(out, a)
 		}
 	}

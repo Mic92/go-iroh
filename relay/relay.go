@@ -12,7 +12,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // DefaultQuicPort is the default port for relay QUIC address discovery.
@@ -38,7 +38,7 @@ type QuicConfig struct {
 // Config is the configuration for a single relay server.
 type Config struct {
 	// URL is the relay server URL.
-	URL base.RelayUrl
+	URL netaddr.RelayUrl
 	// Quic, if non-nil, enables QUIC address discovery via this relay.
 	Quic *QuicConfig
 	// AuthToken, if non-empty, is sent to authenticate with the relay.
@@ -46,7 +46,7 @@ type Config struct {
 }
 
 // NewConfig returns a Config for url with the given optional QUIC config.
-func NewConfig(url base.RelayUrl, quic *QuicConfig) Config {
+func NewConfig(url netaddr.RelayUrl, quic *QuicConfig) Config {
 	return Config{URL: url, Quic: quic}
 }
 
@@ -76,7 +76,7 @@ func NewMap(configs ...Config) *Map {
 }
 
 // MapFromURLs builds a Map from relay URLs, each with a default config.
-func MapFromURLs(urls ...base.RelayUrl) *Map {
+func MapFromURLs(urls ...netaddr.RelayUrl) *Map {
 	configs := make([]Config, len(urls))
 	for i, u := range urls {
 		configs[i] = Config{URL: u}
@@ -97,20 +97,20 @@ func (m *Map) Insert(c Config) (Config, bool) {
 }
 
 // Remove deletes the config for url, returning it and whether it was present.
-func (m *Map) Remove(url base.RelayUrl) (Config, bool) {
+func (m *Map) Remove(url netaddr.RelayUrl) (Config, bool) {
 	c, ok := m.relays[url.String()]
 	delete(m.relays, url.String())
 	return c, ok
 }
 
 // Get returns the config for url and whether it is present.
-func (m *Map) Get(url base.RelayUrl) (Config, bool) {
+func (m *Map) Get(url netaddr.RelayUrl) (Config, bool) {
 	c, ok := m.relays[url.String()]
 	return c, ok
 }
 
 // Contains reports whether url is in the map.
-func (m *Map) Contains(url base.RelayUrl) bool {
+func (m *Map) Contains(url netaddr.RelayUrl) bool {
 	_, ok := m.relays[url.String()]
 	return ok
 }
@@ -122,9 +122,9 @@ func (m *Map) Len() int { return len(m.relays) }
 func (m *Map) IsEmpty() bool { return len(m.relays) == 0 }
 
 // URLs returns the relay URLs in sorted order.
-func (m *Map) URLs() []base.RelayUrl {
+func (m *Map) URLs() []netaddr.RelayUrl {
 	keys := slices.Sorted(maps.Keys(m.relays))
-	out := make([]base.RelayUrl, 0, len(keys))
+	out := make([]netaddr.RelayUrl, 0, len(keys))
 	for _, k := range keys {
 		out = append(out, m.relays[k].URL)
 	}
@@ -189,7 +189,7 @@ func ModeStaging() Mode { return Mode{kind: modeStaging} }
 func ModeCustom(m *Map) Mode { return Mode{kind: modeCustom, custom: m} }
 
 // ModeCustomURLs uses a custom relay map built from the given URLs.
-func ModeCustomURLs(urls ...base.RelayUrl) Mode {
+func ModeCustomURLs(urls ...netaddr.RelayUrl) Mode {
 	return ModeCustom(MapFromURLs(urls...))
 }
 
@@ -225,8 +225,8 @@ func StagingMap() *Map {
 	return MapFromURLs(mustURL("https://" + stagingEURelayHostname))
 }
 
-func mustURL(s string) base.RelayUrl {
-	u, err := base.ParseRelayUrl(s)
+func mustURL(s string) netaddr.RelayUrl {
+	u, err := netaddr.ParseRelayUrl(s)
 	if err != nil {
 		panic(fmt.Sprintf("relay: invalid default url %q: %v", s, err))
 	}

@@ -7,9 +7,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/pkarr"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // Errors returned when parsing iroh DNS records.
@@ -128,11 +128,11 @@ func (e EndpointInfo) toAttrs() *txtAttrs {
 	attrs := map[irohAttr][]string{}
 	for _, addr := range e.Data.addrs {
 		switch v := addr.(type) {
-		case base.RelayAddr:
+		case netaddr.RelayAddr:
 			attrs[attrRelay] = append(attrs[attrRelay], v.URL.String())
-		case base.IPAddr:
+		case netaddr.IPAddr:
 			attrs[attrAddr] = append(attrs[attrAddr], v.Addr.String())
-		case base.CustomAddr:
+		case netaddr.CustomAddr:
 			attrs[attrAddr] = append(attrs[attrAddr], v.BareString())
 		}
 	}
@@ -146,16 +146,16 @@ func (e EndpointInfo) toAttrs() *txtAttrs {
 // mirrors endpoint_info_from_attrs: relay URLs first, then addr values parsed as
 // IP-then-custom, with unparseable values skipped; the first user-data wins.
 func endpointInfoFromAttrs(attrs *txtAttrs) EndpointInfo {
-	var addrs []base.TransportAddr
+	var addrs []netaddr.TransportAddr
 	for _, s := range attrs.attrs[attrRelay] {
 		if u, err := url.Parse(s); err == nil {
-			addrs = append(addrs, base.RelayAddr{URL: base.RelayUrlFromURL(u)})
+			addrs = append(addrs, netaddr.RelayAddr{URL: netaddr.RelayUrlFromURL(u)})
 		}
 	}
 	for _, s := range attrs.attrs[attrAddr] {
 		if ap, err := netip.ParseAddrPort(s); err == nil {
-			addrs = append(addrs, base.IPAddr{Addr: ap})
-		} else if ca, err := base.ParseCustomAddr(s); err == nil {
+			addrs = append(addrs, netaddr.IPAddr{Addr: ap})
+		} else if ca, err := netaddr.ParseCustomAddr(s); err == nil {
 			addrs = append(addrs, ca)
 		}
 	}

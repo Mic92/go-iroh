@@ -3,7 +3,7 @@ package iroh
 import (
 	"context"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // BeforeConnectOutcome is the decision returned by an [EndpointHooks]
@@ -39,13 +39,13 @@ func RejectHandshake(code uint64, reason []byte) AfterHandshakeOutcome {
 // EndpointHooks observes and can reject outbound dials and completed
 // handshakes.
 type EndpointHooks interface {
-	BeforeConnect(ctx context.Context, addr base.EndpointAddr, alpn []byte) (BeforeConnectOutcome, error)
+	BeforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte) (BeforeConnectOutcome, error)
 	AfterHandshake(ctx context.Context, conn *Conn) (AfterHandshakeOutcome, error)
 }
 
 type noopHooks struct{}
 
-func (noopHooks) BeforeConnect(context.Context, base.EndpointAddr, []byte) (BeforeConnectOutcome, error) {
+func (noopHooks) BeforeConnect(context.Context, netaddr.EndpointAddr, []byte) (BeforeConnectOutcome, error) {
 	return BeforeConnectAccept, nil
 }
 

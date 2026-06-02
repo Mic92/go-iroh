@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // echoHandler is a ProtocolHandler that echoes one bidirectional stream back to
@@ -121,7 +121,7 @@ func TestRouterEcho(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -198,7 +198,7 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -255,7 +255,7 @@ func TestRouterUnsupportedALPN(t *testing.T) {
 
 	// The server only advertises goodALPN, so a client offering only an unknown
 	// ALPN fails the handshake at the QUIC/TLS layer.
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	if _, err := client.Connect(ctx, addr, []byte("iroh-unknown/0")); err == nil {
 		t.Error("connect with unknown ALPN unexpectedly succeeded")
 	}
@@ -335,7 +335,7 @@ func TestRouterOnAccepting(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)

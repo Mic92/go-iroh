@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // connPair binds a server and client endpoint on loopback, dials, and returns
@@ -47,7 +47,7 @@ func connPair(t *testing.T, alpn string) (client, server *Conn) {
 		done <- accepted{conn: c, err: err}
 	}()
 
-	addr := base.NewEndpointAddr(srvEP.ID()).WithIP(srvEP.LocalAddr())
+	addr := netaddr.NewEndpointAddr(srvEP.ID()).WithIP(srvEP.LocalAddr())
 	client, err = clientEP.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -301,7 +301,7 @@ func TestEndpointConnectWith(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	connecting, err := client.ConnectWith(ctx, base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn), ConnectOptions{})
+	connecting, err := client.ConnectWith(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn), ConnectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +359,7 @@ func ExampleConn_Close() {
 
 	go server.Accept(ctx)
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		fmt.Println("connect:", err)

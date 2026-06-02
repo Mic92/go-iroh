@@ -1,9 +1,11 @@
-package base
+package netaddr
 
 import (
 	"errors"
 	"net/netip"
 	"testing"
+
+	"github.com/tmc/go-iroh/key"
 )
 
 func TestCustomAddrRoundTrip(t *testing.T) {
@@ -114,7 +116,7 @@ func TestTransportAddrStringRoundTrip(t *testing.T) {
 }
 
 func TestEndpointAddrSortDedup(t *testing.T) {
-	sk, _ := GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	ip1 := netip.MustParseAddrPort("127.0.0.1:1")
 	ip2 := netip.MustParseAddrPort("127.0.0.1:2")
@@ -180,7 +182,7 @@ func TestTransportAddrOrderingMatchesRustOrd(t *testing.T) {
 }
 
 func TestEndpointAddrEmpty(t *testing.T) {
-	sk, _ := GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	a := NewEndpointAddr(sk.Public())
 	if !a.IsEmpty() {
 		t.Error("expected empty")

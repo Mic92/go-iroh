@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func main() {
@@ -128,7 +129,7 @@ func cmdAddr(args []string, stdout io.Writer) error {
 	if len(args) < 2 || args[0] != "parse" {
 		return fmt.Errorf("addr: usage: addr parse <addr>")
 	}
-	a, err := base.ParseTransportAddr(args[1])
+	a, err := netaddr.ParseTransportAddr(args[1])
 	if err != nil {
 		return fmt.Errorf("addr parse: %w", err)
 	}

@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // TestEndpointDirectEcho is the slice-B gate: two endpoints connect over a
@@ -71,7 +71,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 	}()
 
 	// The server advertises its bound loopback address.
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
@@ -205,7 +205,7 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 		done <- nil
 	}()
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -267,7 +267,7 @@ func TestEndpointSourceAddressValidationRetry(t *testing.T) {
 		done <- nil
 	}()
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, []byte(alpn))
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -315,7 +315,7 @@ func TestEndpointBinaryALPN(t *testing.T) {
 		done <- srvResult{alpn: append([]byte(nil), conn.ALPN()...)}
 	}()
 
-	addr := base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
@@ -358,7 +358,7 @@ func TestEndpointNoAddress(t *testing.T) {
 	}
 	defer ep.Close(ctx)
 	other, _ := key.GenerateSecretKey()
-	_, err = ep.Connect(ctx, base.NewEndpointAddr(other.Public()), []byte("x"))
+	_, err = ep.Connect(ctx, netaddr.NewEndpointAddr(other.Public()), []byte("x"))
 	if err != ErrNoAddress {
 		t.Errorf("Connect(no addr) err = %v, want ErrNoAddress", err)
 	}

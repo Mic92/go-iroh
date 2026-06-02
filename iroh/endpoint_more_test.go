@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/internal/netreport"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -41,7 +41,7 @@ type endpointFakeCustomTransport struct {
 }
 
 type endpointFakeCustomSend struct {
-	remote base.CustomAddr
+	remote netaddr.CustomAddr
 	data   []byte
 }
 
@@ -60,7 +60,7 @@ func (t *endpointFakeCustomTransport) Serve(ctx context.Context, recv func(Custo
 	}
 }
 
-func (t *endpointFakeCustomTransport) Send(remote base.CustomAddr, local *base.CustomAddr, p []byte) bool {
+func (t *endpointFakeCustomTransport) Send(remote netaddr.CustomAddr, local *netaddr.CustomAddr, p []byte) bool {
 	_ = local
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -178,7 +178,7 @@ func TestEndpointWithKeyLogWriter(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	conn, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +219,7 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 		t.Fatalf("WithoutIPTransports external Addr IPs = %v, want none", got)
 	}
 	remoteKey, _ := key.GenerateSecretKey()
-	addr := base.NewEndpointAddr(remoteKey.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1")).WithRelayURL(rurl)
+	addr := netaddr.NewEndpointAddr(remoteKey.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1")).WithRelayURL(rurl)
 	targets := ep.dialTargets(addr)
 	if len(targets) != 1 {
 		t.Fatalf("WithoutIPTransports dialTargets = %v, want relay-only target", targets)
@@ -374,7 +374,7 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	}
 	var found bool
 	for _, a := range addrs {
-		if ipa, ok := a.(base.IPAddr); ok && ipa.Addr == ip {
+		if ipa, ok := a.(netaddr.IPAddr); ok && ipa.Addr == ip {
 			found = true
 		}
 	}
@@ -437,7 +437,7 @@ func TestEndpointWithCustomTransport(t *testing.T) {
 	}
 	defer ep.Close(ctx)
 
-	remote := base.NewCustomAddr(42, []byte("endpoint-custom"))
+	remote := netaddr.NewCustomAddr(42, []byte("endpoint-custom"))
 	mapped := ep.sock.CustomMappedAddrFor(remote)
 	const payload = "endpoint-custom-send"
 	n, err := ep.magic.WriteTo([]byte(payload), net.UDPAddrFromAddrPort(mapped.AddrPort()))
@@ -874,7 +874,7 @@ func TestEndpointSetALPNsReplacesRunningListener(t *testing.T) {
 		}
 		firstAccepted <- err
 	}()
-	addr := base.NewEndpointAddr(ep.ID()).WithIP(ep.LocalAddr())
+	addr := netaddr.NewEndpointAddr(ep.ID()).WithIP(ep.LocalAddr())
 	first, err := client.Connect(ctx, addr, []byte("first/1"))
 	if err != nil {
 		t.Fatalf("first connect: %v", err)
@@ -960,7 +960,7 @@ func TestEndpointQADCandidatesOpenSelectedQNTRouteDataPath(t *testing.T) {
 		accepted <- acceptResult{conn: conn, err: err}
 	}()
 
-	conn, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()).WithRelayURL(relayURL), []byte(alpn))
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithRelayURL(relayURL), []byte(alpn))
 	if err != nil {
 		t.Fatalf("relay Connect: %v", err)
 	}
@@ -1136,7 +1136,7 @@ func TestEndpointRegisterConnSeedsQNTCandidatesOpportunistically(t *testing.T) {
 		accepted <- conn.CloseWithError(0, "")
 	}()
 
-	conn, err := client.Connect(ctx, base.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
