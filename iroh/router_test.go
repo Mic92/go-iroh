@@ -128,7 +128,7 @@ func TestRouterEcho(t *testing.T) {
 	}
 	defer conn.CloseWithError(0, "")
 
-	s, err := conn.OpenStream(ctx)
+	s, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +204,7 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer conn.CloseWithError(0, "")
-	s, err := conn.OpenStream(ctx)
+	s, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestRouterOnAccepting(t *testing.T) {
 	}
 	defer conn.CloseWithError(0, "")
 
-	s, err := conn.OpenStream(ctx)
+	s, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

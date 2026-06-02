@@ -344,7 +344,7 @@ func TestLiveRustGoToRustEcho(t *testing.T) {
 	}
 	t.Logf("Rust echo connected: id=%s alpn=%q multipath=%t", conn.RemoteID(), conn.ALPN(), conn.MultipathNegotiated())
 
-	s, err := conn.OpenStream(ctx)
+	s, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}

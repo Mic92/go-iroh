@@ -20,7 +20,7 @@
 //
 //	ep, err := iroh.Bind(ctx, iroh.WithSecretKey(sk), iroh.WithALPNs("my/1"))
 //	conn, err := ep.Connect(ctx, peerAddr, "my/1")
-//	s, err := conn.OpenStream(ctx)
+//	s, err := conn.OpenStreamSync(ctx)
 //
 // This package wraps a fork of quic-go (internal/qng) that drives a vendored
 // crypto/tls with RFC 7250 support (internal/itls/tls).

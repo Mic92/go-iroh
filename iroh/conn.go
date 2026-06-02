@@ -302,9 +302,9 @@ func (c *Conn) Side() Side { return c.side }
 // fixed for the connection lifetime, even when the transport path changes.
 func (c *Conn) StableID() uint64 { return c.stableID }
 
-// OpenStream opens a new bidirectional stream, blocking until the peer's flow
-// control permits it or ctx is done.
-func (c *Conn) OpenStream(ctx context.Context) (*Stream, error) {
+// OpenStreamSync opens a new bidirectional stream, blocking until the peer's
+// flow control permits it or ctx is done.
+func (c *Conn) OpenStreamSync(ctx context.Context) (*Stream, error) {
 	return c.qc.OpenStreamSync(ctx)
 }
 
@@ -313,8 +313,8 @@ func (c *Conn) AcceptStream(ctx context.Context) (*Stream, error) {
 	return c.qc.AcceptStream(ctx)
 }
 
-// OpenUniStream opens a new unidirectional (send) stream.
-func (c *Conn) OpenUniStream(ctx context.Context) (*SendStream, error) {
+// OpenUniStreamSync opens a new unidirectional (send) stream.
+func (c *Conn) OpenUniStreamSync(ctx context.Context) (*SendStream, error) {
 	return c.qc.OpenUniStreamSync(ctx)
 }
 
@@ -363,6 +363,12 @@ func (c *Conn) RemoteAddr() net.Addr { return c.qc.RemoteAddr() }
 // reason.
 func (c *Conn) CloseWithError(code uint64, reason string) error {
 	return c.qc.CloseWithError(quic.ApplicationErrorCode(code), reason)
+}
+
+// Close closes the connection with application error code 0 and an empty
+// reason. Use [Conn.CloseWithError] to send an application-specific close code.
+func (c *Conn) Close() error {
+	return c.CloseWithError(0, "")
 }
 
 // Closed returns a channel that is closed when the connection is closed, either

@@ -21,6 +21,7 @@ var (
 	_ io.ReadWriteCloser = (*Stream)(nil)
 	_ io.WriteCloser     = (*SendStream)(nil)
 	_ io.Reader          = (*ReceiveStream)(nil)
+	_ io.Closer          = (*Conn)(nil)
 	_ deadlines          = (*Stream)(nil)
 	_ connAddrs          = (*Conn)(nil)
 )

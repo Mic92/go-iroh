@@ -224,7 +224,7 @@ func TestConnUniStream(t *testing.T) {
 		got <- result{data: b, err: err}
 	}()
 
-	ss, err := client.OpenUniStream(ctx)
+	ss, err := client.OpenUniStreamSync(ctx)
 	if err != nil {
 		t.Fatalf("OpenUniStream: %v", err)
 	}

@@ -412,7 +412,7 @@ func runLiveRustTransferGoToRustUpload(t *testing.T, ctx context.Context, bin, g
 	}
 	t.Logf("Rust transfer connected: id=%s alpn=%q multipath=%t", conn.RemoteID(), conn.ALPN(), conn.MultipathNegotiated())
 
-	s, err := conn.OpenStream(ctx)
+	s, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}

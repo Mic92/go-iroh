@@ -93,7 +93,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 		t.Fatalf("TriggerHolepunch: %v", err)
 	}
 
-	s, err := conn.OpenStream(ctx)
+	s, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

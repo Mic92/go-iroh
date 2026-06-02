@@ -92,7 +92,7 @@ func TestEndpoint0RTTResumption(t *testing.T) {
 	}
 	defer conn2.CloseWithError(0, "")
 
-	s, err := conn2.OpenStream(ctx)
+	s, err := conn2.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatalf("second open stream: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestEndpoint0RTTResumption(t *testing.T) {
 // echo opens a bidi stream on conn, writes msg, and checks the echoed reply.
 func echo(t *testing.T, ctx context.Context, conn *Conn, msg string) {
 	t.Helper()
-	s, err := conn.OpenStream(ctx)
+	s, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatalf("%s open stream: %v", msg, err)
 	}

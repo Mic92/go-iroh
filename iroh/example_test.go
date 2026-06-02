@@ -104,7 +104,7 @@ func ExampleRouter() {
 	}
 	defer conn.CloseWithError(0, "")
 
-	s, _ := conn.OpenStream(ctx)
+	s, _ := conn.OpenStreamSync(ctx)
 	s.Write([]byte("hello"))
 	s.Close()
 	got, _ := io.ReadAll(s)

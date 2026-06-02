@@ -113,7 +113,7 @@ func TestRelayOnlyEcho(t *testing.T) {
 		t.Errorf("client saw server id %s, want %s", conn.RemoteID(), server.ID())
 	}
 
-	s, err := conn.OpenStream(ctx)
+	s, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
