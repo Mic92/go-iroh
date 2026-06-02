@@ -412,7 +412,7 @@ func TestEndpointWithTransportConfig(t *testing.T) {
 	ctx := context.Background()
 	const keepAlive = 2 * time.Second
 	const idle = 9 * time.Second
-	ep, err := Bind(ctx, WithTransportConfig(&QuicTransportConfig{
+	ep, err := Bind(ctx, WithTransportConfig(&QUICTransportConfig{
 		KeepAlivePeriod: keepAlive,
 		MaxIdleTimeout:  idle,
 	}))

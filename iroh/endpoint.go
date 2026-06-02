@@ -76,7 +76,7 @@ type config struct {
 	netReport       netReportRunner
 	netReportEvery  time.Duration
 	keyLogWriter    io.Writer
-	transportConfig *QuicTransportConfig
+	transportConfig *QUICTransportConfig
 	verifySource    func(net.Addr) bool
 	hooks           []EndpointHooks
 	custom          []CustomTransport
@@ -101,9 +101,9 @@ type BindOpts struct {
 	IsDefaultRoute *bool
 }
 
-// QuicTransportConfig configures stable QUIC transport settings used by
+// QUICTransportConfig configures stable QUIC transport settings used by
 // endpoints. A zero field keeps the default.
-type QuicTransportConfig struct {
+type QUICTransportConfig struct {
 	KeepAlivePeriod time.Duration
 	MaxIdleTimeout  time.Duration
 }
@@ -272,7 +272,7 @@ func WithHooks(h EndpointHooks) Option {
 
 // WithTransportConfig overrides stable QUIC transport settings. Unsupported
 // qng internals remain private to the endpoint.
-func WithTransportConfig(tc *QuicTransportConfig) Option {
+func WithTransportConfig(tc *QUICTransportConfig) Option {
 	return func(c *config) error {
 		c.transportConfig = tc
 		return nil

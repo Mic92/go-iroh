@@ -15,8 +15,8 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-// DefaultQuicPort is the default port for relay QUIC address discovery.
-const DefaultQuicPort = 7842
+// DefaultQUICPort is the default port for relay QUIC address discovery.
+const DefaultQUICPort = 7842
 
 // number0 production relay hostnames.
 const (
@@ -29,8 +29,8 @@ const (
 // number0 staging relay hostname.
 const stagingEURelayHostname = "staging-euw1-1.relay.iroh.network."
 
-// QuicConfig configures relay-based QUIC address discovery.
-type QuicConfig struct {
+// QUICConfig configures relay-based QUIC address discovery.
+type QUICConfig struct {
 	// Port is the QUIC port on the relay server.
 	Port uint16
 }
@@ -39,15 +39,15 @@ type QuicConfig struct {
 type Config struct {
 	// URL is the relay server URL.
 	URL netaddr.RelayURL
-	// Quic, if non-nil, enables QUIC address discovery via this relay.
-	Quic *QuicConfig
+	// QUIC, if non-nil, enables QUIC address discovery via this relay.
+	QUIC *QUICConfig
 	// AuthToken, if non-empty, is sent to authenticate with the relay.
 	AuthToken string
 }
 
 // NewConfig returns a Config for url with the given optional QUIC config.
-func NewConfig(url netaddr.RelayURL, quic *QuicConfig) Config {
-	return Config{URL: url, Quic: quic}
+func NewConfig(url netaddr.RelayURL, quic *QUICConfig) Config {
+	return Config{URL: url, QUIC: quic}
 }
 
 // WithAuthToken returns a copy of c with the auth token set.

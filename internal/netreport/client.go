@@ -175,7 +175,7 @@ func (c *Client) runProbes(ctx context.Context, relayMap *relay.Map, report *Rep
 		}()
 
 		// QAD probes (v4 and v6) for up to maxRelays relays that enable QUIC.
-		if cfg.Quic != nil && qadCount < maxRelays {
+		if cfg.QUIC != nil && qadCount < maxRelays {
 			qadCount++
 			wg.Add(2)
 			go func() {
@@ -221,8 +221,8 @@ func (c *Client) runQADProbe(ctx context.Context, cfg relay.Config, probe Probe)
 		return nil
 	}
 	port := defaultRelayQuicPort
-	if cfg.Quic != nil && cfg.Quic.Port != 0 {
-		port = int(cfg.Quic.Port)
+	if cfg.QUIC != nil && cfg.QUIC.Port != 0 {
+		port = int(cfg.QUIC.Port)
 	}
 
 	addr, ok := c.resolveQADAddr(ctx, host, port, probe)

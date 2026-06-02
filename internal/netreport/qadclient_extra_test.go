@@ -274,7 +274,7 @@ func TestRunQADProbeOverLoopback(t *testing.T) {
 func TestRunQADProbeNoHostReturnsNil(t *testing.T) {
 	// A relay config whose URL has no host yields no probe. client.go:219-222.
 	c := newTestClient(t)
-	cfg := relay.Config{URL: mustRelay(t, "custom:relay"), Quic: &relay.QuicConfig{Port: 7842}}
+	cfg := relay.Config{URL: mustRelay(t, "custom:relay"), QUIC: &relay.QUICConfig{Port: 7842}}
 	if rep := c.runQADProbe(context.Background(), cfg, ProbeQADv4); rep != nil {
 		t.Errorf("runQADProbe(no host) = %+v, want nil", rep)
 	}
@@ -358,7 +358,7 @@ func TestRunProbesQADCappedAtMaxRelays(t *testing.T) {
 		// and rely on QAD; HTTPS will fail (different port) which is fine for the
 		// QAD-cap assertion.
 		u := mustRelay(t, "https://127.0.0.1:"+strconv.Itoa(int(addr.Port()))+"/r"+strconv.Itoa(i))
-		configs = append(configs, relay.Config{URL: u, Quic: &relay.QuicConfig{Port: addr.Port()}})
+		configs = append(configs, relay.Config{URL: u, QUIC: &relay.QUICConfig{Port: addr.Port()}})
 	}
 	rm := relay.NewMap(configs...)
 
@@ -580,6 +580,6 @@ func relayConfigWithQUIC(t *testing.T, url string, port uint16) relay.Config {
 	t.Helper()
 	return relay.Config{
 		URL:  mustRelay(t, url),
-		Quic: &relay.QuicConfig{Port: port},
+		QUIC: &relay.QUICConfig{Port: port},
 	}
 }

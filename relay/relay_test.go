@@ -14,7 +14,7 @@ func TestMapInsertGetRemove(t *testing.T) {
 		t.Fatal("new map should be empty")
 	}
 	m.Insert(NewConfig(u1, nil))
-	m.Insert(Config{URL: u2, Quic: &QuicConfig{Port: DefaultQuicPort}})
+	m.Insert(Config{URL: u2, QUIC: &QUICConfig{Port: DefaultQUICPort}})
 	if m.Len() != 2 {
 		t.Fatalf("len = %d, want 2", m.Len())
 	}
@@ -22,7 +22,7 @@ func TestMapInsertGetRemove(t *testing.T) {
 		t.Error("should contain u1")
 	}
 	c, ok := m.Get(u2)
-	if !ok || c.Quic == nil || c.Quic.Port != DefaultQuicPort {
+	if !ok || c.QUIC == nil || c.QUIC.Port != DefaultQUICPort {
 		t.Errorf("get u2 = %+v, %v", c, ok)
 	}
 	if _, ok := m.Remove(u1); !ok {
