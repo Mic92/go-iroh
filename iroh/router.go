@@ -104,12 +104,7 @@ func NewRouter(ep *Endpoint, handlers map[string]ProtocolHandler, cfg *RouterCon
 			if prevVerify != nil && prevVerify(addr) {
 				return true
 			}
-			retry := false
-			in := &Incoming{ep: ep, remote: addr, preRetry: &retry}
-			if filter(in) == FilterRetry {
-				retry = true
-			}
-			return retry
+			return filter(&Incoming{ep: ep, remote: addr}) == FilterRetry
 		})
 	}
 	if err := ep.SetALPNs(alpns); err != nil {
@@ -204,7 +199,7 @@ func (r *Router) acceptLoop(ctx context.Context) {
 			switch r.filter(in) {
 			case FilterAccept:
 			case FilterRetry:
-				_ = in.Retry()
+				in.Ignore()
 				continue
 			case FilterReject:
 				in.Refuse()

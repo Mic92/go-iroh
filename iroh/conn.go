@@ -133,11 +133,9 @@ func (a LocalTransportAddr) String() string {
 // Incoming is an incoming connection attempt accepted by an [Endpoint]. Call
 // Accept to continue the handshake, or Refuse/Ignore to close it.
 type Incoming struct {
-	ep              *Endpoint
-	qc              *quic.Conn
-	remote          net.Addr
-	remoteValidated bool
-	preRetry        *bool
+	ep     *Endpoint
+	qc     *quic.Conn
+	remote net.Addr
 }
 
 // Accept accepts the incoming connection and returns an [Accepting] handle.
@@ -153,21 +151,6 @@ func (in *Incoming) Refuse() {
 	if in != nil && in.qc != nil {
 		in.qc.CloseWithError(0, "refused")
 	}
-}
-
-// Retry asks the peer to retry this incoming connection. For router filters this
-// is evaluated before qng constructs a connection, so it emits a real QUIC Retry
-// packet. Calling Retry after AcceptIncoming has returned is too late for QUIC
-// Retry and closes the connection.
-func (in *Incoming) Retry() error {
-	if in != nil && in.preRetry != nil {
-		*in.preRetry = true
-		return nil
-	}
-	if in != nil && in.qc != nil {
-		in.qc.CloseWithError(0, "retry requested after accept")
-	}
-	return nil
 }
 
 // Ignore closes the incoming connection without waiting for completion.
@@ -195,9 +178,6 @@ func (in *Incoming) RemoteAddr() IncomingAddr {
 func (in *Incoming) RemoteAddrValidated() bool {
 	if in == nil {
 		return false
-	}
-	if in.preRetry != nil {
-		return in.remoteValidated
 	}
 	if in.qc == nil {
 		return false

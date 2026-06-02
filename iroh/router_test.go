@@ -180,10 +180,7 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 				return FilterAccept
 			}
 			retryCalls.Add(1)
-			if err := in.Retry(); err != nil {
-				t.Errorf("Retry: %v", err)
-			}
-			return FilterAccept
+			return FilterRetry
 		},
 	})
 	if err != nil {

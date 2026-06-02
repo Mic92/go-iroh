@@ -2,17 +2,6 @@ package iroh
 
 import "testing"
 
-func TestIncomingRetryPreConnection(t *testing.T) {
-	retry := false
-	in := &Incoming{preRetry: &retry}
-	if err := in.Retry(); err != nil {
-		t.Fatalf("Retry: %v", err)
-	}
-	if !retry {
-		t.Fatal("Retry did not mark pre-connection incoming for QUIC Retry")
-	}
-}
-
 func TestIncomingFilterOutcomeValues(t *testing.T) {
 	tests := []struct {
 		name string
