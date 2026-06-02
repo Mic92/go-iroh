@@ -230,7 +230,7 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 			done <- err
 			return
 		}
-		if _, ok := in.RemoteAddr().AddrPort(); !ok {
+		if _, ok := in.RemoteAddr().(*net.UDPAddr); !ok {
 			done <- errors.New("incoming remote address is not UDP")
 			return
 		}

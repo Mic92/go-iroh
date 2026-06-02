@@ -57,79 +57,6 @@ func newConn(qc *quic.Conn, remoteID key.EndpointID, alpn string, side Side, sta
 	return &Conn{qc: qc, remoteID: remoteID, alpn: alpn, side: side, stableID: stableID}, nil
 }
 
-// IncomingAddr is the transport address of an incoming connection attempt.
-type IncomingAddr struct {
-	addr net.Addr
-}
-
-func newIncomingAddr(addr net.Addr) IncomingAddr { return IncomingAddr{addr: addr} }
-
-// Addr returns the underlying network address.
-func (a IncomingAddr) Addr() net.Addr { return a.addr }
-
-// Network returns the address network.
-func (a IncomingAddr) Network() string {
-	if a.addr == nil {
-		return ""
-	}
-	return a.addr.Network()
-}
-
-// AddrPort returns addr as a UDP address, when it is one.
-func (a IncomingAddr) AddrPort() (netip.AddrPort, bool) {
-	udp, ok := a.addr.(*net.UDPAddr)
-	if !ok {
-		return netip.AddrPort{}, false
-	}
-	return udp.AddrPort(), true
-}
-
-// String returns the address string.
-func (a IncomingAddr) String() string {
-	if a.addr == nil {
-		return ""
-	}
-	return a.addr.String()
-}
-
-// LocalTransportAddr is the local transport address an incoming connection
-// arrived on.
-type LocalTransportAddr struct {
-	addr net.Addr
-}
-
-func newLocalTransportAddr(addr net.Addr) LocalTransportAddr {
-	return LocalTransportAddr{addr: addr}
-}
-
-// Addr returns the underlying network address.
-func (a LocalTransportAddr) Addr() net.Addr { return a.addr }
-
-// Network returns the address network.
-func (a LocalTransportAddr) Network() string {
-	if a.addr == nil {
-		return ""
-	}
-	return a.addr.Network()
-}
-
-// AddrPort returns addr as a UDP address, when it is one.
-func (a LocalTransportAddr) AddrPort() (netip.AddrPort, bool) {
-	udp, ok := a.addr.(*net.UDPAddr)
-	if !ok {
-		return netip.AddrPort{}, false
-	}
-	return udp.AddrPort(), true
-}
-
-// String returns the address string.
-func (a LocalTransportAddr) String() string {
-	if a.addr == nil {
-		return ""
-	}
-	return a.addr.String()
-}
-
 // Incoming is an incoming connection attempt accepted by an [Endpoint]. Call
 // Accept to continue the handshake, or Refuse/Ignore to close it.
 type Incoming struct {
@@ -161,17 +88,17 @@ func (in *Incoming) Ignore() {
 }
 
 // RemoteAddr returns the transport address of the incoming connection.
-func (in *Incoming) RemoteAddr() IncomingAddr {
+func (in *Incoming) RemoteAddr() net.Addr {
 	if in == nil {
-		return IncomingAddr{}
+		return nil
 	}
 	if in.remote != nil {
-		return newIncomingAddr(in.remote)
+		return in.remote
 	}
 	if in.qc == nil {
-		return IncomingAddr{}
+		return nil
 	}
-	return newIncomingAddr(in.qc.RemoteAddr())
+	return in.qc.RemoteAddr()
 }
 
 // RemoteAddrValidated reports whether qng has validated the remote address.
@@ -186,11 +113,11 @@ func (in *Incoming) RemoteAddrValidated() bool {
 }
 
 // LocalAddr returns the local transport address the incoming connection used.
-func (in *Incoming) LocalAddr() LocalTransportAddr {
+func (in *Incoming) LocalAddr() net.Addr {
 	if in == nil || in.qc == nil {
-		return LocalTransportAddr{}
+		return nil
 	}
-	return newLocalTransportAddr(in.qc.LocalAddr())
+	return in.qc.LocalAddr()
 }
 
 // Accepting is an accepted incoming connection whose handshake may still be in
@@ -215,11 +142,11 @@ func (a *Accepting) ALPN(ctx context.Context) (string, error) {
 }
 
 // RemoteAddr returns the transport address of the connection.
-func (a *Accepting) RemoteAddr() IncomingAddr {
+func (a *Accepting) RemoteAddr() net.Addr {
 	if a == nil || a.qc == nil {
-		return IncomingAddr{}
+		return nil
 	}
-	return newIncomingAddr(a.qc.RemoteAddr())
+	return a.qc.RemoteAddr()
 }
 
 // Connection waits for the handshake, verifies the peer id, registers the
