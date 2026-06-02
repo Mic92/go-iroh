@@ -22,7 +22,7 @@ func ExampleEndpoint_Online() {
 		fmt.Println("bind:", err)
 		return
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	// Block until a home relay connection is established (or ctx is done).
 	if err := ep.Online(ctx); err != nil {
@@ -44,7 +44,7 @@ func ExampleEndpoint_HomeRelayStatus() {
 		fmt.Println("bind:", err)
 		return
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	status := ep.HomeRelayStatus().Get()
 	if status != nil && status.IsConnected() {
@@ -92,7 +92,7 @@ func ExampleRouter() {
 		fmt.Println("bind client:", err)
 		return
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, alpn)

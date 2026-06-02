@@ -308,7 +308,7 @@ func (r *Router) Shutdown(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	closeErr := r.ep.Close(ctx)
+	closeErr := r.ep.Shutdown(ctx)
 
 	// Wait for the accept loop and handler goroutines, bounded by ctx.
 	done := make(chan struct{})

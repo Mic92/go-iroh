@@ -1126,9 +1126,10 @@ func (e *Endpoint) resolveFunc() socket.ResolveFunc {
 	}
 }
 
-// Close shuts down the endpoint: it stops accepting, closes the QUIC transport,
-// and releases the UDP socket. In-flight connections are not forcibly closed.
-func (e *Endpoint) Close(ctx context.Context) error {
+// Shutdown shuts down the endpoint: it stops accepting, closes the QUIC
+// transport, and releases the UDP socket. In-flight connections are not
+// forcibly closed.
+func (e *Endpoint) Shutdown(ctx context.Context) error {
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
@@ -1154,6 +1155,14 @@ func (e *Endpoint) Close(ctx context.Context) error {
 		firstErr = err
 	}
 	return firstErr
+}
+
+// Close calls [Endpoint.Shutdown].
+//
+// Deprecated: use [Endpoint.Shutdown], matching the standard library's
+// context-aware graceful shutdown naming.
+func (e *Endpoint) Close(ctx context.Context) error {
+	return e.Shutdown(ctx)
 }
 
 // Closed returns a channel closed when the endpoint is closed.
