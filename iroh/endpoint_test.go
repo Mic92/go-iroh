@@ -223,7 +223,7 @@ func TestEndpointListenNetListener(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	ln := server.Listen(ctx)
+	ln := server.ListenStreams()
 	defer ln.Close()
 	var _ net.Listener = ln
 	if ln.Addr() == nil {
@@ -238,6 +238,15 @@ func TestEndpointListenNetListener(t *testing.T) {
 			return
 		}
 		defer c.Close()
+		pc, ok := c.(interface{ RemoteID() key.EndpointID })
+		if !ok {
+			done <- errors.New("accepted conn does not expose RemoteID")
+			return
+		}
+		if !pc.RemoteID().Equal(client.ID()) {
+			done <- fmt.Errorf("accepted conn remote id = %s, want %s", pc.RemoteID(), client.ID())
+			return
+		}
 		_, err = io.Copy(c, c)
 		done <- err
 	}()
@@ -277,12 +286,124 @@ func TestStreamListenerClose(t *testing.T) {
 	}
 	defer server.Close(ctx)
 
-	ln := server.Listen(ctx)
+	ln := server.ListenStreams()
 	if err := ln.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if _, err := ln.Accept(); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Accept after Close = %v, want net.ErrClosed", err)
+	}
+}
+
+func TestStreamListenerCloseUnblocksAccept(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	server, err := Bind(ctx, WithALPNs("iroh-listener-close-blocked/0"),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	ln := server.ListenStreams()
+	done := make(chan error, 1)
+	go func() {
+		_, err := ln.Accept()
+		done <- err
+	}()
+
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("blocked Accept = %v, want net.ErrClosed", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("blocked Accept did not unblock")
+	}
+}
+
+func TestStreamListenerAcceptsMultipleStreams(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-listener-streams/0"
+
+	server, err := Bind(ctx, WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close(ctx)
+
+	ln := server.ListenStreams()
+	defer ln.Close()
+
+	errc := make(chan error, 1)
+	go func() {
+		for i := 0; i < 2; i++ {
+			c, err := ln.Accept()
+			if err != nil {
+				errc <- err
+				return
+			}
+			pc, ok := c.(interface{ RemoteID() key.EndpointID })
+			if !ok {
+				c.Close()
+				errc <- errors.New("accepted conn does not expose RemoteID")
+				return
+			}
+			if !pc.RemoteID().Equal(client.ID()) {
+				c.Close()
+				errc <- fmt.Errorf("accepted conn remote id = %s, want %s", pc.RemoteID(), client.ID())
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				io.Copy(c, c)
+			}(c)
+		}
+		errc <- nil
+	}()
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer conn.Close()
+
+	for _, msg := range []string{"one", "two"} {
+		c, err := conn.OpenStreamConn(ctx)
+		if err != nil {
+			t.Fatalf("OpenStreamConn: %v", err)
+		}
+		if _, err := c.Write([]byte(msg)); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		var buf [3]byte
+		if _, err := io.ReadFull(c, buf[:len(msg)]); err != nil {
+			t.Fatalf("ReadFull: %v", err)
+		}
+		if string(buf[:len(msg)]) != msg {
+			t.Fatalf("echo = %q, want %q", string(buf[:len(msg)]), msg)
+		}
+		if err := c.Close(); err != nil {
+			t.Fatalf("Close stream: %v", err)
+		}
+	}
+
+	if err := <-errc; err != nil {
+		t.Fatal(err)
 	}
 }
 

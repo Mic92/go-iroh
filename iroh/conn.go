@@ -245,7 +245,7 @@ func (c *Conn) OpenStreamConn(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return streamConn{Stream: s, local: c.LocalAddr(), remote: c.RemoteAddr()}, nil
+	return streamConn{Stream: s, local: c.LocalAddr(), remote: c.RemoteAddr(), remoteID: c.RemoteID()}, nil
 }
 
 // AcceptStream accepts the next bidirectional stream opened by the peer.
@@ -264,7 +264,7 @@ func (c *Conn) AcceptStreamConn(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return streamConn{Stream: s, local: c.LocalAddr(), remote: c.RemoteAddr()}, nil
+	return streamConn{Stream: s, local: c.LocalAddr(), remote: c.RemoteAddr(), remoteID: c.RemoteID()}, nil
 }
 
 // OpenUniStreamSync opens a new unidirectional (send) stream.
@@ -335,13 +335,17 @@ func (c *Conn) Close() error {
 
 type streamConn struct {
 	*Stream
-	local  net.Addr
-	remote net.Addr
+	local    net.Addr
+	remote   net.Addr
+	remoteID key.EndpointID
 }
 
 func (c streamConn) LocalAddr() net.Addr { return c.local }
 
 func (c streamConn) RemoteAddr() net.Addr { return c.remote }
+
+// RemoteID returns the verified endpoint id of the peer that owns the stream.
+func (c streamConn) RemoteID() key.EndpointID { return c.remoteID }
 
 // connAdapter adapts a qng *quic.Conn to the socket package's
 // [socket.Connection] interface so the per-remote state actor can track its

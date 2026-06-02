@@ -4,6 +4,8 @@ import (
 	"io"
 	"net"
 	"time"
+
+	"github.com/tmc/go-iroh/key"
 )
 
 type deadlines interface {
@@ -17,6 +19,10 @@ type connAddrs interface {
 	RemoteAddr() net.Addr
 }
 
+type peerIDConn interface {
+	RemoteID() key.EndpointID
+}
+
 var (
 	_ io.ReadWriteCloser = (*Stream)(nil)
 	_ io.WriteCloser     = (*SendStream)(nil)
@@ -26,6 +32,7 @@ var (
 	_ deadlines          = (*Stream)(nil)
 	_ connAddrs          = (*Conn)(nil)
 	_ net.Conn           = streamConn{}
+	_ peerIDConn         = streamConn{}
 	_ net.Listener       = (*StreamListener)(nil)
 	_ ProtocolHandler    = ProtocolHandlerFunc(nil)
 	_ AddressPublisher   = AddressPublisherFunc(nil)
