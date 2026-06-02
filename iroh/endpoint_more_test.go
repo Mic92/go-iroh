@@ -104,8 +104,8 @@ func TestEndpointLifecycleAddressSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := ep.BoundSockets(); len(got) != 1 || got[0] != ep.LocalAddr() {
-		t.Fatalf("BoundSockets = %v, want [%v]", got, ep.LocalAddr())
+	if got := ep.LocalAddr(); !got.IsValid() {
+		t.Fatalf("LocalAddr = %v, want valid address", got)
 	}
 	select {
 	case <-ep.Closed():
@@ -306,8 +306,8 @@ func TestEndpointWithBindAddrOpts(t *testing.T) {
 	}
 	defer ep.Close(ctx)
 
-	if got := ep.BoundSockets(); len(got) != 1 || got[0] != ep.LocalAddr() {
-		t.Fatalf("BoundSockets = %v, want [%v]", got, ep.LocalAddr())
+	if got := ep.LocalAddr(); !got.IsValid() {
+		t.Fatalf("LocalAddr = %v, want valid address", got)
 	}
 	if !ep.LocalAddr().Addr().Is6() {
 		t.Fatalf("LocalAddr = %v, want IPv6", ep.LocalAddr())

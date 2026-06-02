@@ -524,12 +524,6 @@ func (e *Endpoint) LocalAddr() netip.AddrPort {
 	return e.udp.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
-// BoundSockets returns the UDP sockets this endpoint is bound to. This build
-// binds one magic socket; the slice form matches Rust's multi-socket API shape.
-func (e *Endpoint) BoundSockets() []netip.AddrPort {
-	return []netip.AddrPort{e.LocalAddr()}
-}
-
 // localNATTraversalCandidates returns concrete local direct addresses this
 // endpoint can hand to qng's QNT state. The default bind address is unspecified
 // ([::]:port), which is not a usable candidate and must not be advertised.
