@@ -118,7 +118,13 @@ func WithSecretKey(sk base.SecretKey) Option {
 }
 
 // WithALPNs sets the ALPN protocols this endpoint accepts on incoming
-// connections. Each ALPN is an arbitrary byte string.
+// connections. ALPN is Application-Layer Protocol Negotiation, the TLS
+// extension QUIC uses to agree on the application protocol carried by a
+// connection.
+//
+// Each ALPN is an arbitrary byte string. Most protocols use printable ASCII,
+// for example []byte("example/1"), but the API uses []byte so binary protocol
+// identifiers round-trip exactly.
 func WithALPNs(alpns ...[]byte) Option {
 	return func(c *config) error {
 		c.alpns = append(c.alpns, cloneALPNs(alpns)...)
@@ -481,8 +487,8 @@ func (e *Endpoint) startListener() error {
 //
 // SetALPNs replaces the accepted ALPN set. If a listener is already running, it
 // is closed first; established connections are unaffected, while concurrent
-// accepts may observe a transient closed-listener error and retry. Pass each ALPN
-// as an arbitrary byte string.
+// accepts may observe a transient closed-listener error and retry. Pass each
+// ALPN as an arbitrary byte string; see [WithALPNs].
 func (e *Endpoint) SetALPNs(alpns [][]byte) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -1166,7 +1172,8 @@ func (e *Endpoint) isClosed() bool {
 }
 
 // alpnsToStrings converts ALPN byte strings to the []string the TLS config
-// expects. Go strings hold arbitrary bytes, so the conversion is lossless.
+// expects. Go strings can contain arbitrary bytes, so this preserves Rust iroh's
+// binary ALPN surface without UTF-8 interpretation.
 func alpnsToStrings(alpns [][]byte) []string {
 	out := make([]string, len(alpns))
 	for i, a := range alpns {

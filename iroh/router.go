@@ -9,9 +9,9 @@ import (
 	"sync"
 )
 
-// ProtocolHandler handles connections accepted for a single ALPN. A [Router]
-// dispatches each incoming connection to the handler registered for its
-// negotiated ALPN.
+// ProtocolHandler handles connections accepted for a single ALPN
+// (Application-Layer Protocol Negotiation) value. A [Router] dispatches each
+// incoming connection to the handler registered for its negotiated ALPN.
 //
 // Accept is called in its own goroutine for every accepted connection; it should
 // run for the lifetime of the connection and return when done. A returned error
@@ -81,8 +81,9 @@ func NewRouter(ep *Endpoint) *RouterBuilder {
 }
 
 // Accept registers h to handle connections whose negotiated ALPN exactly equals
-// alpn. Registering the same ALPN twice replaces the earlier handler. It returns
-// the builder for chaining.
+// alpn. ALPN values are opaque byte strings; printable ASCII protocol names are
+// conventional, but binary values compare byte-for-byte. Registering the same
+// ALPN twice replaces the earlier handler. It returns the builder for chaining.
 func (b *RouterBuilder) Accept(alpn []byte, h ProtocolHandler) *RouterBuilder {
 	b.handlers[string(alpn)] = h
 	return b

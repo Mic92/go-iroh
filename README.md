@@ -50,6 +50,18 @@ if err != nil {
 defer conn.CloseWithError(0, "")
 ```
 
+ALPN means Application-Layer Protocol Negotiation. It is the TLS extension that
+lets peers agree which application protocol a QUIC connection will carry, such
+as `"example/1"` or `"n0/iroh/transfer/example/1"`. go-iroh uses ALPN values to
+route incoming connections to handlers.
+
+The API takes ALPN values as `[]byte` because iroh treats protocol names as
+opaque byte strings, not necessarily UTF-8 text. Most applications use printable
+ASCII and can write `[]byte("example/1")`; using bytes keeps binary protocol
+IDs lossless and matches Rust iroh's wire model. Internally, the TLS boundary
+converts those bytes to Go strings, which are also byte strings and do not
+require UTF-8.
+
 See [iroh/example_test.go](./iroh/example_test.go) for runnable direct-loopback
 Router and Endpoint examples.
 
