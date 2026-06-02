@@ -26,6 +26,7 @@ var (
 	_ deadlines          = (*Stream)(nil)
 	_ connAddrs          = (*Conn)(nil)
 	_ net.Conn           = streamConn{}
+	_ net.Listener       = (*StreamListener)(nil)
 	_ ProtocolHandler    = ProtocolHandlerFunc(nil)
 	_ AddressPublisher   = AddressPublisherFunc(nil)
 	_ AddressResolver    = AddressResolverFunc(nil)
