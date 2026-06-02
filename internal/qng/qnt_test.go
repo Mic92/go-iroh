@@ -135,6 +135,7 @@ func TestQNTLocalAddressStateLimit(t *testing.T) {
 
 func TestQNTLocalAddressQueuesAddAddressFrame(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
+	c.perspective = protocol.PerspectiveServer
 	c.framer = newFramer(nil)
 	c.sendingScheduled = make(chan struct{}, 1)
 	addr1 := netip.MustParseAddrPort("[::ffff:192.0.2.1]:1234")
@@ -167,8 +168,32 @@ func TestQNTLocalAddressQueuesAddAddressFrame(t *testing.T) {
 	}
 }
 
+func TestQNTClientLocalAddressDoesNotQueueAddAddressFrame(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.perspective = protocol.PerspectiveClient
+	c.framer = newFramer(nil)
+	c.sendingScheduled = make(chan struct{}, 1)
+	addr := netip.MustParseAddrPort("192.0.2.1:1234")
+
+	if err := c.AddNATTraversalAddress(addr); err != nil {
+		t.Fatalf("AddNATTraversalAddress: %v", err)
+	}
+	if frames := queuedAddAddressFrames(c); len(frames) != 0 {
+		t.Fatalf("queued %d ADD_ADDRESS frames, want 0", len(frames))
+	}
+	if got := c.qntLocalNATTraversalAddresses(); !slices.Equal(got, []netip.AddrPort{addr}) {
+		t.Fatalf("local addresses = %v, want [%v]", got, addr)
+	}
+	select {
+	case <-c.sendingScheduled:
+		t.Fatal("client AddNATTraversalAddress scheduled sending")
+	default:
+	}
+}
+
 func TestQNTLocalAddressQueuesRemoveAddressFrame(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
+	c.perspective = protocol.PerspectiveServer
 	c.framer = newFramer(nil)
 	c.sendingScheduled = make(chan struct{}, 1)
 	addr1 := netip.MustParseAddrPort("[::ffff:192.0.2.1]:1234")
@@ -209,6 +234,32 @@ func TestQNTLocalAddressQueuesRemoveAddressFrame(t *testing.T) {
 	case <-c.sendingScheduled:
 	default:
 		t.Fatal("RemoveNATTraversalAddress did not schedule sending")
+	}
+}
+
+func TestQNTClientLocalAddressDoesNotQueueRemoveAddressFrame(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	c.perspective = protocol.PerspectiveClient
+	c.framer = newFramer(nil)
+	c.sendingScheduled = make(chan struct{}, 1)
+	addr := netip.MustParseAddrPort("192.0.2.1:1234")
+
+	if err := c.AddNATTraversalAddress(addr); err != nil {
+		t.Fatalf("AddNATTraversalAddress: %v", err)
+	}
+	if err := c.RemoveNATTraversalAddress(addr); err != nil {
+		t.Fatalf("RemoveNATTraversalAddress: %v", err)
+	}
+	if frames := queuedRemoveAddressFrames(c); len(frames) != 0 {
+		t.Fatalf("queued %d REMOVE_ADDRESS frames, want 0", len(frames))
+	}
+	if got := c.qntLocalNATTraversalAddresses(); len(got) != 0 {
+		t.Fatalf("local addresses after remove = %v, want none", got)
+	}
+	select {
+	case <-c.sendingScheduled:
+		t.Fatal("client RemoveNATTraversalAddress scheduled sending")
+	default:
 	}
 }
 

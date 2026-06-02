@@ -44,7 +44,11 @@ func TestQNTGoToGoRoutePathCarriesData(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	waitForNATAddress(t, ctx, clientConn, serverAddr)
-	waitForNATAddress(t, ctx, serverConn, clientAddr)
+	if addrs, err := serverConn.NATTraversalAddresses(); err != nil {
+		t.Fatalf("server NATTraversalAddresses: %v", err)
+	} else if slices.Contains(addrs, clientAddr) {
+		t.Fatalf("server learned client NAT address from ADD_ADDRESS: %v", addrs)
+	}
 
 	addrs, err := clientConn.InitiateNATTraversalRound(ctx)
 	if err != nil {

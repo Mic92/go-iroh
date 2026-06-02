@@ -81,7 +81,9 @@ func (c *Conn) AddNATTraversalAddress(addr netip.AddrPort) error {
 	seq := st.nextLocalAddressSeqNo
 	st.nextLocalAddressSeqNo++
 	st.local = append(st.local, qntLocalAddress{addr: addr, seq: seq})
-	c.queueLocalAddAddressFrame(seq, addr)
+	if c.perspective == protocol.PerspectiveServer {
+		c.queueLocalAddAddressFrame(seq, addr)
+	}
 	return nil
 }
 
@@ -106,7 +108,9 @@ func (c *Conn) RemoveNATTraversalAddress(addr netip.AddrPort) error {
 	seq := st.local[i].seq
 	st.local = slices.Delete(st.local, i, i+1)
 	st.mu.Unlock()
-	c.queueLocalRemoveAddressFrame(seq)
+	if c.perspective == protocol.PerspectiveServer {
+		c.queueLocalRemoveAddressFrame(seq)
+	}
 	return nil
 }
 
