@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"sync"
 )
@@ -64,85 +65,65 @@ const (
 // connection. It mirrors the Rust IncomingFilter (iroh/src/protocol.rs).
 type IncomingFilter func(*Incoming) IncomingFilterOutcome
 
-// RouterBuilder accumulates protocol registrations for a [Router]. Create one
-// with [NewRouter], register handlers with [RouterBuilder.Accept], optionally set
-// an [IncomingFilter], then start the router with [RouterBuilder.Spawn].
-type RouterBuilder struct {
-	ep       *Endpoint
-	handlers map[string]ProtocolHandler
-	filter   IncomingFilter
-	logger   *slog.Logger
+// RouterConfig configures a [Router].
+type RouterConfig struct {
+	// IncomingFilter is consulted for each incoming connection.
+	IncomingFilter IncomingFilter
+	// Logger records handler errors and recovered panics. If nil,
+	// [slog.Default] is used.
+	Logger *slog.Logger
 }
 
-// NewRouter returns a [RouterBuilder] for ep.
-func NewRouter(ep *Endpoint) *RouterBuilder {
-	return &RouterBuilder{ep: ep, handlers: make(map[string]ProtocolHandler)}
-}
-
-// Accept registers h to handle connections whose negotiated ALPN exactly equals
-// alpn. ALPN values are opaque byte strings represented as Go strings; printable
-// ASCII protocol names are conventional, but binary values compare byte-for-byte.
-// Registering the same ALPN twice replaces the earlier handler. It returns the
-// builder for chaining.
-func (b *RouterBuilder) Accept(alpn string, h ProtocolHandler) *RouterBuilder {
-	b.handlers[alpn] = h
-	return b
-}
-
-// IncomingFilter sets the filter consulted for each incoming connection. It
-// returns the builder for chaining.
-func (b *RouterBuilder) IncomingFilter(f IncomingFilter) *RouterBuilder {
-	b.filter = f
-	return b
-}
-
-// Logger sets the logger used for handler errors and recovered panics. The
-// default is [slog.Default]. It returns the builder for chaining.
-func (b *RouterBuilder) Logger(l *slog.Logger) *RouterBuilder {
-	b.logger = l
-	return b
-}
-
-// Spawn registers every protocol's ALPN on the endpoint, starts the accept loop,
-// and returns the running [Router]. The endpoint must not already be listening
-// (do not pass [WithALPNs] to [Bind] when using a Router). Spawn returns an error
-// if registering the ALPNs fails.
-func (b *RouterBuilder) Spawn() (*Router, error) {
-	logger := b.logger
+// NewRouter registers every handler ALPN on ep, starts the accept loop, and
+// returns the running router. The endpoint must not already be listening (do not
+// pass [WithALPNs] to [Bind] when using a Router).
+//
+// The handlers map is keyed by exact ALPN string. ALPN values are opaque byte
+// strings represented as Go strings; printable ASCII protocol names are
+// conventional, but binary values compare byte-for-byte. NewRouter copies the
+// map before returning.
+func NewRouter(ep *Endpoint, handlers map[string]ProtocolHandler, cfg *RouterConfig) (*Router, error) {
+	handlers = maps.Clone(handlers)
+	logger := slog.Default()
+	filter := IncomingFilter(nil)
+	if cfg != nil {
+		filter = cfg.IncomingFilter
+		logger = cfg.Logger
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
 
-	alpns := make([]string, 0, len(b.handlers))
-	for a := range b.handlers {
+	alpns := make([]string, 0, len(handlers))
+	for a := range handlers {
 		alpns = append(alpns, a)
 	}
-	prevVerify := b.ep.sourceAddressValidation()
-	if b.filter != nil {
-		b.ep.setSourceAddressValidation(func(addr net.Addr) bool {
+	prevVerify := ep.sourceAddressValidation()
+	if filter != nil {
+		ep.setSourceAddressValidation(func(addr net.Addr) bool {
 			if prevVerify != nil && prevVerify(addr) {
 				return true
 			}
 			retry := false
-			in := &Incoming{ep: b.ep, remote: addr, preRetry: &retry}
-			if b.filter(in) == FilterRetry {
+			in := &Incoming{ep: ep, remote: addr, preRetry: &retry}
+			if filter(in) == FilterRetry {
 				retry = true
 			}
 			return retry
 		})
 	}
-	if err := b.ep.SetALPNs(alpns); err != nil {
-		b.ep.setSourceAddressValidation(prevVerify)
-		return nil, fmt.Errorf("iroh: router spawn: %w", err)
+	if err := ep.SetALPNs(alpns); err != nil {
+		ep.setSourceAddressValidation(prevVerify)
+		return nil, fmt.Errorf("iroh: new router: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Router{
-		ep:       b.ep,
-		handlers: b.handlers,
-		filter:   b.filter,
+		ep:       ep,
+		handlers: handlers,
+		filter:   filter,
 		restoreSourceValidation: func() {
-			b.ep.setSourceAddressValidation(prevVerify)
+			ep.setSourceAddressValidation(prevVerify)
 		},
 		logger: logger,
 		cancel: cancel,
@@ -155,8 +136,8 @@ func (b *RouterBuilder) Spawn() (*Router, error) {
 
 // Router accepts incoming connections on an [Endpoint] and dispatches each to
 // the [ProtocolHandler] registered for its negotiated ALPN. Start one with
-// [RouterBuilder.Spawn]; stop it with [Router.Shutdown]. It is the Go analog of
-// the Rust Router (iroh/src/protocol.rs:97).
+// [NewRouter]; stop it with [Router.Shutdown]. It is the Go analog of the Rust
+// Router (iroh/src/protocol.rs:97).
 //
 // Dispatch is by exact ALPN string. One goroutine runs the accept loop; each
 // accepted connection is handled in a child goroutine with a context derived

@@ -82,9 +82,9 @@ func ExampleRouter() {
 		return
 	}
 
-	router, err := iroh.NewRouter(server).Accept(alpn, echo{}).Spawn()
+	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{alpn: echo{}}, nil)
 	if err != nil {
-		fmt.Println("spawn:", err)
+		fmt.Println("router:", err)
 		return
 	}
 	defer router.Shutdown(ctx)

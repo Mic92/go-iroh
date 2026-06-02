@@ -102,7 +102,7 @@ func TestRouterEcho(t *testing.T) {
 	}
 
 	h := &shutdownEcho{}
-	router, err := NewRouter(server).Accept(alpn, h).Spawn()
+	router, err := NewRouter(server, map[string]ProtocolHandler{alpn: h}, nil)
 	if err != nil {
 		t.Fatalf("spawn router: %v", err)
 	}
@@ -173,9 +173,8 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 
 	var retryCalls atomic.Int32
 	var acceptedValidated atomic.Bool
-	router, err := NewRouter(server).
-		Accept(alpn, echoHandler{}).
-		IncomingFilter(func(in *Incoming) IncomingFilterOutcome {
+	router, err := NewRouter(server, map[string]ProtocolHandler{alpn: echoHandler{}}, &RouterConfig{
+		IncomingFilter: func(in *Incoming) IncomingFilterOutcome {
 			if in.RemoteAddrValidated() {
 				acceptedValidated.Store(true)
 				return FilterAccept
@@ -185,8 +184,8 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 				t.Errorf("Retry: %v", err)
 			}
 			return FilterAccept
-		}).
-		Spawn()
+		},
+	})
 	if err != nil {
 		t.Fatalf("spawn router: %v", err)
 	}
@@ -241,7 +240,7 @@ func TestRouterUnsupportedALPN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router, err := NewRouter(server).Accept(goodALPN, echoHandler{}).Spawn()
+	router, err := NewRouter(server, map[string]ProtocolHandler{goodALPN: echoHandler{}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,10 +279,10 @@ func TestRouterShutdownHandlersRunConcurrently(t *testing.T) {
 	release := make(chan struct{})
 	h1 := blockingShutdown{started: make(chan struct{}), release: release}
 	h2 := blockingShutdown{started: make(chan struct{}), release: release}
-	router, err := NewRouter(server).
-		Accept("iroh-shutdown-a/0", h1).
-		Accept("iroh-shutdown-b/0", h2).
-		Spawn()
+	router, err := NewRouter(server, map[string]ProtocolHandler{
+		"iroh-shutdown-a/0": h1,
+		"iroh-shutdown-b/0": h2,
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +322,7 @@ func TestRouterOnAccepting(t *testing.T) {
 	}
 
 	called := make(chan string, 1)
-	router, err := NewRouter(server).Accept(alpn, acceptingEcho{called: called}).Spawn()
+	router, err := NewRouter(server, map[string]ProtocolHandler{alpn: acceptingEcho{called: called}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
