@@ -89,6 +89,18 @@ For a repeatable local check:
 go test ./... -count=1
 ```
 
+For loopback stream/datagram latency and throughput, with raw TCP and UDP
+baselines:
+
+```sh
+GOMAXPROCS=4 go test ./iroh -run '^$' -bench 'Benchmark(Conn|RawTCP|RawUDP)' -benchtime=5s -count=5
+```
+
+`BenchmarkRawUDPMagicQueuedPingPong` is the closest raw UDP latency baseline for
+the magic-socket path: it uses the same receive queue depth, pooled receive
+buffers, caller-buffer copy, and separate write queue shape as the direct IP
+transport.
+
 Live Rust interop gates are opt-in because they require a checked-out and built
 Rust iroh tree:
 
