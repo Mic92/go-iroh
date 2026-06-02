@@ -142,7 +142,7 @@ func TestAddressLookupServicesLenIsEmptyClear(t *testing.T) {
 	}
 }
 
-// TestPkarrPublisherOptions verifies the publisher builder option setters take
+// TestPkarrPublisherOptions verifies the publisher configuration takes
 // effect by exercising the resulting publisher against an in-memory relay: a
 // custom filter publishes the address it selects, and the publisher resolves
 // back through a paired resolver.
@@ -155,17 +155,17 @@ func TestPkarrPublisherOptions(t *testing.T) {
 	relay := relayURL(t, "https://relay.example/")
 	ip := netip.MustParseAddrPort("1.2.3.4:9999")
 
-	// WithAddrFilter(IPOnlyFilter) overrides the default relay-only filter, so the
-	// IP is published and the relay is dropped. WithTTL and WithRepublishInterval
-	// are also set to confirm the chained builder returns a usable publisher.
-	pub, err := NewPkarrPublisher(srv.URL).
-		WithHTTPClient(srv.Client()).
-		WithTTL(120).
-		WithRepublishInterval(time.Hour).
-		WithAddrFilter(IPOnlyFilter).
-		Build(sk)
+	// AddrFilter overrides the default relay-only filter, so the IP is
+	// published and the relay is dropped. TTL and RepublishInterval are also set
+	// to confirm the config returns a usable publisher.
+	pub, err := NewPkarrPublisher(sk, srv.URL, &PkarrPublisherConfig{
+		HTTPClient:        srv.Client(),
+		TTL:               120,
+		RepublishInterval: time.Hour,
+		AddrFilter:        IPOnlyFilter,
+	})
 	if err != nil {
-		t.Fatalf("Build publisher: %v", err)
+		t.Fatalf("NewPkarrPublisher: %v", err)
 	}
 	defer pub.Close()
 
@@ -174,9 +174,9 @@ func TestPkarrPublisherOptions(t *testing.T) {
 		netaddr.IPAddr{Addr: ip},
 	))
 
-	res, err := NewPkarrResolver(srv.URL).WithHTTPClient(srv.Client()).Build()
+	res, err := NewPkarrResolver(srv.URL, &PkarrResolverConfig{HTTPClient: srv.Client()})
 	if err != nil {
-		t.Fatalf("Build resolver: %v", err)
+		t.Fatalf("NewPkarrResolver: %v", err)
 	}
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -206,9 +206,9 @@ func TestPkarrPublisherOptions(t *testing.T) {
 func TestN0PkarrConstructors(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 
-	pub, err := N0PkarrPublisher().Build(sk)
+	pub, err := N0PkarrPublisher(sk, nil)
 	if err != nil {
-		t.Fatalf("N0PkarrPublisher Build: %v", err)
+		t.Fatalf("N0PkarrPublisher: %v", err)
 	}
 	defer pub.Close()
 	// A publisher does not resolve.
@@ -216,9 +216,9 @@ func TestN0PkarrConstructors(t *testing.T) {
 		t.Error("PkarrPublisher.Resolve returned a non-nil channel, want nil")
 	}
 
-	res, err := N0PkarrResolver().Build()
+	res, err := N0PkarrResolver(nil)
 	if err != nil {
-		t.Fatalf("N0PkarrResolver Build: %v", err)
+		t.Fatalf("N0PkarrResolver: %v", err)
 	}
 	// A resolver does not publish: Publish is a no-op and must not panic.
 	res.Publish(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
@@ -237,19 +237,21 @@ func TestPkarrDefaults(t *testing.T) {
 	if DefaultRepublishInterval != 5*time.Minute {
 		t.Fatalf("DefaultRepublishInterval = %v, want 5m", DefaultRepublishInterval)
 	}
-	pub := NewPkarrPublisher(N0DNSPkarrRelayProd)
-	if pub.relayURL != N0DNSPkarrRelayProd {
-		t.Fatalf("publisher relay = %q, want %q", pub.relayURL, N0DNSPkarrRelayProd)
+	sk, _ := key.GenerateSecretKey()
+	pub, err := NewPkarrPublisher(sk, N0DNSPkarrRelayProd, nil)
+	if err != nil {
+		t.Fatalf("NewPkarrPublisher: %v", err)
 	}
-	if pub.ttl != DefaultPkarrTTL {
-		t.Fatalf("publisher ttl = %d, want %d", pub.ttl, DefaultPkarrTTL)
+	defer pub.Close()
+	if pub.addrFilter == nil {
+		t.Fatal("publisher addr filter is nil, want default")
 	}
-	if pub.republishInterval != DefaultRepublishInterval {
-		t.Fatalf("publisher republish = %v, want %v", pub.republishInterval, DefaultRepublishInterval)
+	res, err := NewPkarrResolver(N0DNSPkarrRelayStaging, nil)
+	if err != nil {
+		t.Fatalf("NewPkarrResolver: %v", err)
 	}
-	res := NewPkarrResolver(N0DNSPkarrRelayStaging)
-	if res.relayURL != N0DNSPkarrRelayStaging {
-		t.Fatalf("resolver relay = %q, want %q", res.relayURL, N0DNSPkarrRelayStaging)
+	if res.client == nil {
+		t.Fatal("resolver client is nil")
 	}
 }
 

@@ -47,9 +47,8 @@ const (
 // data is unchanged, and retries with backoff on failure. By default only relay
 // addresses are published (see [RelayOnlyFilter]).
 //
-// The zero value is not usable; create one with a [PkarrPublisherBuilder] from
-// [NewPkarrPublisher] or [N0PkarrPublisher]. Stop the background goroutine with
-// [PkarrPublisher.Close].
+// The zero value is not usable; create one with [NewPkarrPublisher] or
+// [N0PkarrPublisher]. Stop the background goroutine with [PkarrPublisher.Close].
 //
 // It is the Go analog of iroh's PkarrPublisher.
 type PkarrPublisher struct {
@@ -60,74 +59,52 @@ type PkarrPublisher struct {
 	done       chan struct{}
 }
 
-// PkarrPublisherBuilder configures a [PkarrPublisher]. Create it with
-// [NewPkarrPublisher] or [N0PkarrPublisher], set options, then call
-// [PkarrPublisherBuilder.Build].
-type PkarrPublisherBuilder struct {
-	relayURL          string
-	ttl               uint32
-	republishInterval time.Duration
-	filter            AddrFilter
-	httpClient        *http.Client
+// PkarrPublisherConfig configures a [PkarrPublisher].
+type PkarrPublisherConfig struct {
+	// TTL is the record TTL, in seconds, of published packets. If zero,
+	// [DefaultPkarrTTL] is used.
+	TTL uint32
+	// RepublishInterval is how often packets are republished even when
+	// unchanged. If zero, [DefaultRepublishInterval] is used.
+	RepublishInterval time.Duration
+	// AddrFilter controls which addresses are published. If nil,
+	// [RelayOnlyFilter] is used. Use a filter that returns its input unchanged
+	// to publish all addresses.
+	AddrFilter AddrFilter
+	// HTTPClient is used for relay requests. If nil, a client with a per-request
+	// timeout is used.
+	HTTPClient *http.Client
 }
 
-// NewPkarrPublisher returns a builder publishing to the pkarr relay at
-// relayURL.
-func NewPkarrPublisher(relayURL string) *PkarrPublisherBuilder {
-	return &PkarrPublisherBuilder{
-		relayURL:          relayURL,
-		ttl:               DefaultPkarrTTL,
-		republishInterval: DefaultRepublishInterval,
-		filter:            RelayOnlyFilter,
+// NewPkarrPublisher creates a publisher that signs packets with secretKey,
+// publishes to the pkarr relay at relayURL, and starts its background publish
+// goroutine.
+func NewPkarrPublisher(secretKey key.SecretKey, relayURL string, cfg *PkarrPublisherConfig) (*PkarrPublisher, error) {
+	ttl := DefaultPkarrTTL
+	republishInterval := DefaultRepublishInterval
+	filter := RelayOnlyFilter
+	var httpClient *http.Client
+	if cfg != nil {
+		if cfg.TTL != 0 {
+			ttl = cfg.TTL
+		}
+		if cfg.RepublishInterval != 0 {
+			republishInterval = cfg.RepublishInterval
+		}
+		if cfg.AddrFilter != nil {
+			filter = cfg.AddrFilter
+		}
+		httpClient = cfg.HTTPClient
 	}
-}
 
-// N0PkarrPublisher returns a builder publishing to the number0 production pkarr
-// relay ([N0DNSPkarrRelayProd]).
-func N0PkarrPublisher() *PkarrPublisherBuilder {
-	return NewPkarrPublisher(N0DNSPkarrRelayProd)
-}
-
-// WithTTL sets the record TTL, in seconds, of published packets. The default is
-// [DefaultPkarrTTL].
-func (b *PkarrPublisherBuilder) WithTTL(ttl uint32) *PkarrPublisherBuilder {
-	b.ttl = ttl
-	return b
-}
-
-// WithRepublishInterval sets how often packets are republished even when
-// unchanged. The default is [DefaultRepublishInterval].
-func (b *PkarrPublisherBuilder) WithRepublishInterval(d time.Duration) *PkarrPublisherBuilder {
-	b.republishInterval = d
-	return b
-}
-
-// WithAddrFilter sets the address filter controlling which addresses are
-// published. The default is [RelayOnlyFilter]. Pass nil to publish all
-// addresses.
-func (b *PkarrPublisherBuilder) WithAddrFilter(f AddrFilter) *PkarrPublisherBuilder {
-	b.filter = f
-	return b
-}
-
-// WithHTTPClient sets the HTTP client used for relay requests. The default is a
-// client with a per-request timeout.
-func (b *PkarrPublisherBuilder) WithHTTPClient(c *http.Client) *PkarrPublisherBuilder {
-	b.httpClient = c
-	return b
-}
-
-// Build creates the publisher, signing packets with secretKey, and starts its
-// background publish goroutine.
-func (b *PkarrPublisherBuilder) Build(secretKey key.SecretKey) (*PkarrPublisher, error) {
-	client, err := newPkarrRelayClient(b.relayURL, b.httpClient)
+	client, err := newPkarrRelayClient(relayURL, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("pkarr publisher: %w", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &PkarrPublisher{
 		endpointID: secretKey.Public(),
-		addrFilter: b.filter,
+		addrFilter: filter,
 		value:      watch.NewValue[*dns.EndpointInfo](nil),
 		cancel:     cancel,
 		done:       make(chan struct{}),
@@ -136,14 +113,20 @@ func (b *PkarrPublisherBuilder) Build(secretKey key.SecretKey) (*PkarrPublisher,
 		secretKey:         secretKey,
 		client:            client,
 		watcher:           p.value.Watch(),
-		ttl:               b.ttl,
-		republishInterval: b.republishInterval,
+		ttl:               ttl,
+		republishInterval: republishInterval,
 	}
 	go func() {
 		defer close(p.done)
 		svc.run(ctx)
 	}()
 	return p, nil
+}
+
+// N0PkarrPublisher creates a publisher using the number0 production pkarr relay
+// ([N0DNSPkarrRelayProd]).
+func N0PkarrPublisher(secretKey key.SecretKey, cfg *PkarrPublisherConfig) (*PkarrPublisher, error) {
+	return NewPkarrPublisher(secretKey, N0DNSPkarrRelayProd, cfg)
 }
 
 // Publish records data to publish to the pkarr relay. It applies the
@@ -238,44 +221,39 @@ func resetTimer(t *time.Timer, d time.Duration) {
 // PkarrResolver resolves endpoint addressing information from a pkarr relay over
 // HTTP. It implements [AddressLookup] as a resolve-only service.
 //
-// The zero value is not usable; create one with a [PkarrResolverBuilder] from
-// [NewPkarrResolver] or [N0PkarrResolver].
+// The zero value is not usable; create one with [NewPkarrResolver] or
+// [N0PkarrResolver].
 //
 // It is the Go analog of iroh's PkarrResolver.
 type PkarrResolver struct {
 	client *pkarrRelayClient
 }
 
-// PkarrResolverBuilder configures a [PkarrResolver].
-type PkarrResolverBuilder struct {
-	relayURL   string
-	httpClient *http.Client
+// PkarrResolverConfig configures a [PkarrResolver].
+type PkarrResolverConfig struct {
+	// HTTPClient is used for relay requests. If nil, a client with a per-request
+	// timeout is used.
+	HTTPClient *http.Client
 }
 
-// NewPkarrResolver returns a builder resolving from the pkarr relay at relayURL.
-func NewPkarrResolver(relayURL string) *PkarrResolverBuilder {
-	return &PkarrResolverBuilder{relayURL: relayURL}
-}
-
-// N0PkarrResolver returns a builder resolving from the number0 production pkarr
-// relay ([N0DNSPkarrRelayProd]).
-func N0PkarrResolver() *PkarrResolverBuilder {
-	return NewPkarrResolver(N0DNSPkarrRelayProd)
-}
-
-// WithHTTPClient sets the HTTP client used for relay requests.
-func (b *PkarrResolverBuilder) WithHTTPClient(c *http.Client) *PkarrResolverBuilder {
-	b.httpClient = c
-	return b
-}
-
-// Build creates the resolver.
-func (b *PkarrResolverBuilder) Build() (*PkarrResolver, error) {
-	client, err := newPkarrRelayClient(b.relayURL, b.httpClient)
+// NewPkarrResolver creates a resolver that resolves from the pkarr relay at
+// relayURL.
+func NewPkarrResolver(relayURL string, cfg *PkarrResolverConfig) (*PkarrResolver, error) {
+	var httpClient *http.Client
+	if cfg != nil {
+		httpClient = cfg.HTTPClient
+	}
+	client, err := newPkarrRelayClient(relayURL, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("pkarr resolver: %w", err)
 	}
 	return &PkarrResolver{client: client}, nil
+}
+
+// N0PkarrResolver creates a resolver using the number0 production pkarr relay
+// ([N0DNSPkarrRelayProd]).
+func N0PkarrResolver(cfg *PkarrResolverConfig) (*PkarrResolver, error) {
+	return NewPkarrResolver(N0DNSPkarrRelayProd, cfg)
 }
 
 // Publish is a no-op: a resolver does not publish.

@@ -191,20 +191,18 @@ func TestPkarrPublishResolveRoundTrip(t *testing.T) {
 	id := sk.Public()
 	relay := relayURL(t, "https://relay.example/")
 
-	pub, err := NewPkarrPublisher(srv.URL).
-		WithHTTPClient(srv.Client()).
-		Build(sk)
+	pub, err := NewPkarrPublisher(sk, srv.URL, &PkarrPublisherConfig{HTTPClient: srv.Client()})
 	if err != nil {
-		t.Fatalf("Build publisher: %v", err)
+		t.Fatalf("NewPkarrPublisher: %v", err)
 	}
 	defer pub.Close()
 
 	data := dns.NewEndpointData(netaddr.RelayAddr{URL: relay})
 	pub.Publish(data)
 
-	res, err := NewPkarrResolver(srv.URL).WithHTTPClient(srv.Client()).Build()
+	res, err := NewPkarrResolver(srv.URL, &PkarrResolverConfig{HTTPClient: srv.Client()})
 	if err != nil {
-		t.Fatalf("Build resolver: %v", err)
+		t.Fatalf("NewPkarrResolver: %v", err)
 	}
 
 	// The publish runs in the background; poll until the relay has the packet.
@@ -242,9 +240,9 @@ func TestPkarrPublisherRelayOnlyFilter(t *testing.T) {
 	id := sk.Public()
 	relay := relayURL(t, "https://relay.example/")
 
-	pub, err := NewPkarrPublisher(srv.URL).WithHTTPClient(srv.Client()).Build(sk)
+	pub, err := NewPkarrPublisher(sk, srv.URL, &PkarrPublisherConfig{HTTPClient: srv.Client()})
 	if err != nil {
-		t.Fatalf("Build publisher: %v", err)
+		t.Fatalf("NewPkarrPublisher: %v", err)
 	}
 	defer pub.Close()
 
@@ -255,7 +253,7 @@ func TestPkarrPublisherRelayOnlyFilter(t *testing.T) {
 	)
 	pub.Publish(data)
 
-	res, _ := NewPkarrResolver(srv.URL).WithHTTPClient(srv.Client()).Build()
+	res, _ := NewPkarrResolver(srv.URL, &PkarrResolverConfig{HTTPClient: srv.Client()})
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		results := drain(res.Resolve(context.Background(), id))
