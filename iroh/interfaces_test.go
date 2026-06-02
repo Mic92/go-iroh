@@ -26,4 +26,6 @@ var (
 	_ connAddrs          = (*Conn)(nil)
 	_ net.Conn           = streamConn{}
 	_ ProtocolHandler    = ProtocolHandlerFunc(nil)
+	_ AddressPublisher   = AddressPublisherFunc(nil)
+	_ AddressResolver    = AddressResolverFunc(nil)
 )

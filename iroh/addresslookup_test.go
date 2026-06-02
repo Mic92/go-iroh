@@ -411,6 +411,34 @@ func TestServicesPublishAppliesFilter(t *testing.T) {
 	}
 }
 
+func TestAddressLookupFunctionAdapters(t *testing.T) {
+	var published []dns.EndpointData
+	pub := AddressPublisherFunc(func(data dns.EndpointData) {
+		published = append(published, data)
+	})
+	relay := relayURL(t, "https://relay.example/")
+	data := dns.NewEndpointData(netaddr.RelayAddr{URL: relay})
+	pub.Publish(data)
+	if len(published) != 1 {
+		t.Fatalf("published %d times, want 1", len(published))
+	}
+
+	sk, _ := key.GenerateSecretKey()
+	id := sk.Public()
+	resolver := AddressResolverFunc(func(ctx context.Context, got key.EndpointID) iter.Seq2[Item, error] {
+		return func(yield func(Item, error) bool) {
+			if !got.Equal(id) {
+				t.Errorf("Resolve id = %s, want %s", got, id)
+			}
+			yield(NewItem(dns.EndpointInfo{ID: id, Data: data}, "func", nil), nil)
+		}
+	})
+	results := drain(resolver.Resolve(context.Background(), id))
+	if len(results) != 1 || results[0].err != nil || results[0].item.Provenance() != "func" {
+		t.Fatalf("results = %+v", results)
+	}
+}
+
 // recordingLookup records published data.
 type recordingLookup struct {
 	mu        sync.Mutex

@@ -20,6 +20,14 @@ type AddressPublisher interface {
 	Publish(data dns.EndpointData)
 }
 
+// AddressPublisherFunc adapts a function to [AddressPublisher].
+type AddressPublisherFunc func(data dns.EndpointData)
+
+// Publish calls f(data).
+func (f AddressPublisherFunc) Publish(data dns.EndpointData) {
+	f(data)
+}
+
 // AddressResolver resolves the addressing information of a [key.EndpointID].
 // It lets an [Endpoint] connect to a peer knowing only its id, by looking up a
 // [netaddr.EndpointAddr] (a relay URL and/or direct addresses) through one or
@@ -35,6 +43,14 @@ type AddressResolver interface {
 	// discovered [Item] values and per-service errors. Cancel ctx to stop
 	// pending work.
 	Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error]
+}
+
+// AddressResolverFunc adapts a function to [AddressResolver].
+type AddressResolverFunc func(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error]
+
+// Resolve calls f(ctx, id).
+func (f AddressResolverFunc) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
+	return f(ctx, id)
 }
 
 // Item is a single address-lookup result: the [dns.EndpointInfo] discovered for

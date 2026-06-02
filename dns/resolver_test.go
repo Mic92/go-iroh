@@ -46,6 +46,26 @@ func TestLookupEndpointByID(t *testing.T) {
 	}
 }
 
+func TestTxtLookuperFunc(t *testing.T) {
+	var _ TxtLookuper = TxtLookuperFunc(nil)
+
+	id := testID(t)
+	wantName := IrohTxtName + "." + id.Z32() + "." + N0DNSEndpointOriginProd
+	r := &Resolver{Lookuper: TxtLookuperFunc(func(_ context.Context, name string) ([]string, error) {
+		if name != wantName {
+			t.Errorf("LookupTXT(%q), want %q", name, wantName)
+		}
+		return []string{"addr=127.0.0.1:1234"}, nil
+	})}
+	info, err := r.LookupEndpointByID(context.Background(), id, N0DNSEndpointOriginProd)
+	if err != nil {
+		t.Fatalf("LookupEndpointByID: %v", err)
+	}
+	if got := info.Data.IPAddrs(); len(got) != 1 || got[0] != netip.MustParseAddrPort("127.0.0.1:1234") {
+		t.Errorf("IPAddrs = %v", got)
+	}
+}
+
 func TestLookupEndpointByIDUsesZBase32Name(t *testing.T) {
 	id := testID(t)
 	const wantZ32 = "dgjpkxyn3zyrk3zfads5duwdgbqpkwbjxfj4yt7rezidr3fijccy"

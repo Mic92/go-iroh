@@ -31,6 +31,14 @@ type TxtLookuper interface {
 	LookupTXT(ctx context.Context, name string) ([]string, error)
 }
 
+// TxtLookuperFunc adapts a function to [TxtLookuper].
+type TxtLookuperFunc func(ctx context.Context, name string) ([]string, error)
+
+// LookupTXT calls f(ctx, name).
+func (f TxtLookuperFunc) LookupTXT(ctx context.Context, name string) ([]string, error) {
+	return f(ctx, name)
+}
+
 // Resolver resolves iroh endpoint information from DNS. The zero value uses the
 // host's default DNS configuration; set [Resolver.Lookuper] to override.
 type Resolver struct {
