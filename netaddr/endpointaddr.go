@@ -20,6 +20,8 @@ import (
 //
 // The interface is closed: only the implementations in this package satisfy it.
 type TransportAddr interface {
+	// Network returns the transport kind: "relay", "ip", or "custom".
+	Network() string
 	// String renders the address in its "kind:value" form, e.g. "ip:127.0.0.1:9".
 	String() string
 	// Compare returns -1, 0, or +1 ordering this address against other. The
@@ -71,6 +73,10 @@ type CustomAddr struct {
 func (RelayAddr) isTransportAddr()  {}
 func (IPAddr) isTransportAddr()     {}
 func (CustomAddr) isTransportAddr() {}
+
+func (RelayAddr) Network() string  { return "relay" }
+func (IPAddr) Network() string     { return "ip" }
+func (CustomAddr) Network() string { return "custom" }
 
 func (a RelayAddr) String() string  { return "relay:" + a.URL.String() }
 func (a IPAddr) String() string     { return "ip:" + a.Addr.String() }

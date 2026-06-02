@@ -2,6 +2,7 @@ package netaddr
 
 import (
 	"errors"
+	"net"
 	"net/netip"
 	"testing"
 
@@ -129,6 +130,30 @@ func TestTransportAddrStringRoundTrip(t *testing.T) {
 		}
 		if parsed.String() != s {
 			t.Errorf("round-trip: %q != %q", parsed.String(), s)
+		}
+	}
+}
+
+func TestTransportAddrNetAddr(t *testing.T) {
+	var (
+		_ net.Addr = RelayAddr{}
+		_ net.Addr = IPAddr{}
+		_ net.Addr = CustomAddr{}
+	)
+
+	relay, _ := ParseRelayURL("https://relay.example.com")
+	cases := []struct {
+		name string
+		addr TransportAddr
+		want string
+	}{
+		{"relay", RelayAddr{URL: relay}, "relay"},
+		{"ip", IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:9")}, "ip"},
+		{"custom", NewCustomAddr(7, []byte{0xde, 0xad}), "custom"},
+	}
+	for _, tt := range cases {
+		if got := tt.addr.Network(); got != tt.want {
+			t.Errorf("%s Network() = %q, want %q", tt.name, got, tt.want)
 		}
 	}
 }
