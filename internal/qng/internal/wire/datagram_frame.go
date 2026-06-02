@@ -39,8 +39,7 @@ func parseDatagramFrame(b []byte, typ FrameType, _ protocol.Version) (*DatagramF
 	} else {
 		length = uint64(len(b))
 	}
-	f.Data = make([]byte, length)
-	copy(f.Data, b)
+	f.Data = b[:length]
 	return f, startLen - len(b) + int(length), nil
 }
 

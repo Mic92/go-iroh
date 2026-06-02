@@ -58,10 +58,8 @@ func ParseStreamFrame(b []byte, typ FrameType, _ protocol.Version) (*StreamFrame
 
 	var frame *StreamFrame
 	if dataLen < protocol.MinStreamFrameBufferSize {
-		frame = &StreamFrame{}
-		if dataLen > 0 {
-			frame.Data = make([]byte, dataLen)
-		}
+		frame = getSmallStreamFrame()
+		frame.Data = frame.Data[:dataLen]
 	} else {
 		frame = GetStreamFrame()
 		// The STREAM frame can't be larger than the StreamFrame we obtained from the buffer,

@@ -26,12 +26,13 @@ type ReceiveStream struct {
 	finalOffset protocol.ByteCount
 
 	currentFrame       []byte
-	currentFrameDone   func()
+	currentFrameSource *wire.StreamFrame
 	readPosInFrame     int
 	currentFrameIsLast bool // is the currentFrame the last frame on this stream
 
 	queuedStopSending   bool
 	queuedMaxStreamData bool
+	maxStreamDataFrame  wire.MaxStreamDataFrame
 
 	// Set once we read the io.EOF or the cancellation error.
 	// Note that for local cancellations, this doesn't necessarily mean that we know the final offset yet.
@@ -48,6 +49,13 @@ type ReceiveStream struct {
 	readChan chan struct{}
 	readOnce chan struct{} // cap: 1, to protect against concurrent use of Read
 	deadline monotime.Time
+
+	pendingRead                   []byte
+	pendingReadN                  int
+	pendingReadErr                error
+	pendingReadStreamWindowUpdate bool
+	pendingReadConnWindowUpdate   bool
+	pendingReadReady              bool
 
 	flowController flowcontrol.StreamFlowController
 }
@@ -168,6 +176,9 @@ func (s *ReceiveStream) readImpl(p []byte) (hasStreamWindowUpdate bool, hasConnW
 				break
 			}
 
+			if deadline.IsZero() && bytesRead == 0 {
+				s.pendingRead = p
+			}
 			s.mutex.Unlock()
 			if deadline.IsZero() {
 				<-s.readChan
@@ -184,6 +195,20 @@ func (s *ReceiveStream) readImpl(p []byte) (hasStreamWindowUpdate bool, hasConnW
 				}
 			}
 			s.mutex.Lock()
+			if s.pendingReadReady {
+				hasStreamWindowUpdate = s.pendingReadStreamWindowUpdate
+				hasConnWindowUpdate = s.pendingReadConnWindowUpdate
+				n := s.pendingReadN
+				err := s.pendingReadErr
+				s.pendingRead = nil
+				s.pendingReadN = 0
+				s.pendingReadErr = nil
+				s.pendingReadStreamWindowUpdate = false
+				s.pendingReadConnWindowUpdate = false
+				s.pendingReadReady = false
+				return hasStreamWindowUpdate, hasConnWindowUpdate, n, err
+			}
+			s.pendingRead = nil
 			s.dequeueNextFrame()
 		}
 
@@ -218,8 +243,9 @@ func (s *ReceiveStream) readImpl(p []byte) (hasStreamWindowUpdate bool, hasConnW
 
 		if s.readPosInFrame >= len(s.currentFrame) && s.currentFrameIsLast {
 			s.currentFrame = nil
-			if s.currentFrameDone != nil {
-				s.currentFrameDone()
+			if s.currentFrameSource != nil {
+				s.currentFrameSource.PutBack()
+				s.currentFrameSource = nil
 			}
 			s.errorRead = true
 			return hasStreamWindowUpdate, hasConnWindowUpdate, bytesRead, io.EOF
@@ -356,10 +382,10 @@ func (s *ReceiveStream) peekImpl(b []byte) (int, error) {
 func (s *ReceiveStream) dequeueNextFrame() {
 	var offset protocol.ByteCount
 	// We're done with the last frame. Release the buffer.
-	if s.currentFrameDone != nil {
-		s.currentFrameDone()
+	if s.currentFrameSource != nil {
+		s.currentFrameSource.PutBack()
 	}
-	offset, s.currentFrame, s.currentFrameDone = s.frameQueue.Pop()
+	offset, s.currentFrame, s.currentFrameSource = s.frameQueue.Pop()
 	s.currentFrameIsLast = offset+protocol.ByteCount(len(s.currentFrame)) >= s.finalOffset && !s.cancelledRemotely
 	s.readPosInFrame = 0
 }
@@ -424,11 +450,57 @@ func (s *ReceiveStream) handleStreamFrameImpl(frame *wire.StreamFrame, now monot
 	if s.cancelledLocally {
 		return nil
 	}
-	if err := s.frameQueue.Push(frame.Data, frame.Offset, frame.PutBack); err != nil {
+	if err := s.frameQueue.Push(frame.Data, frame.Offset, frame); err != nil {
 		return err
+	}
+	if s.pendingRead != nil && !s.pendingReadReady {
+		s.dequeueNextFrame()
+		if s.currentFrame != nil {
+			s.fillPendingRead()
+			s.signalRead()
+			return nil
+		}
+		if s.currentFrameIsLast {
+			s.pendingReadErr = io.EOF
+			s.pendingReadReady = true
+			s.signalRead()
+			return nil
+		}
 	}
 	s.signalRead()
 	return nil
+}
+
+func (s *ReceiveStream) fillPendingRead() {
+	n := copy(s.pendingRead, s.currentFrame[s.readPosInFrame:])
+	if !s.isRemoteCancellationEffective() {
+		hasStream, hasConn := s.flowController.AddBytesRead(protocol.ByteCount(n))
+		if hasStream {
+			s.queuedMaxStreamData = true
+			s.pendingReadStreamWindowUpdate = true
+		}
+		if hasConn {
+			s.pendingReadConnWindowUpdate = true
+		}
+	}
+	s.readPosInFrame += n
+	s.readPos += protocol.ByteCount(n)
+	s.pendingReadN = n
+	if s.readPosInFrame >= len(s.currentFrame) && s.currentFrameIsLast {
+		s.currentFrame = nil
+		if s.currentFrameSource != nil {
+			s.currentFrameSource.PutBack()
+			s.currentFrameSource = nil
+		}
+		s.errorRead = true
+		s.pendingReadErr = io.EOF
+	}
+	if s.readPosInFrame >= len(s.currentFrame) && s.currentFrameSource != nil {
+		s.currentFrameSource.PutBack()
+		s.currentFrameSource = nil
+		s.currentFrame = nil
+	}
+	s.pendingReadReady = true
 }
 
 func (s *ReceiveStream) handleResetStreamFrame(frame *wire.ResetStreamFrame, now monotime.Time) error {
@@ -490,11 +562,10 @@ func (s *ReceiveStream) getControlFrame(now monotime.Time) (_ ackhandler.Frame, 
 	}
 
 	s.queuedMaxStreamData = false
+	s.maxStreamDataFrame.StreamID = s.streamID
+	s.maxStreamDataFrame.MaximumStreamData = s.flowController.GetWindowUpdate(now)
 	return ackhandler.Frame{
-		Frame: &wire.MaxStreamDataFrame{
-			StreamID:          s.streamID,
-			MaximumStreamData: s.flowController.GetWindowUpdate(now),
-		},
+		Frame: &s.maxStreamDataFrame,
 	}, true, false
 }
 

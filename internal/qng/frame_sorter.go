@@ -6,6 +6,7 @@ import (
 
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 	list "github.com/tmc/go-iroh/internal/qng/internal/utils/linkedlist"
+	"github.com/tmc/go-iroh/internal/qng/internal/wire"
 )
 
 // byteInterval is an interval from one ByteCount to the other
@@ -21,8 +22,8 @@ func init() {
 }
 
 type frameSorterEntry struct {
-	Data   []byte
-	DoneCb func()
+	Data  []byte
+	Frame *wire.StreamFrame
 }
 
 type frameSorter struct {
@@ -42,24 +43,51 @@ func newFrameSorter() *frameSorter {
 	return &s
 }
 
-func (s *frameSorter) Push(data []byte, offset protocol.ByteCount, doneCb func()) error {
-	err := s.push(data, offset, doneCb)
+func (s *frameSorter) Push(data []byte, offset protocol.ByteCount, frame *wire.StreamFrame) error {
+	err := s.push(data, offset, frame)
 	if err == errDuplicateStreamData {
-		if doneCb != nil {
-			doneCb()
+		if frame != nil {
+			frame.PutBack()
 		}
 		return nil
 	}
 	return err
 }
 
-func (s *frameSorter) push(data []byte, offset protocol.ByteCount, doneCb func()) error {
+func (s *frameSorter) push(data []byte, offset protocol.ByteCount, frame *wire.StreamFrame) error {
 	if len(data) == 0 {
 		return errDuplicateStreamData
 	}
 
 	start := offset
 	end := offset + protocol.ByteCount(len(data))
+
+	if start == s.readPos {
+		if _, ok := s.queue[start]; !ok {
+			if gap := s.gaps.Front(); gap != nil && gap.Value.Start == start {
+				if end > gap.Value.End {
+					data = data[:gap.Value.End-start]
+					end = gap.Value.End
+					if len(data) < protocol.MinStreamFrameBufferSize {
+						newData := make([]byte, len(data))
+						copy(newData, data)
+						data = newData
+						if frame != nil {
+							frame.PutBack()
+							frame = nil
+						}
+					}
+				}
+				if end == gap.Value.End {
+					s.gaps.Remove(gap)
+				} else {
+					gap.Value.Start = end
+				}
+				s.queue[start] = frameSorterEntry{Data: data, Frame: frame}
+				return nil
+			}
+		}
+	}
 
 	if end <= s.gaps.Front().Value.Start {
 		return errDuplicateStreamData
@@ -95,8 +123,8 @@ func (s *frameSorter) push(data []byte, offset protocol.ByteCount, doneCb func()
 			delete(s.queue, pos)
 			pos += oldEntryLen
 			hasReplacedAtLeastOne = true
-			if oldEntry.DoneCb != nil {
-				oldEntry.DoneCb()
+			if oldEntry.Frame != nil {
+				oldEntry.Frame.PutBack()
 			}
 		} else {
 			if !hasReplacedAtLeastOne {
@@ -163,9 +191,9 @@ func (s *frameSorter) push(data []byte, offset protocol.ByteCount, doneCb func()
 		newData := make([]byte, len(data))
 		copy(newData, data)
 		data = newData
-		if doneCb != nil {
-			doneCb()
-			doneCb = nil
+		if frame != nil {
+			frame.PutBack()
+			frame = nil
 		}
 	}
 
@@ -173,7 +201,7 @@ func (s *frameSorter) push(data []byte, offset protocol.ByteCount, doneCb func()
 		return errors.New("too many gaps in received data")
 	}
 
-	s.queue[start] = frameSorterEntry{Data: data, DoneCb: doneCb}
+	s.queue[start] = frameSorterEntry{Data: data, Frame: frame}
 	return nil
 }
 
@@ -210,14 +238,14 @@ func (s *frameSorter) deleteConsecutive(pos protocol.ByteCount) {
 		}
 		oldEntryLen := protocol.ByteCount(len(oldEntry.Data))
 		delete(s.queue, pos)
-		if oldEntry.DoneCb != nil {
-			oldEntry.DoneCb()
+		if oldEntry.Frame != nil {
+			oldEntry.Frame.PutBack()
 		}
 		pos += oldEntryLen
 	}
 }
 
-func (s *frameSorter) Pop() (protocol.ByteCount, []byte, func()) {
+func (s *frameSorter) Pop() (protocol.ByteCount, []byte, *wire.StreamFrame) {
 	entry, ok := s.queue[s.readPos]
 	if !ok {
 		return s.readPos, nil, nil
@@ -228,7 +256,7 @@ func (s *frameSorter) Pop() (protocol.ByteCount, []byte, func()) {
 	if s.gaps.Front().Value.End <= s.readPos {
 		panic("frame sorter BUG: read position higher than a gap")
 	}
-	return offset, entry.Data, entry.DoneCb
+	return offset, entry.Data, entry.Frame
 }
 
 // HasMoreData says if there is any more data queued at *any* offset.
