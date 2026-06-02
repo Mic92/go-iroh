@@ -222,14 +222,9 @@ type EndpointAddr struct {
 	addrs []TransportAddr
 }
 
-// NewEndpointAddr creates an EndpointAddr with the given id and no addresses.
-func NewEndpointAddr(id key.EndpointID) EndpointAddr {
-	return EndpointAddr{ID: id}
-}
-
-// EndpointAddrFromParts creates an EndpointAddr from an id and a set of
-// transport addresses (deduplicated and sorted).
-func EndpointAddrFromParts(id key.EndpointID, addrs ...TransportAddr) EndpointAddr {
+// NewEndpointAddr creates an EndpointAddr with the given id and transport
+// addresses. Addresses are deduplicated and sorted.
+func NewEndpointAddr(id key.EndpointID, addrs ...TransportAddr) EndpointAddr {
 	a := EndpointAddr{ID: id}
 	return a.WithAddrs(addrs...)
 }

@@ -198,7 +198,7 @@ func (e EndpointInfo) WithUserData(u *UserData) EndpointInfo {
 
 // Addr converts the info into an [netaddr.EndpointAddr].
 func (e EndpointInfo) Addr() netaddr.EndpointAddr {
-	return netaddr.EndpointAddrFromParts(e.ID, e.Data.addrs...)
+	return netaddr.NewEndpointAddr(e.ID, e.Data.addrs...)
 }
 
 // RelayURLs returns the endpoint's relay URLs.
