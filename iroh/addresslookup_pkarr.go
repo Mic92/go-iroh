@@ -139,9 +139,10 @@ func (p *PkarrPublisher) Publish(data dns.EndpointData) {
 }
 
 // Close stops the background publish goroutine and waits for it to exit.
-func (p *PkarrPublisher) Close() {
+func (p *PkarrPublisher) Close() error {
 	p.cancel()
 	<-p.done
+	return nil
 }
 
 // publisherService runs the publisher's background loop: it publishes whenever

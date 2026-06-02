@@ -22,6 +22,7 @@ var (
 	_ io.WriteCloser     = (*SendStream)(nil)
 	_ io.Reader          = (*ReceiveStream)(nil)
 	_ io.Closer          = (*Conn)(nil)
+	_ io.Closer          = (*PkarrPublisher)(nil)
 	_ deadlines          = (*Stream)(nil)
 	_ connAddrs          = (*Conn)(nil)
 	_ net.Conn           = streamConn{}
