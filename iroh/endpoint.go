@@ -1053,7 +1053,7 @@ func (e *Endpoint) afterHandshake(ctx context.Context, conn *Conn) error {
 			return err
 		}
 		if !outcome.Accept {
-			if err := conn.Close(outcome.ErrorCode, outcome.Reason); err != nil {
+			if err := conn.CloseWithError(outcome.ErrorCode, outcome.Reason); err != nil {
 				return err
 			}
 			return ErrHandshakeRejected

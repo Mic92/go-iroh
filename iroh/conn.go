@@ -3,7 +3,6 @@ package iroh
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/netip"
 	"time"
@@ -354,25 +353,16 @@ func (c *Conn) HandshakeComplete() <-chan struct{} { return c.qc.HandshakeComple
 // Context returns a context that is cancelled when the connection is closed.
 func (c *Conn) Context() context.Context { return c.qc.Context() }
 
+// LocalAddr returns the local transport address, if known.
+func (c *Conn) LocalAddr() net.Addr { return c.qc.LocalAddr() }
+
+// RemoteAddr returns the remote transport address, if known.
+func (c *Conn) RemoteAddr() net.Addr { return c.qc.RemoteAddr() }
+
 // CloseWithError closes the connection with an application error code and
 // reason.
 func (c *Conn) CloseWithError(code uint64, reason string) error {
 	return c.qc.CloseWithError(quic.ApplicationErrorCode(code), reason)
-}
-
-// maxVarInt is the largest value a QUIC variable-length integer can hold
-// (2^62-1). Application error codes are encoded as VarInts, so a larger code
-// cannot be put on the wire.
-const maxVarInt = 1<<62 - 1
-
-// Close closes the connection with an application error code and reason,
-// sending a CONNECTION_CLOSE frame to the peer and blocking until the close is
-// processed. code must be within the QUIC VarInt range [0, 2^62-1].
-func (c *Conn) Close(code uint64, reason []byte) error {
-	if code > maxVarInt {
-		return fmt.Errorf("close code %d out of QUIC varint range", code)
-	}
-	return c.qc.CloseWithError(quic.ApplicationErrorCode(code), string(reason))
 }
 
 // Closed returns a channel that is closed when the connection is closed, either

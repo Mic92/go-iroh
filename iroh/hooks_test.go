@@ -61,7 +61,7 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 		WithHooks(testHooks{
 			after: func(context.Context, *Conn) (AfterHandshakeOutcome, error) {
-				return RejectHandshake(77, []byte("blocked")), nil
+				return RejectHandshake(77, "blocked"), nil
 			},
 		}),
 	)

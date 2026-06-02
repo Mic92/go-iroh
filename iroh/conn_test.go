@@ -64,14 +64,33 @@ func connPair(t *testing.T, alpn string) (client, server *Conn) {
 // side reports SideServer.
 func TestConnSide(t *testing.T) {
 	client, server := connPair(t, "iroh-side/0")
-	defer client.Close(0, nil)
-	defer server.Close(0, nil)
+	defer client.CloseWithError(0, "")
+	defer server.CloseWithError(0, "")
 
 	if client.Side() != SideClient {
 		t.Errorf("client.Side() = %v, want SideClient", client.Side())
 	}
 	if server.Side() != SideServer {
 		t.Errorf("server.Side() = %v, want SideServer", server.Side())
+	}
+}
+
+func TestConnAddr(t *testing.T) {
+	client, server := connPair(t, "iroh-addr/0")
+	defer client.CloseWithError(0, "")
+	defer server.CloseWithError(0, "")
+
+	if client.LocalAddr() == nil {
+		t.Fatal("client.LocalAddr() = nil")
+	}
+	if client.RemoteAddr() == nil {
+		t.Fatal("client.RemoteAddr() = nil")
+	}
+	if server.LocalAddr() == nil {
+		t.Fatal("server.LocalAddr() = nil")
+	}
+	if server.RemoteAddr() == nil {
+		t.Fatal("server.RemoteAddr() = nil")
 	}
 }
 
@@ -91,10 +110,10 @@ func TestSideString(t *testing.T) {
 	}
 }
 
-// TestConnClose closes a connection with an application code and verifies the
+// TestConnCloseWithError closes a connection with an application code and verifies the
 // local side observes the close through Closed, CloseReason, and Context, and
 // that the peer observes the same application code.
-func TestConnClose(t *testing.T) {
+func TestConnCloseWithError(t *testing.T) {
 	client, server := connPair(t, "iroh-close/0")
 
 	// While open, none of the close observers report a close.
@@ -111,8 +130,8 @@ func TestConnClose(t *testing.T) {
 	}
 
 	const code = 42
-	if err := client.Close(code, []byte("bye")); err != nil {
-		t.Fatalf("Close: %v", err)
+	if err := client.CloseWithError(code, "bye"); err != nil {
+		t.Fatalf("CloseWithError: %v", err)
 	}
 
 	// The local side observes the close.
@@ -156,65 +175,15 @@ func TestConnClose(t *testing.T) {
 	}
 }
 
-// TestConnCloseOutOfRange checks that a code above the QUIC varint range is
-// rejected without closing the connection.
-func TestConnCloseOutOfRange(t *testing.T) {
-	client, server := connPair(t, "iroh-closerange/0")
-	defer client.Close(0, nil)
-	defer server.Close(0, nil)
-
-	err := client.Close(maxVarInt+1, nil)
-	if err == nil {
-		t.Fatal("Close with out-of-range code returned nil, want error")
-	}
-
-	// The connection must still be open: no close was sent.
-	select {
-	case <-client.Closed():
-		t.Fatal("connection closed despite rejected close code")
-	default:
-	}
-	if r := client.CloseReason(); r != nil {
-		t.Errorf("CloseReason() = %v after rejected close, want nil", r)
-	}
-
-	// The connection is still usable: a stream round-trips.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go func() {
-		s, err := server.AcceptStream(ctx)
-		if err != nil {
-			return
-		}
-		b, _ := io.ReadAll(s)
-		s.Write(b)
-		s.Close()
-	}()
-	s, err := client.OpenStream(ctx)
-	if err != nil {
-		t.Fatalf("OpenStream after rejected close: %v", err)
-	}
-	const msg = "still alive"
-	s.Write([]byte(msg))
-	s.Close()
-	got, err := io.ReadAll(s)
-	if err != nil {
-		t.Fatalf("read echo: %v", err)
-	}
-	if string(got) != msg {
-		t.Errorf("echo = %q, want %q", got, msg)
-	}
-}
-
-// TestConnPeerInitiatedClose verifies that a Close on one side is observed on
-// the other side's Closed channel and CloseReason.
+// TestConnPeerInitiatedClose verifies that CloseWithError on one side is
+// observed on the other side's Closed channel and CloseReason.
 func TestConnPeerInitiatedClose(t *testing.T) {
 	client, server := connPair(t, "iroh-peerclose/0")
-	defer client.Close(0, nil)
+	defer client.CloseWithError(0, "")
 
 	const code = 7
-	if err := server.Close(code, []byte("server done")); err != nil {
-		t.Fatalf("server Close: %v", err)
+	if err := server.CloseWithError(code, "server done"); err != nil {
+		t.Fatalf("server CloseWithError: %v", err)
 	}
 
 	select {
@@ -233,8 +202,8 @@ func TestConnPeerInitiatedClose(t *testing.T) {
 // TestConnUniStream exercises OpenUniStream/AcceptUniStream end to end.
 func TestConnUniStream(t *testing.T) {
 	client, server := connPair(t, "iroh-uni/0")
-	defer client.Close(0, nil)
-	defer server.Close(0, nil)
+	defer client.CloseWithError(0, "")
+	defer server.CloseWithError(0, "")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -343,9 +312,9 @@ func clientStableIDCount(e *Endpoint) int {
 	return len(e.stableIDs)
 }
 
-// ExampleConn_Close closes a loopback connection with an application code and
-// reads it back from CloseReason.
-func ExampleConn_Close() {
+// ExampleConn_CloseWithError closes a loopback connection with an application
+// code and reads it back from CloseReason.
+func ExampleConn_CloseWithError() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -366,7 +335,7 @@ func ExampleConn_Close() {
 		return
 	}
 
-	conn.Close(42, []byte("done"))
+	conn.CloseWithError(42, "done")
 	<-conn.Closed()
 
 	var appErr *quic.ApplicationError

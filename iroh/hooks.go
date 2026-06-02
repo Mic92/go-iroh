@@ -25,14 +25,14 @@ type AfterHandshakeOutcome struct {
 	// ErrorCode is the application close code used when rejecting.
 	ErrorCode uint64
 	// Reason is the application close reason used when rejecting.
-	Reason []byte
+	Reason string
 }
 
 // AcceptHandshake accepts a completed handshake.
 func AcceptHandshake() AfterHandshakeOutcome { return AfterHandshakeOutcome{Accept: true} }
 
 // RejectHandshake rejects a completed handshake with code and reason.
-func RejectHandshake(code uint64, reason []byte) AfterHandshakeOutcome {
+func RejectHandshake(code uint64, reason string) AfterHandshakeOutcome {
 	return AfterHandshakeOutcome{ErrorCode: code, Reason: reason}
 }
 
