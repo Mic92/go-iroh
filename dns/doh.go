@@ -14,17 +14,12 @@ import (
 // DoHLookuper resolves TXT records using DNS-over-HTTPS.
 //
 // It sends RFC 8484 POST requests with Content-Type application/dns-message.
-// The zero value is not usable; create one with [NewDoHLookuper].
+// The zero value is not usable; set URL before calling LookupTXT.
 type DoHLookuper struct {
 	// URL is the DNS-over-HTTPS endpoint.
 	URL string
 	// HTTPClient sends requests. If nil, [http.DefaultClient] is used.
 	HTTPClient *http.Client
-}
-
-// NewDoHLookuper returns a TXT lookuper backed by a DNS-over-HTTPS endpoint.
-func NewDoHLookuper(url string) *DoHLookuper {
-	return &DoHLookuper{URL: url}
 }
 
 // LookupTXT resolves name as TXT using DNS-over-HTTPS.

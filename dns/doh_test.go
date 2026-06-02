@@ -30,7 +30,7 @@ func TestDoHLookuperLookupTXT(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	got, err := NewDoHLookuper(ts.URL).LookupTXT(context.Background(), wantName)
+	got, err := (&DoHLookuper{URL: ts.URL}).LookupTXT(context.Background(), wantName)
 	if err != nil {
 		t.Fatalf("LookupTXT: %v", err)
 	}

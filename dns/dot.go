@@ -20,11 +20,6 @@ type DoTLookuper struct {
 	Dialer    *net.Dialer
 }
 
-// NewDoTLookuper returns a TXT lookuper backed by a DNS-over-TLS server.
-func NewDoTLookuper(address string) *DoTLookuper {
-	return &DoTLookuper{Address: address}
-}
-
 // LookupTXT resolves name as TXT using DNS-over-TLS.
 func (l *DoTLookuper) LookupTXT(ctx context.Context, name string) ([]string, error) {
 	if l == nil || l.Address == "" {
