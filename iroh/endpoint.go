@@ -1047,12 +1047,8 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 
 func (e *Endpoint) beforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) error {
 	for _, h := range e.hooks {
-		outcome, err := h.BeforeConnect(ctx, addr, alpn)
-		if err != nil {
+		if err := h.BeforeConnect(ctx, addr, alpn); err != nil {
 			return err
-		}
-		if outcome == BeforeConnectReject {
-			return ErrConnectRejected
 		}
 	}
 	return nil
@@ -1060,15 +1056,16 @@ func (e *Endpoint) beforeConnect(ctx context.Context, addr netaddr.EndpointAddr,
 
 func (e *Endpoint) afterHandshake(ctx context.Context, conn *Conn) error {
 	for _, h := range e.hooks {
-		outcome, err := h.AfterHandshake(ctx, conn)
+		err := h.AfterHandshake(ctx, conn)
 		if err != nil {
-			return err
-		}
-		if !outcome.Accept {
-			if err := conn.CloseWithError(outcome.ErrorCode, outcome.Reason); err != nil {
-				return err
+			var reject *HandshakeRejectError
+			if errors.As(err, &reject) {
+				if closeErr := conn.CloseWithError(reject.Code, reject.Reason); closeErr != nil {
+					return closeErr
+				}
+				return fmt.Errorf("%w: %w", ErrHandshakeRejected, err)
 			}
-			return ErrHandshakeRejected
+			return err
 		}
 	}
 	return nil

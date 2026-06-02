@@ -12,29 +12,29 @@ import (
 )
 
 type testHooks struct {
-	before func(context.Context, netaddr.EndpointAddr, string) (BeforeConnectOutcome, error)
-	after  func(context.Context, *Conn) (AfterHandshakeOutcome, error)
+	before func(context.Context, netaddr.EndpointAddr, string) error
+	after  func(context.Context, *Conn) error
 }
 
-func (h testHooks) BeforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (BeforeConnectOutcome, error) {
+func (h testHooks) BeforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) error {
 	if h.before != nil {
 		return h.before(ctx, addr, alpn)
 	}
-	return BeforeConnectAccept, nil
+	return nil
 }
 
-func (h testHooks) AfterHandshake(ctx context.Context, conn *Conn) (AfterHandshakeOutcome, error) {
+func (h testHooks) AfterHandshake(ctx context.Context, conn *Conn) error {
 	if h.after != nil {
 		return h.after(ctx, conn)
 	}
-	return AcceptHandshake(), nil
+	return nil
 }
 
 func TestEndpointHooksRejectBeforeConnect(t *testing.T) {
 	ctx := context.Background()
 	client, err := Bind(ctx, WithHooks(testHooks{
-		before: func(context.Context, netaddr.EndpointAddr, string) (BeforeConnectOutcome, error) {
-			return BeforeConnectReject, nil
+		before: func(context.Context, netaddr.EndpointAddr, string) error {
+			return ErrConnectRejected
 		},
 	}))
 	if err != nil {
@@ -60,8 +60,8 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 		WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 		WithHooks(testHooks{
-			after: func(context.Context, *Conn) (AfterHandshakeOutcome, error) {
-				return RejectHandshake(77, "blocked"), nil
+			after: func(context.Context, *Conn) error {
+				return RejectHandshake(77, "blocked")
 			},
 		}),
 	)
