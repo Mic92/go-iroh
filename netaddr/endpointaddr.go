@@ -295,6 +295,22 @@ func (a EndpointAddr) Addrs() []TransportAddr { return slices.Clone(a.addrs) }
 // IsEmpty reports whether only the key.EndpointID is present.
 func (a EndpointAddr) IsEmpty() bool { return len(a.addrs) == 0 }
 
+// String returns a diagnostic string for a.
+func (a EndpointAddr) String() string {
+	var b strings.Builder
+	b.WriteString("EndpointAddr{id:")
+	b.WriteString(a.ID.String())
+	b.WriteString(", addrs:[")
+	for i, addr := range a.addrs {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(addr.String())
+	}
+	b.WriteString("]}")
+	return b.String()
+}
+
 // IPAddrs returns the IP socket addresses of this endpoint.
 func (a EndpointAddr) IPAddrs() []netip.AddrPort {
 	var out []netip.AddrPort

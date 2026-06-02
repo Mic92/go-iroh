@@ -251,6 +251,25 @@ func TestEndpointAddrEmpty(t *testing.T) {
 	}
 }
 
+func TestEndpointAddrString(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	id := sk.Public()
+	empty := NewEndpointAddr(id)
+	if got, want := empty.String(), "EndpointAddr{id:"+id.String()+", addrs:[]}"; got != want {
+		t.Fatalf("empty String = %q, want %q", got, want)
+	}
+
+	relay, _ := ParseRelayURL("https://relay.example/")
+	addr := NewEndpointAddr(id,
+		IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")},
+		RelayAddr{URL: relay},
+	)
+	want := "EndpointAddr{id:" + id.String() + ", addrs:[relay:https://relay.example/, ip:127.0.0.1:1]}"
+	if got := addr.String(); got != want {
+		t.Fatalf("String = %q, want %q", got, want)
+	}
+}
+
 func TestEndpointAddrAddrsReturnsCopy(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	ip1 := IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")}
