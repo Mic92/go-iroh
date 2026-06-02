@@ -92,7 +92,7 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 		t.Fatalf("Accept err = %v, want ErrHandshakeRejected", err)
 	}
 	select {
-	case <-conn.Closed():
+	case <-conn.Context().Done():
 	case <-time.After(5 * time.Second):
 		t.Fatal("client did not observe hook rejection close")
 	}

@@ -346,22 +346,6 @@ func (c *Conn) Close() error {
 	return c.CloseWithError(0, "")
 }
 
-// Closed returns a channel that is closed when the connection is closed, either
-// locally or by the peer. After it fires, [Conn.CloseReason] reports why.
-func (c *Conn) Closed() <-chan struct{} { return c.qc.Context().Done() }
-
-// CloseReason returns the error that closed the connection, or nil if it is
-// still open. The error is a *[quic.ApplicationError] for an application close
-// and a *[quic.TransportError] for a transport close.
-func (c *Conn) CloseReason() error {
-	select {
-	case <-c.qc.Context().Done():
-		return context.Cause(c.qc.Context())
-	default:
-		return nil
-	}
-}
-
 type streamConn struct {
 	*Stream
 	local  net.Addr

@@ -163,20 +163,16 @@ func TestSideString(t *testing.T) {
 	}
 }
 
-// TestConnCloseWithError closes a connection with an application code and verifies the
-// local side observes the close through Closed, CloseReason, and Context, and
-// that the peer observes the same application code.
+// TestConnCloseWithError closes a connection with an application code and
+// verifies that both sides observe the same application code.
 func TestConnCloseWithError(t *testing.T) {
 	client, server := connPair(t, "iroh-close/0")
 
 	// While open, none of the close observers report a close.
 	select {
-	case <-client.Closed():
-		t.Fatal("Closed() fired while the connection was open")
+	case <-client.Context().Done():
+		t.Fatal("Context() fired while the connection was open")
 	default:
-	}
-	if err := client.CloseReason(); err != nil {
-		t.Fatalf("CloseReason() = %v while open, want nil", err)
 	}
 	if err := client.Context().Err(); err != nil {
 		t.Fatalf("Context().Err() = %v while open, want nil", err)
@@ -189,20 +185,15 @@ func TestConnCloseWithError(t *testing.T) {
 
 	// The local side observes the close.
 	select {
-	case <-client.Closed():
-	case <-time.After(5 * time.Second):
-		t.Fatal("Closed() did not fire after local Close")
-	}
-	select {
 	case <-client.Context().Done():
 	case <-time.After(5 * time.Second):
-		t.Fatal("Context() not cancelled after local Close")
+		t.Fatal("Context() did not fire after local Close")
 	}
 	var appErr *quic.ApplicationError
-	if err := client.CloseReason(); !errors.As(err, &appErr) {
-		t.Fatalf("CloseReason() = %v, want *quic.ApplicationError", err)
+	if err := context.Cause(client.Context()); !errors.As(err, &appErr) {
+		t.Fatalf("context cause = %v, want *quic.ApplicationError", err)
 	} else if uint64(appErr.ErrorCode) != code {
-		t.Errorf("local CloseReason code = %d, want %d", appErr.ErrorCode, code)
+		t.Errorf("local close code = %d, want %d", appErr.ErrorCode, code)
 	}
 
 	// The peer observes the close carrying the same application code.
@@ -220,16 +211,15 @@ func TestConnCloseWithError(t *testing.T) {
 		t.Error("peer's ApplicationError.Remote = false, want true (peer-initiated)")
 	}
 
-	// Closed and Context fire on the peer side too.
 	select {
-	case <-server.Closed():
+	case <-server.Context().Done():
 	case <-time.After(5 * time.Second):
-		t.Fatal("peer Closed() did not fire after remote close")
+		t.Fatal("peer Context() did not fire after remote close")
 	}
 }
 
 // TestConnPeerInitiatedClose verifies that CloseWithError on one side is
-// observed on the other side's Closed channel and CloseReason.
+// observed on the other side's context cause.
 func TestConnPeerInitiatedClose(t *testing.T) {
 	client, server := connPair(t, "iroh-peerclose/0")
 	defer client.CloseWithError(0, "")
@@ -240,13 +230,13 @@ func TestConnPeerInitiatedClose(t *testing.T) {
 	}
 
 	select {
-	case <-client.Closed():
+	case <-client.Context().Done():
 	case <-time.After(5 * time.Second):
-		t.Fatal("client Closed() did not fire after peer close")
+		t.Fatal("client Context() did not fire after peer close")
 	}
 	var appErr *quic.ApplicationError
-	if err := client.CloseReason(); !errors.As(err, &appErr) {
-		t.Fatalf("client CloseReason() = %v, want *quic.ApplicationError", err)
+	if err := context.Cause(client.Context()); !errors.As(err, &appErr) {
+		t.Fatalf("client context cause = %v, want *quic.ApplicationError", err)
 	} else if uint64(appErr.ErrorCode) != code {
 		t.Errorf("client observed code %d, want %d", appErr.ErrorCode, code)
 	}
@@ -302,7 +292,7 @@ func clientStableIDCount(e *Endpoint) int {
 }
 
 // ExampleConn_CloseWithError closes a loopback connection with an application
-// code and reads it back from CloseReason.
+// code and reads it back from the connection context cause.
 func ExampleConn_CloseWithError() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -325,10 +315,10 @@ func ExampleConn_CloseWithError() {
 	}
 
 	conn.CloseWithError(42, "done")
-	<-conn.Closed()
+	<-conn.Context().Done()
 
 	var appErr *quic.ApplicationError
-	if errors.As(conn.CloseReason(), &appErr) {
+	if errors.As(context.Cause(conn.Context()), &appErr) {
 		fmt.Println("close code:", appErr.ErrorCode)
 	}
 	// Output:

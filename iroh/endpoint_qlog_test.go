@@ -49,7 +49,7 @@ func TestEndpointQLOGDIRWritesConnectionTraces(t *testing.T) {
 			accepted <- err
 			return
 		}
-		<-conn.Closed()
+		<-conn.Context().Done()
 		accepted <- nil
 	}()
 
