@@ -112,8 +112,9 @@ local relay/direct behavior. The opt-in Rust gates cover live echo, Rust
 frames when the host environment provides the required binaries and network
 topology.
 
-The wasm-browser target remains deferred to Go's wasm/browser networking
-constraints.
+GOOS=js/GOARCH=wasm builds compile. Browser runtime support is limited by the
+platform: the relay WebSocket client has a js-specific dial path, but direct UDP
+QUIC, direct paths, and NAT traversal are not available in browser WebAssembly.
 
 ## License
 
