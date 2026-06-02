@@ -38,7 +38,7 @@ func TestLiveRustTransferFetchPingDirectPath(t *testing.T) {
 
 	relayURL := relay.StagingMap().URLs()[0]
 	server, err := Bind(ctx,
-		WithALPNs([]byte(rustTransferALPN)),
+		WithALPNs(rustTransferALPN),
 		WithBindAddr(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0)),
 		WithRelayMode(relay.ModeCustomURLs(relayURL)),
 	)
@@ -80,7 +80,7 @@ func TestLiveRustTransferFetchPingDirectPath(t *testing.T) {
 		t.Fatalf("accept Rust transfer fetch: %v\n%s", ctx.Err(), run.Output())
 	}
 	defer conn.CloseWithError(0, "")
-	if string(conn.ALPN()) != rustTransferALPN {
+	if conn.ALPN() != rustTransferALPN {
 		t.Fatalf("ALPN = %q, want %q", conn.ALPN(), rustTransferALPN)
 	}
 	if !conn.MultipathNegotiated() {

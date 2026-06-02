@@ -28,7 +28,7 @@ func TestEndpointQLOGDIRWritesConnectionTraces(t *testing.T) {
 	}
 	server, err := Bind(ctx,
 		WithSecretKey(srvKey),
-		WithALPNs([]byte(alpn)),
+		WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 	)
 	if err != nil {
@@ -54,7 +54,7 @@ func TestEndpointQLOGDIRWritesConnectionTraces(t *testing.T) {
 	}()
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}

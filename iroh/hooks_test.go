@@ -12,11 +12,11 @@ import (
 )
 
 type testHooks struct {
-	before func(context.Context, netaddr.EndpointAddr, []byte) (BeforeConnectOutcome, error)
+	before func(context.Context, netaddr.EndpointAddr, string) (BeforeConnectOutcome, error)
 	after  func(context.Context, *Conn) (AfterHandshakeOutcome, error)
 }
 
-func (h testHooks) BeforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte) (BeforeConnectOutcome, error) {
+func (h testHooks) BeforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (BeforeConnectOutcome, error) {
 	if h.before != nil {
 		return h.before(ctx, addr, alpn)
 	}
@@ -33,7 +33,7 @@ func (h testHooks) AfterHandshake(ctx context.Context, conn *Conn) (AfterHandsha
 func TestEndpointHooksRejectBeforeConnect(t *testing.T) {
 	ctx := context.Background()
 	client, err := Bind(ctx, WithHooks(testHooks{
-		before: func(context.Context, netaddr.EndpointAddr, []byte) (BeforeConnectOutcome, error) {
+		before: func(context.Context, netaddr.EndpointAddr, string) (BeforeConnectOutcome, error) {
 			return BeforeConnectReject, nil
 		},
 	}))
@@ -44,7 +44,7 @@ func TestEndpointHooksRejectBeforeConnect(t *testing.T) {
 
 	sk, _ := key.GenerateSecretKey()
 	addr := netaddr.NewEndpointAddr(sk.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1"))
-	if _, err := client.Connect(ctx, addr, []byte("iroh-hooks/0")); !errors.Is(err, ErrConnectRejected) {
+	if _, err := client.Connect(ctx, addr, "iroh-hooks/0"); !errors.Is(err, ErrConnectRejected) {
 		t.Fatalf("Connect err = %v, want ErrConnectRejected", err)
 	}
 }
@@ -57,7 +57,7 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx,
 		WithSecretKey(srvKey),
-		WithALPNs([]byte(alpn)),
+		WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 		WithHooks(testHooks{
 			after: func(context.Context, *Conn) (AfterHandshakeOutcome, error) {
@@ -82,7 +82,7 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
 	if err != nil {
 		t.Fatal(err)
 	}

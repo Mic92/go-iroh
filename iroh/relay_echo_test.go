@@ -49,7 +49,7 @@ func TestRelayOnlyEcho(t *testing.T) {
 	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx,
 		WithSecretKey(srvKey),
-		WithALPNs([]byte(alpn)),
+		WithALPNs(alpn),
 		WithRelayMode(mode),
 		// Bind to loopback so no usable public IP is advertised; the addr we
 		// dial carries only the relay URL, so the path is relay-only.
@@ -103,7 +103,7 @@ func TestRelayOnlyEcho(t *testing.T) {
 	// Relay-only address: id + relay URL, no direct IP.
 	addr := netaddr.NewEndpointAddr(server.ID()).WithRelayURL(relayURL)
 
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("relay connect: %v", err)
 	}

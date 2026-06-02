@@ -48,12 +48,12 @@ type ReceiveStream = quic.ReceiveStream
 type Conn struct {
 	qc       *quic.Conn
 	remoteID key.EndpointID
-	alpn     []byte
+	alpn     string
 	side     Side
 	stableID uint64
 }
 
-func newConn(qc *quic.Conn, remoteID key.EndpointID, alpn []byte, side Side, stableID uint64) (*Conn, error) {
+func newConn(qc *quic.Conn, remoteID key.EndpointID, alpn string, side Side, stableID uint64) (*Conn, error) {
 	return &Conn{qc: qc, remoteID: remoteID, alpn: alpn, side: side, stableID: stableID}, nil
 }
 
@@ -72,7 +72,7 @@ type Connecting struct {
 type ServerConfig struct{}
 
 // ALPN returns the negotiated ALPN protocol.
-func (c *Connecting) ALPN(context.Context) ([]byte, error) {
+func (c *Connecting) ALPN(context.Context) (string, error) {
 	return c.conn.ALPN(), nil
 }
 
@@ -245,17 +245,17 @@ type Accepting struct {
 }
 
 // ALPN waits for the handshake to complete and returns the negotiated ALPN.
-func (a *Accepting) ALPN(ctx context.Context) ([]byte, error) {
+func (a *Accepting) ALPN(ctx context.Context) (string, error) {
 	if a == nil || a.qc == nil {
-		return nil, errors.New("iroh: nil accepting connection")
+		return "", errors.New("iroh: nil accepting connection")
 	}
 	select {
 	case <-a.qc.HandshakeComplete():
 	case <-ctx.Done():
 		a.qc.CloseWithError(0, "")
-		return nil, ctx.Err()
+		return "", ctx.Err()
 	}
-	return []byte(a.qc.ConnectionState().TLS.NegotiatedProtocol), nil
+	return a.qc.ConnectionState().TLS.NegotiatedProtocol, nil
 }
 
 // RemoteAddr returns the transport address of the connection.
@@ -293,7 +293,7 @@ func (a *Accepting) Connection(ctx context.Context) (*Conn, error) {
 func (c *Conn) RemoteID() key.EndpointID { return c.remoteID }
 
 // ALPN returns the negotiated ALPN protocol.
-func (c *Conn) ALPN() []byte { return c.alpn }
+func (c *Conn) ALPN() string { return c.alpn }
 
 // Side reports whether this connection was dialed or accepted.
 func (c *Conn) Side() Side { return c.side }

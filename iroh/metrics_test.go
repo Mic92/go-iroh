@@ -18,7 +18,7 @@ func TestEndpointMetrics(t *testing.T) {
 	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx,
 		WithSecretKey(srvKey),
-		WithALPNs([]byte(alpn)),
+		WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 	)
 	if err != nil {
@@ -42,7 +42,7 @@ func TestEndpointMetrics(t *testing.T) {
 	}()
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestEndpointMetrics(t *testing.T) {
 		t.Fatalf("server Metrics = %+v, want one successful accept", sm)
 	}
 
-	if _, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()), []byte(alpn)); err == nil {
+	if _, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()), alpn); err == nil {
 		t.Fatal("connect without address succeeded")
 	}
 	cm = client.Metrics()

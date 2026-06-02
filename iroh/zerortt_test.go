@@ -27,7 +27,7 @@ func TestEndpoint0RTTResumption(t *testing.T) {
 	const alpn = "iroh-0rtt/0"
 
 	srvKey, _ := key.GenerateSecretKey()
-	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,7 @@ func TestEndpoint0RTTResumption(t *testing.T) {
 
 	// First connection: full handshake. The server issues a session ticket that
 	// the client caches after the handshake.
-	conn1, err := client.Connect(ctx, addr, []byte(alpn))
+	conn1, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("first connect: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestEndpoint0RTTResumption(t *testing.T) {
 	// Second connection: should resume via 0-RTT. Connect returns the early
 	// connection before the handshake completes, so we send 0-RTT data
 	// immediately, then wait for the handshake to confirm the server accepted it.
-	conn2, err := client.Connect(ctx, addr, []byte(alpn))
+	conn2, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("second connect: %v", err)
 	}

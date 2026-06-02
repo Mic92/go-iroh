@@ -80,11 +80,12 @@ func NewRouter(ep *Endpoint) *RouterBuilder {
 }
 
 // Accept registers h to handle connections whose negotiated ALPN exactly equals
-// alpn. ALPN values are opaque byte strings; printable ASCII protocol names are
-// conventional, but binary values compare byte-for-byte. Registering the same
-// ALPN twice replaces the earlier handler. It returns the builder for chaining.
-func (b *RouterBuilder) Accept(alpn []byte, h ProtocolHandler) *RouterBuilder {
-	b.handlers[string(alpn)] = h
+// alpn. ALPN values are opaque byte strings represented as Go strings; printable
+// ASCII protocol names are conventional, but binary values compare byte-for-byte.
+// Registering the same ALPN twice replaces the earlier handler. It returns the
+// builder for chaining.
+func (b *RouterBuilder) Accept(alpn string, h ProtocolHandler) *RouterBuilder {
+	b.handlers[alpn] = h
 	return b
 }
 
@@ -112,9 +113,9 @@ func (b *RouterBuilder) Spawn() (*Router, error) {
 		logger = slog.Default()
 	}
 
-	alpns := make([][]byte, 0, len(b.handlers))
+	alpns := make([]string, 0, len(b.handlers))
 	for a := range b.handlers {
-		alpns = append(alpns, []byte(a))
+		alpns = append(alpns, a)
 	}
 	prevVerify := b.ep.sourceAddressValidation()
 	if b.filter != nil {
@@ -157,7 +158,7 @@ func (b *RouterBuilder) Spawn() (*Router, error) {
 // [RouterBuilder.Spawn]; stop it with [Router.Shutdown]. It is the Go analog of
 // the Rust Router (iroh/src/protocol.rs:97).
 //
-// Dispatch is by exact ALPN bytes. One goroutine runs the accept loop; each
+// Dispatch is by exact ALPN string. One goroutine runs the accept loop; each
 // accepted connection is handled in a child goroutine with a context derived
 // from the router's. A panic in a handler goroutine is recovered, logged, and
 // stops the accept loop.
@@ -255,9 +256,9 @@ func (r *Router) acceptLoop(ctx context.Context) {
 				r.logger.Warn("router: accepting ALPN failed", "err", err)
 				return
 			}
-			handler, ok := r.handlers[string(alpn)]
+			handler, ok := r.handlers[alpn]
 			if !ok {
-				r.logger.Warn("router: no handler for ALPN", "alpn", string(alpn))
+				r.logger.Warn("router: no handler for ALPN", "alpn", alpn)
 				accepting.qc.CloseWithError(0, "unsupported ALPN")
 				return
 			}
@@ -268,11 +269,11 @@ func (r *Router) acceptLoop(ctx context.Context) {
 				conn, err = accepting.Connection(ctx)
 			}
 			if err != nil {
-				r.logger.Warn("router: on accepting failed", "alpn", string(alpn), "err", err)
+				r.logger.Warn("router: on accepting failed", "alpn", alpn, "err", err)
 				return
 			}
 			if err := handler.Accept(ctx, conn); err != nil {
-				r.logger.Warn("router: handler returned error", "alpn", string(conn.ALPN()), "err", err)
+				r.logger.Warn("router: handler returned error", "alpn", conn.ALPN(), "err", err)
 			}
 		}(accepting)
 	}

@@ -391,7 +391,7 @@ func runLiveRustTransferGoToRustUpload(t *testing.T, ctx context.Context, bin, g
 		addr = addr.WithIP(ap)
 	}
 
-	conn, err := client.Connect(ctx, addr, []byte(rustTransferALPN))
+	conn, err := client.Connect(ctx, addr, rustTransferALPN)
 	if err != nil {
 		t.Fatalf("connect to Rust transfer example: %v\n%s", err, provider.Output())
 	}
@@ -404,7 +404,7 @@ func runLiveRustTransferGoToRustUpload(t *testing.T, ctx context.Context, bin, g
 	if !conn.RemoteID().Equal(provider.Ready.EndpointID) {
 		t.Fatalf("remote id = %s, want %s", conn.RemoteID(), provider.Ready.EndpointID)
 	}
-	if string(conn.ALPN()) != rustTransferALPN {
+	if conn.ALPN() != rustTransferALPN {
 		t.Fatalf("ALPN = %q, want %q", conn.ALPN(), rustTransferALPN)
 	}
 	if !conn.MultipathNegotiated() {

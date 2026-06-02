@@ -82,7 +82,7 @@ func ExampleRouter() {
 		return
 	}
 
-	router, err := iroh.NewRouter(server).Accept([]byte(alpn), echo{}).Spawn()
+	router, err := iroh.NewRouter(server).Accept(alpn, echo{}).Spawn()
 	if err != nil {
 		fmt.Println("spawn:", err)
 		return
@@ -97,7 +97,7 @@ func ExampleRouter() {
 	defer client.Close(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		fmt.Println("connect:", err)
 		return

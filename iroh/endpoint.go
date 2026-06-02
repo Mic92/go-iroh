@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"time"
 
@@ -27,7 +28,7 @@ import (
 // An Endpoint is safe for concurrent use. Close it with [Endpoint.Close].
 type Endpoint struct {
 	secretKey key.SecretKey
-	alpns     [][]byte
+	alpns     []string
 
 	udp          *net.UDPConn
 	sock         *socket.Socket
@@ -65,7 +66,7 @@ type Endpoint struct {
 type config struct {
 	secretKey       key.SecretKey
 	haveKey         bool
-	alpns           [][]byte
+	alpns           []string
 	bindAddr        netip.AddrPort
 	bindOpts        BindOpts
 	haveBindAddr    bool
@@ -123,12 +124,12 @@ func WithSecretKey(sk key.SecretKey) Option {
 // extension QUIC uses to agree on the application protocol carried by a
 // connection.
 //
-// Each ALPN is an arbitrary byte string. Most protocols use printable ASCII,
-// for example []byte("example/1"), but the API uses []byte so binary protocol
-// identifiers round-trip exactly.
-func WithALPNs(alpns ...[]byte) Option {
+// Each ALPN is an arbitrary byte string represented as a Go string, matching
+// crypto/tls and quic-go. Printable ASCII such as "example/1" is common, but
+// strings may contain arbitrary bytes.
+func WithALPNs(alpns ...string) Option {
 	return func(c *config) error {
-		c.alpns = append(c.alpns, cloneALPNs(alpns)...)
+		c.alpns = append(c.alpns, alpns...)
 		return nil
 	}
 }
@@ -371,7 +372,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 
 	ep := &Endpoint{
 		secretKey: c.secretKey,
-		alpns:     cloneALPNs(c.alpns),
+		alpns:     slices.Clone(c.alpns),
 		udp:       udp,
 		sock:      sock,
 		magic:     magic,
@@ -468,7 +469,7 @@ func maxRemoteNATTraversalAddresses() *uint8 {
 // It uses an early listener so the QUIC stack can accept 0-RTT early data from
 // peers that resume a prior session.
 func (e *Endpoint) startListener() error {
-	serverTLS, err := serverTLSConfig(e.secretKey, alpnsToStrings(e.alpns))
+	serverTLS, err := serverTLSConfig(e.secretKey, e.alpns)
 	if err != nil {
 		return err
 	}
@@ -489,14 +490,14 @@ func (e *Endpoint) startListener() error {
 // SetALPNs replaces the accepted ALPN set. If a listener is already running, it
 // is closed first; established connections are unaffected, while concurrent
 // accepts may observe a transient closed-listener error and retry. Pass each
-// ALPN as an arbitrary byte string; see [WithALPNs].
-func (e *Endpoint) SetALPNs(alpns [][]byte) error {
+// ALPN as an arbitrary byte string represented as a Go string; see [WithALPNs].
+func (e *Endpoint) SetALPNs(alpns []string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return ErrEndpointClosed
 	}
-	next := cloneALPNs(alpns)
+	next := slices.Clone(alpns)
 	if e.listener != nil {
 		if err := e.listener.Close(); err != nil {
 			return fmt.Errorf("iroh: close listener: %w", err)
@@ -859,7 +860,7 @@ var ErrHandshakeRejected = errors.New("iroh: handshake rejected by hook")
 // an established [Conn]. It tries the direct IP addresses in addr in order, then
 // (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
 // handshake over a relay mapped address that routes through the relay transport.
-func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte) (*Conn, error) {
+func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (*Conn, error) {
 	e.metrics.connectsStarted.Add(1)
 	ok := false
 	defer func() {
@@ -882,7 +883,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 		return nil, ErrNoAddress
 	}
 
-	clientTLS, err := clientTLSConfig(e.secretKey, addr.ID, []string{string(alpn)}, e.sessionCache)
+	clientTLS, err := clientTLSConfig(e.secretKey, addr.ID, []string{alpn}, e.sessionCache)
 	if err != nil {
 		return nil, err
 	}
@@ -933,7 +934,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 // ConnectWith dials addr and returns a [Connecting] handle. The current
 // implementation uses the same DialEarly path as [Endpoint.Connect]; future
 // options can expose more pre-handshake controls without changing callers.
-func (e *Endpoint) ConnectWith(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte, opts ConnectOptions) (*Connecting, error) {
+func (e *Endpoint) ConnectWith(ctx context.Context, addr netaddr.EndpointAddr, alpn string, opts ConnectOptions) (*Connecting, error) {
 	_ = opts
 	conn, err := e.Connect(ctx, addr, alpn)
 	if err != nil {
@@ -1020,7 +1021,7 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 		qc.CloseWithError(0, "bad peer certificate")
 		return nil, err
 	}
-	alpn := []byte(qc.ConnectionState().TLS.NegotiatedProtocol)
+	alpn := qc.ConnectionState().TLS.NegotiatedProtocol
 	conn, err := newConn(qc, remote, alpn, SideServer, e.connStableID(qc))
 	if err != nil {
 		return nil, err
@@ -1033,7 +1034,7 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 	return conn, nil
 }
 
-func (e *Endpoint) beforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte) error {
+func (e *Endpoint) beforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) error {
 	for _, h := range e.hooks {
 		outcome, err := h.BeforeConnect(ctx, addr, alpn)
 		if err != nil {
@@ -1170,23 +1171,4 @@ func (e *Endpoint) isClosed() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.closed
-}
-
-// alpnsToStrings converts ALPN byte strings to the []string the TLS config
-// expects. Go strings can contain arbitrary bytes, so this preserves Rust iroh's
-// binary ALPN surface without UTF-8 interpretation.
-func alpnsToStrings(alpns [][]byte) []string {
-	out := make([]string, len(alpns))
-	for i, a := range alpns {
-		out[i] = string(a)
-	}
-	return out
-}
-
-func cloneALPNs(alpns [][]byte) [][]byte {
-	out := make([][]byte, len(alpns))
-	for i, a := range alpns {
-		out[i] = append([]byte(nil), a...)
-	}
-	return out
 }

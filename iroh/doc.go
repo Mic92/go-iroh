@@ -15,11 +15,11 @@
 // ALPN is Application-Layer Protocol Negotiation, the TLS mechanism used by
 // QUIC peers to agree on the application protocol carried by a connection.
 // go-iroh uses the negotiated ALPN to route incoming connections. ALPN values
-// are []byte because iroh treats them as opaque protocol identifiers; printable
-// ASCII such as []byte("my/1") is common, but binary values must round-trip too.
+// are strings, matching crypto/tls and quic-go. Printable ASCII such as "my/1"
+// is common, but strings may contain arbitrary bytes.
 //
-//	ep, err := iroh.Bind(ctx, iroh.WithSecretKey(sk), iroh.WithALPNs([]byte("my/1")))
-//	conn, err := ep.Connect(ctx, peerAddr, []byte("my/1"))
+//	ep, err := iroh.Bind(ctx, iroh.WithSecretKey(sk), iroh.WithALPNs("my/1"))
+//	conn, err := ep.Connect(ctx, peerAddr, "my/1")
 //	s, err := conn.OpenStream(ctx)
 //
 // This package wraps a fork of quic-go (internal/qng) that drives a vendored

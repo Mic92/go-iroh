@@ -24,7 +24,7 @@ func connPair(t *testing.T, alpn string) (client, server *Conn) {
 	t.Cleanup(cancel)
 
 	srvKey, _ := key.GenerateSecretKey()
-	srvEP, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+	srvEP, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +48,7 @@ func connPair(t *testing.T, alpn string) (client, server *Conn) {
 	}()
 
 	addr := netaddr.NewEndpointAddr(srvEP.ID()).WithIP(srvEP.LocalAddr())
-	client, err = clientEP.Connect(ctx, addr, []byte(alpn))
+	client, err = clientEP.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestEndpointConnectWith(t *testing.T) {
 
 	const alpn = "iroh-connect-with/0"
 	srvKey, _ := key.GenerateSecretKey()
-	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +270,7 @@ func TestEndpointConnectWith(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	connecting, err := client.ConnectWith(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn), ConnectOptions{})
+	connecting, err := client.ConnectWith(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn, ConnectOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,7 +281,7 @@ func TestEndpointConnectWith(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(gotALPN) != alpn {
+	if gotALPN != alpn {
 		t.Fatalf("ALPN = %q, want %q", gotALPN, alpn)
 	}
 	conn, used0RTT := connecting.Into0RTT()
@@ -320,7 +320,7 @@ func ExampleConn_CloseWithError() {
 
 	const alpn = "iroh-close-example/0"
 	srvKey, _ := key.GenerateSecretKey()
-	server, _ := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+	server, _ := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	defer server.Close(ctx)
 	client, _ := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
@@ -329,7 +329,7 @@ func ExampleConn_CloseWithError() {
 	go server.Accept(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		fmt.Println("connect:", err)
 		return

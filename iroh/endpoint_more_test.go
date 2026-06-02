@@ -150,7 +150,7 @@ func TestEndpointWithKeyLogWriter(t *testing.T) {
 	const alpn = "iroh-keylog/0"
 	var serverKeys bytes.Buffer
 	server, err := Bind(ctx,
-		WithALPNs([]byte(alpn)),
+		WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 		WithKeyLogWriter(&serverKeys),
 	)
@@ -178,7 +178,7 @@ func TestEndpointWithKeyLogWriter(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +850,7 @@ func TestEndpointSetALPNsReplacesRunningListener(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	ep, err := Bind(ctx,
-		WithALPNs([]byte("first/1")),
+		WithALPNs("first/1"),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 	)
 	if err != nil {
@@ -867,7 +867,7 @@ func TestEndpointSetALPNsReplacesRunningListener(t *testing.T) {
 	go func() {
 		conn, err := ep.Accept(ctx)
 		if err == nil {
-			if string(conn.ALPN()) != "first/1" {
+			if conn.ALPN() != "first/1" {
 				err = errors.New("first accept negotiated wrong ALPN")
 			}
 			conn.CloseWithError(0, "")
@@ -875,7 +875,7 @@ func TestEndpointSetALPNsReplacesRunningListener(t *testing.T) {
 		firstAccepted <- err
 	}()
 	addr := netaddr.NewEndpointAddr(ep.ID()).WithIP(ep.LocalAddr())
-	first, err := client.Connect(ctx, addr, []byte("first/1"))
+	first, err := client.Connect(ctx, addr, "first/1")
 	if err != nil {
 		t.Fatalf("first connect: %v", err)
 	}
@@ -884,21 +884,21 @@ func TestEndpointSetALPNsReplacesRunningListener(t *testing.T) {
 		t.Fatalf("first accept: %v", err)
 	}
 
-	if err := ep.SetALPNs([][]byte{[]byte("second/1")}); err != nil {
+	if err := ep.SetALPNs([]string{"second/1"}); err != nil {
 		t.Fatalf("SetALPNs second: %v", err)
 	}
 	secondAccepted := make(chan error, 1)
 	go func() {
 		conn, err := ep.Accept(ctx)
 		if err == nil {
-			if string(conn.ALPN()) != "second/1" {
+			if conn.ALPN() != "second/1" {
 				err = errors.New("second accept negotiated wrong ALPN")
 			}
 			conn.CloseWithError(0, "")
 		}
 		secondAccepted <- err
 	}()
-	second, err := client.Connect(ctx, addr, []byte("second/1"))
+	second, err := client.Connect(ctx, addr, "second/1")
 	if err != nil {
 		t.Fatalf("second connect: %v", err)
 	}
@@ -917,7 +917,7 @@ func TestEndpointQADCandidatesOpenSelectedQNTRouteDataPath(t *testing.T) {
 	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
 
 	const alpn = "iroh-qad-qnt-data-path/0"
-	server, err := Bind(ctx, WithALPNs([]byte(alpn)), WithRelayMode(mode))
+	server, err := Bind(ctx, WithALPNs(alpn), WithRelayMode(mode))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -960,7 +960,7 @@ func TestEndpointQADCandidatesOpenSelectedQNTRouteDataPath(t *testing.T) {
 		accepted <- acceptResult{conn: conn, err: err}
 	}()
 
-	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithRelayURL(relayURL), []byte(alpn))
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithRelayURL(relayURL), alpn)
 	if err != nil {
 		t.Fatalf("relay Connect: %v", err)
 	}
@@ -1107,7 +1107,7 @@ func TestEndpointRegisterConnSeedsQNTCandidatesOpportunistically(t *testing.T) {
 
 	const alpn = "iroh-qnt-handoff-test/0"
 	server, err := Bind(ctx,
-		WithALPNs([]byte(alpn)),
+		WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 	)
 	if err != nil {
@@ -1136,7 +1136,7 @@ func TestEndpointRegisterConnSeedsQNTCandidatesOpportunistically(t *testing.T) {
 		accepted <- conn.CloseWithError(0, "")
 	}()
 
-	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), []byte(alpn))
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}

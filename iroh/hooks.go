@@ -39,13 +39,13 @@ func RejectHandshake(code uint64, reason string) AfterHandshakeOutcome {
 // EndpointHooks observes and can reject outbound dials and completed
 // handshakes.
 type EndpointHooks interface {
-	BeforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn []byte) (BeforeConnectOutcome, error)
+	BeforeConnect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (BeforeConnectOutcome, error)
 	AfterHandshake(ctx context.Context, conn *Conn) (AfterHandshakeOutcome, error)
 }
 
 type noopHooks struct{}
 
-func (noopHooks) BeforeConnect(context.Context, netaddr.EndpointAddr, []byte) (BeforeConnectOutcome, error) {
+func (noopHooks) BeforeConnect(context.Context, netaddr.EndpointAddr, string) (BeforeConnectOutcome, error) {
 	return BeforeConnectAccept, nil
 }
 

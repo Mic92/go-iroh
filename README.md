@@ -38,13 +38,13 @@ This module currently declares Go 1.26 in `go.mod`.
 The `iroh` package is the main entry point:
 
 ```go
-ep, err := iroh.Bind(ctx, iroh.WithALPNs([]byte("example/1")))
+ep, err := iroh.Bind(ctx, iroh.WithALPNs("example/1"))
 if err != nil {
 	return err
 }
 defer ep.Close(ctx)
 
-conn, err := ep.Connect(ctx, peerAddr, []byte("example/1"))
+conn, err := ep.Connect(ctx, peerAddr, "example/1")
 if err != nil {
 	return err
 }
@@ -56,12 +56,9 @@ lets peers agree which application protocol a QUIC connection will carry, such
 as `"example/1"` or `"n0/iroh/transfer/example/1"`. go-iroh uses ALPN values to
 route incoming connections to handlers.
 
-The API takes ALPN values as `[]byte` because iroh treats protocol names as
-opaque byte strings, not necessarily UTF-8 text. Most applications use printable
-ASCII and can write `[]byte("example/1")`; using bytes keeps binary protocol
-IDs lossless and matches Rust iroh's wire model. Internally, the TLS boundary
-converts those bytes to Go strings, which are also byte strings and do not
-require UTF-8.
+The API takes ALPN values as Go strings. TLS ALPN values are byte strings on the
+wire; Go strings preserve arbitrary bytes, while keeping the common printable
+ASCII case simple.
 
 See [iroh/example_test.go](./iroh/example_test.go) for runnable direct-loopback
 Router and Endpoint examples.
@@ -86,10 +83,10 @@ Run the local suite:
 go test ./...
 ```
 
-For release checks, prefer an isolated build cache:
+For a repeatable local check:
 
 ```sh
-GOCACHE=$(mktemp -d /tmp/go-iroh-gocache.XXXXXX) go test -p 1 ./... -count=1
+go test ./... -count=1
 ```
 
 Live Rust interop gates are opt-in because they require a checked-out and built

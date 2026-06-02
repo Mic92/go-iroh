@@ -328,7 +328,7 @@ func TestLiveRustGoToRustEcho(t *testing.T) {
 		addr = addr.WithIP(ap)
 	}
 
-	conn, err := client.Connect(ctx, addr, []byte(rustExampleALPN))
+	conn, err := client.Connect(ctx, addr, rustExampleALPN)
 	if err != nil {
 		t.Fatalf("connect to Rust listen example: %v\n%s", err, peer.Output())
 	}
@@ -336,7 +336,7 @@ func TestLiveRustGoToRustEcho(t *testing.T) {
 	if !conn.RemoteID().Equal(peer.Ready.EndpointID) {
 		t.Fatalf("remote id = %s, want %s", conn.RemoteID(), peer.Ready.EndpointID)
 	}
-	if string(conn.ALPN()) != rustExampleALPN {
+	if conn.ALPN() != rustExampleALPN {
 		t.Fatalf("ALPN = %q, want %q", conn.ALPN(), rustExampleALPN)
 	}
 	if !conn.MultipathNegotiated() {

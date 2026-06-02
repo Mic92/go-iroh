@@ -69,7 +69,7 @@ func (h blockingShutdown) Shutdown(ctx context.Context) {
 
 type acceptingEcho struct {
 	echoHandler
-	called chan []byte
+	called chan string
 }
 
 func (h acceptingEcho) OnAccepting(ctx context.Context, accepting *Accepting) (*Conn, error) {
@@ -78,7 +78,7 @@ func (h acceptingEcho) OnAccepting(ctx context.Context, accepting *Accepting) (*
 		return nil, err
 	}
 	select {
-	case h.called <- append([]byte(nil), alpn...):
+	case h.called <- alpn:
 	default:
 	}
 	return accepting.Connection(ctx)
@@ -102,7 +102,7 @@ func TestRouterEcho(t *testing.T) {
 	}
 
 	h := &shutdownEcho{}
-	router, err := NewRouter(server).Accept([]byte(alpn), h).Spawn()
+	router, err := NewRouter(server).Accept(alpn, h).Spawn()
 	if err != nil {
 		t.Fatalf("spawn router: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestRouterEcho(t *testing.T) {
 	defer client.Close(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 	var retryCalls atomic.Int32
 	var acceptedValidated atomic.Bool
 	router, err := NewRouter(server).
-		Accept([]byte(alpn), echoHandler{}).
+		Accept(alpn, echoHandler{}).
 		IncomingFilter(func(in *Incoming) IncomingFilterOutcome {
 			if in.RemoteAddrValidated() {
 				acceptedValidated.Store(true)
@@ -199,7 +199,7 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 	defer client.Close(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestRouterUnsupportedALPN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router, err := NewRouter(server).Accept([]byte(goodALPN), echoHandler{}).Spawn()
+	router, err := NewRouter(server).Accept(goodALPN, echoHandler{}).Spawn()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,12 +256,12 @@ func TestRouterUnsupportedALPN(t *testing.T) {
 	// The server only advertises goodALPN, so a client offering only an unknown
 	// ALPN fails the handshake at the QUIC/TLS layer.
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	if _, err := client.Connect(ctx, addr, []byte("iroh-unknown/0")); err == nil {
+	if _, err := client.Connect(ctx, addr, "iroh-unknown/0"); err == nil {
 		t.Error("connect with unknown ALPN unexpectedly succeeded")
 	}
 
 	// A subsequent good connection still works, proving the loop survived.
-	conn, err := client.Connect(ctx, addr, []byte(goodALPN))
+	conn, err := client.Connect(ctx, addr, goodALPN)
 	if err != nil {
 		t.Fatalf("good connect after bad: %v", err)
 	}
@@ -281,8 +281,8 @@ func TestRouterShutdownHandlersRunConcurrently(t *testing.T) {
 	h1 := blockingShutdown{started: make(chan struct{}), release: release}
 	h2 := blockingShutdown{started: make(chan struct{}), release: release}
 	router, err := NewRouter(server).
-		Accept([]byte("iroh-shutdown-a/0"), h1).
-		Accept([]byte("iroh-shutdown-b/0"), h2).
+		Accept("iroh-shutdown-a/0", h1).
+		Accept("iroh-shutdown-b/0", h2).
 		Spawn()
 	if err != nil {
 		t.Fatal(err)
@@ -322,8 +322,8 @@ func TestRouterOnAccepting(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	called := make(chan []byte, 1)
-	router, err := NewRouter(server).Accept([]byte(alpn), acceptingEcho{called: called}).Spawn()
+	called := make(chan string, 1)
+	router, err := NewRouter(server).Accept(alpn, acceptingEcho{called: called}).Spawn()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -336,7 +336,7 @@ func TestRouterOnAccepting(t *testing.T) {
 	defer client.Close(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestRouterOnAccepting(t *testing.T) {
 
 	select {
 	case got := <-called:
-		if string(got) != alpn {
+		if got != alpn {
 			t.Fatalf("OnAccepting ALPN = %q, want %q", got, alpn)
 		}
 	case <-ctx.Done():

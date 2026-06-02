@@ -1,7 +1,6 @@
 package iroh
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -28,7 +27,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 	const alpn = "iroh-echo/0"
 
 	srvKey, _ := key.GenerateSecretKey()
-	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
@@ -73,7 +72,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 	// The server advertises its bound loopback address.
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -82,7 +81,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 	if !conn.RemoteID().Equal(server.ID()) {
 		t.Errorf("client saw server id %s, want %s", conn.RemoteID(), server.ID())
 	}
-	if string(conn.ALPN()) != alpn {
+	if conn.ALPN() != alpn {
 		t.Errorf("client ALPN = %q, want %q", conn.ALPN(), alpn)
 	}
 	if !conn.MultipathNegotiated() {
@@ -147,7 +146,7 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 	const alpn = "iroh-accept-incoming/0"
 
 	srvKey, _ := key.GenerateSecretKey()
-	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +179,7 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 			done <- err
 			return
 		}
-		if got, err := accepting.ALPN(ctx); err != nil || string(got) != alpn {
+		if got, err := accepting.ALPN(ctx); err != nil || got != alpn {
 			done <- fmt.Errorf("accepting ALPN = %q, %v", got, err)
 			return
 		}
@@ -206,7 +205,7 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 	}()
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -225,7 +224,7 @@ func TestEndpointSourceAddressValidationRetry(t *testing.T) {
 
 	srvKey, _ := key.GenerateSecretKey()
 	var retryCalls atomic.Int32
-	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
 		WithSourceAddressValidation(func(net.Addr) bool {
 			retryCalls.Add(1)
@@ -268,7 +267,7 @@ func TestEndpointSourceAddressValidationRetry(t *testing.T) {
 	}()
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
-	conn, err := client.Connect(ctx, addr, []byte(alpn))
+	conn, err := client.Connect(ctx, addr, alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -285,7 +284,7 @@ func TestEndpointBinaryALPN(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	alpn := []byte{'i', 'r', 'o', 'h', '/', 0xff, 0x00, '/', '1'}
+	alpn := string([]byte{'i', 'r', 'o', 'h', '/', 0xff, 0x00, '/', '1'})
 
 	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
@@ -302,7 +301,7 @@ func TestEndpointBinaryALPN(t *testing.T) {
 	defer client.Close(ctx)
 
 	type srvResult struct {
-		alpn []byte
+		alpn string
 		err  error
 	}
 	done := make(chan srvResult, 1)
@@ -312,7 +311,7 @@ func TestEndpointBinaryALPN(t *testing.T) {
 			done <- srvResult{err: err}
 			return
 		}
-		done <- srvResult{alpn: append([]byte(nil), conn.ALPN()...)}
+		done <- srvResult{alpn: conn.ALPN()}
 	}()
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
@@ -322,27 +321,27 @@ func TestEndpointBinaryALPN(t *testing.T) {
 	}
 	defer conn.CloseWithError(0, "")
 
-	if !bytes.Equal(conn.ALPN(), alpn) {
-		t.Errorf("client ALPN = % x, want % x", conn.ALPN(), alpn)
+	if conn.ALPN() != alpn {
+		t.Errorf("client ALPN = % x, want % x", []byte(conn.ALPN()), []byte(alpn))
 	}
 	res := <-done
 	if res.err != nil {
 		t.Fatalf("server: %v", res.err)
 	}
-	if !bytes.Equal(res.alpn, alpn) {
-		t.Errorf("server ALPN = % x, want % x", res.alpn, alpn)
+	if res.alpn != alpn {
+		t.Errorf("server ALPN = % x, want % x", []byte(res.alpn), []byte(alpn))
 	}
 }
 
 // TestEndpointSelfConnect checks dialing one's own id is rejected.
 func TestEndpointSelfConnect(t *testing.T) {
 	ctx := context.Background()
-	ep, err := Bind(ctx, WithALPNs([]byte("x")))
+	ep, err := Bind(ctx, WithALPNs("x"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ep.Close(ctx)
-	_, err = ep.Connect(ctx, ep.Addr(), []byte("x"))
+	_, err = ep.Connect(ctx, ep.Addr(), "x")
 	if err != ErrSelfConnect {
 		t.Errorf("Connect(self) err = %v, want ErrSelfConnect", err)
 	}
@@ -358,7 +357,7 @@ func TestEndpointNoAddress(t *testing.T) {
 	}
 	defer ep.Close(ctx)
 	other, _ := key.GenerateSecretKey()
-	_, err = ep.Connect(ctx, netaddr.NewEndpointAddr(other.Public()), []byte("x"))
+	_, err = ep.Connect(ctx, netaddr.NewEndpointAddr(other.Public()), "x")
 	if err != ErrNoAddress {
 		t.Errorf("Connect(no addr) err = %v, want ErrNoAddress", err)
 	}
