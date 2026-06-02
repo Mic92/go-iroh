@@ -25,6 +25,14 @@ type ProtocolHandler interface {
 	Accept(ctx context.Context, conn *Conn) error
 }
 
+// ProtocolHandlerFunc adapts a function to [ProtocolHandler].
+type ProtocolHandlerFunc func(ctx context.Context, conn *Conn) error
+
+// Accept calls f(ctx, conn).
+func (f ProtocolHandlerFunc) Accept(ctx context.Context, conn *Conn) error {
+	return f(ctx, conn)
+}
+
 // AcceptingHandler is an optional interface a [ProtocolHandler] may implement
 // to intercept an incoming connection before it is converted to a verified
 // [Conn]. The default behavior is [Accepting.Connection].

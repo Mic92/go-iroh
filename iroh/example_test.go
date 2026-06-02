@@ -52,11 +52,7 @@ func ExampleEndpoint_HomeRelayStatus() {
 	}
 }
 
-// echo is a ProtocolHandler that echoes a single bidirectional stream back to
-// the peer.
-type echo struct{}
-
-func (echo) Accept(ctx context.Context, conn *iroh.Conn) error {
+func echo(ctx context.Context, conn *iroh.Conn) error {
 	s, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return err
@@ -82,7 +78,9 @@ func ExampleRouter() {
 		return
 	}
 
-	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{alpn: echo{}}, nil)
+	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		alpn: iroh.ProtocolHandlerFunc(echo),
+	}, nil)
 	if err != nil {
 		fmt.Println("router:", err)
 		return

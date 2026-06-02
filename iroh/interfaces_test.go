@@ -25,4 +25,5 @@ var (
 	_ deadlines          = (*Stream)(nil)
 	_ connAddrs          = (*Conn)(nil)
 	_ net.Conn           = streamConn{}
+	_ ProtocolHandler    = ProtocolHandlerFunc(nil)
 )
