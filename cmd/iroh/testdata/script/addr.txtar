@@ -7,7 +7,7 @@ iroh addr parse relay:https://relay.example.com
 stdout '^relay:https://relay.example.com/$'
 
 iroh addr parse custom:2a_abab
-stdout '^custom:2a_abab$'
+stdout '^2a_abab$'
 
 # Unknown kinds are rejected.
 ! iroh addr parse bogus:value

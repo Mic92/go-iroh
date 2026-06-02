@@ -64,22 +64,26 @@ func TestCustomAddrBinary(t *testing.T) {
 	if len(b) != 11 {
 		t.Fatalf("len = %d, want 11", len(b))
 	}
-	a2, err := CustomAddrFromBytes(b)
-	if err != nil {
+	var a2 CustomAddr
+	if err := a2.UnmarshalBinary(b); err != nil {
 		t.Fatal(err)
 	}
 	if a2.ID() != a.ID() || string(a2.Data()) != string(a.Data()) {
 		t.Errorf("binary round-trip mismatch")
 	}
-	if _, err := CustomAddrFromBytes([]byte{1, 2, 3}); !errors.Is(err, ErrCustomAddrTooShort) {
+	if err := a2.UnmarshalBinary([]byte{1, 2, 3}); !errors.Is(err, ErrCustomAddrTooShort) {
 		t.Errorf("short bytes: got %v", err)
 	}
+	text, err := a.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var a3 CustomAddr
-	if err := a3.UnmarshalBinary(b); err != nil {
+	if err := a3.UnmarshalText(text); err != nil {
 		t.Fatal(err)
 	}
 	if a3.Compare(a) != 0 {
-		t.Errorf("UnmarshalBinary round-trip mismatch")
+		t.Errorf("text round-trip mismatch")
 	}
 }
 
@@ -203,6 +207,19 @@ func TestEndpointAddrEmpty(t *testing.T) {
 	}
 	if len(a.RelayURLs()) != 0 || len(a.IPAddrs()) != 0 {
 		t.Error("expected no addrs")
+	}
+}
+
+func TestEndpointAddrAddrsReturnsCopy(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	ip1 := IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")}
+	ip2 := IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:2")}
+	a := NewEndpointAddr(sk.Public()).WithAddrs(ip1)
+	addrs := a.Addrs()
+	addrs[0] = ip2
+	got := a.Addrs()
+	if len(got) != 1 || got[0].Compare(ip1) != 0 {
+		t.Fatalf("Addrs exposed internal slice: %v", got)
 	}
 }
 

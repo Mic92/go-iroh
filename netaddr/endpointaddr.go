@@ -130,20 +130,38 @@ var (
 // ParseCustomAddr parses a CustomAddr from its "<id>_<data>" string form.
 // It also accepts the "custom:" prefix used by [ParseTransportAddr].
 func ParseCustomAddr(s string) (CustomAddr, error) {
-	s = strings.TrimPrefix(s, "custom:")
+	var a CustomAddr
+	if err := a.UnmarshalText([]byte(s)); err != nil {
+		return CustomAddr{}, err
+	}
+	return a, nil
+}
+
+// MarshalText implements encoding.TextMarshaler using the string encoding
+// described on [CustomAddr].
+func (a CustomAddr) MarshalText() ([]byte, error) {
+	return []byte(a.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler using the string encoding
+// described on [CustomAddr].
+func (a *CustomAddr) UnmarshalText(text []byte) error {
+	s := strings.TrimPrefix(string(text), "custom:")
 	idStr, dataStr, ok := strings.Cut(s, "_")
 	if !ok {
-		return CustomAddr{}, ErrCustomAddrMissingSeparator
+		return ErrCustomAddrMissingSeparator
 	}
 	id, err := strconv.ParseUint(idStr, 16, 64)
 	if err != nil {
-		return CustomAddr{}, ErrCustomAddrInvalidID
+		return ErrCustomAddrInvalidID
 	}
 	data, err := hex.DecodeString(dataStr)
 	if err != nil {
-		return CustomAddr{}, ErrCustomAddrInvalidData
+		return ErrCustomAddrInvalidData
 	}
-	return CustomAddr{id: id, data: data}, nil
+	a.id = id
+	a.data = data
+	return nil
 }
 
 // MarshalBinary implements encoding.BinaryMarshaler using the binary encoding
@@ -153,15 +171,6 @@ func (a CustomAddr) MarshalBinary() ([]byte, error) {
 	binary.LittleEndian.PutUint64(out[:8], a.id)
 	copy(out[8:], a.data)
 	return out, nil
-}
-
-// CustomAddrFromBytes parses a CustomAddr from its binary encoding.
-func CustomAddrFromBytes(data []byte) (CustomAddr, error) {
-	var a CustomAddr
-	if err := a.UnmarshalBinary(data); err != nil {
-		return CustomAddr{}, err
-	}
-	return a, nil
 }
 
 // UnmarshalBinary implements encoding.BinaryUnmarshaler using the binary
@@ -244,9 +253,8 @@ func (a EndpointAddr) WithAddrs(addrs ...TransportAddr) EndpointAddr {
 	return EndpointAddr{ID: a.ID, addrs: merged}
 }
 
-// Addrs returns the sorted, deduplicated transport addresses. The returned
-// slice must not be mutated.
-func (a EndpointAddr) Addrs() []TransportAddr { return a.addrs }
+// Addrs returns the sorted, deduplicated transport addresses.
+func (a EndpointAddr) Addrs() []TransportAddr { return slices.Clone(a.addrs) }
 
 // IsEmpty reports whether only the key.EndpointID is present.
 func (a EndpointAddr) IsEmpty() bool { return len(a.addrs) == 0 }
