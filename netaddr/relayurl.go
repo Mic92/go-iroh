@@ -1,6 +1,7 @@
 package netaddr
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -36,7 +37,7 @@ func RelayURLFromURL(u *url.URL) RelayURL {
 }
 
 // ErrParseRelayURL is returned (wrapped) when a relay URL cannot be parsed.
-var ErrParseRelayURL = fmt.Errorf("failed to parse relay URL")
+var ErrParseRelayURL = errors.New("failed to parse relay URL")
 
 // URL returns a copy of the underlying parsed URL.
 func (r RelayURL) URL() *url.URL {

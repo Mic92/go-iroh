@@ -58,11 +58,11 @@ type IPAddr struct{ Addr netip.AddrPort }
 // https://github.com/n0-computer/iroh/blob/main/TRANSPORTS.md.
 //
 // String encoding ([CustomAddr.String], [ParseCustomAddr]): "<id>_<data>" where
-// <id> is the transport id as lowercase hex (no "0x", no leading zeros) and
+// <id> is the transport ID as lowercase hex (no "0x", no leading zeros) and
 // <data> is the address bytes as lowercase hex.
 //
-// Binary encoding ([CustomAddr.MarshalBinary], [CustomAddrFromBytes]): 8-byte
-// little-endian u64 id followed by the raw data bytes (minimum 8 bytes).
+// Binary encoding ([CustomAddr.MarshalBinary], [CustomAddr.UnmarshalBinary]):
+// 8-byte little-endian u64 ID followed by the raw data bytes (minimum 8 bytes).
 type CustomAddr struct {
 	id   uint64
 	data []byte
@@ -74,7 +74,7 @@ func (CustomAddr) isTransportAddr() {}
 
 func (a RelayAddr) String() string  { return "relay:" + a.URL.String() }
 func (a IPAddr) String() string     { return "ip:" + a.Addr.String() }
-func (a CustomAddr) String() string { return "custom:" + a.customString() }
+func (a CustomAddr) String() string { return a.customString() }
 
 // Compare orders relay addresses by their normalized URL string.
 func (a RelayAddr) Compare(other TransportAddr) int {
@@ -103,43 +103,41 @@ func (a CustomAddr) Compare(other TransportAddr) int {
 	return cmp.Compare(transportKind(a), transportKind(other))
 }
 
-// NewCustomAddr creates a CustomAddr from a transport id and raw address data.
+// NewCustomAddr creates a CustomAddr from a transport ID and raw address data.
 // The data is copied.
 func NewCustomAddr(id uint64, data []byte) CustomAddr {
 	return CustomAddr{id: id, data: slices.Clone(data)}
 }
 
-// ID returns the transport id.
+// ID returns the transport ID.
 func (a CustomAddr) ID() uint64 { return a.id }
 
-// Data returns the opaque address data. The returned slice must not be mutated.
-func (a CustomAddr) Data() []byte { return a.data }
+// Data returns the opaque address data.
+func (a CustomAddr) Data() []byte { return slices.Clone(a.data) }
 
 func (a CustomAddr) customString() string {
 	return strconv.FormatUint(a.id, 16) + "_" + hex.EncodeToString(a.data)
 }
 
-// String renders the custom address in its bare "<id>_<data>" form (without the
-// "custom:" prefix used by the TransportAddr String).
-func (a CustomAddr) BareString() string { return a.customString() }
-
 // CustomAddr parse/encode errors.
 var (
 	ErrCustomAddrMissingSeparator = errors.New("missing '_' separator")
-	ErrCustomAddrInvalidId        = errors.New("invalid id")
+	ErrCustomAddrInvalidID        = errors.New("invalid ID")
 	ErrCustomAddrInvalidData      = errors.New("invalid data")
 	ErrCustomAddrTooShort         = errors.New("data too short")
 )
 
 // ParseCustomAddr parses a CustomAddr from its "<id>_<data>" string form.
+// It also accepts the "custom:" prefix used by [ParseTransportAddr].
 func ParseCustomAddr(s string) (CustomAddr, error) {
+	s = strings.TrimPrefix(s, "custom:")
 	idStr, dataStr, ok := strings.Cut(s, "_")
 	if !ok {
 		return CustomAddr{}, ErrCustomAddrMissingSeparator
 	}
 	id, err := strconv.ParseUint(idStr, 16, 64)
 	if err != nil {
-		return CustomAddr{}, ErrCustomAddrInvalidId
+		return CustomAddr{}, ErrCustomAddrInvalidID
 	}
 	data, err := hex.DecodeString(dataStr)
 	if err != nil {
@@ -159,18 +157,29 @@ func (a CustomAddr) MarshalBinary() ([]byte, error) {
 
 // CustomAddrFromBytes parses a CustomAddr from its binary encoding.
 func CustomAddrFromBytes(data []byte) (CustomAddr, error) {
-	if len(data) < 8 {
-		return CustomAddr{}, ErrCustomAddrTooShort
+	var a CustomAddr
+	if err := a.UnmarshalBinary(data); err != nil {
+		return CustomAddr{}, err
 	}
-	id := binary.LittleEndian.Uint64(data[:8])
-	return CustomAddr{id: id, data: slices.Clone(data[8:])}, nil
+	return a, nil
+}
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler using the binary
+// encoding described on [CustomAddr].
+func (a *CustomAddr) UnmarshalBinary(data []byte) error {
+	if len(data) < 8 {
+		return ErrCustomAddrTooShort
+	}
+	a.id = binary.LittleEndian.Uint64(data[:8])
+	a.data = slices.Clone(data[8:])
+	return nil
 }
 
 // ParseTransportAddr parses a TransportAddr from its "kind:value" string form.
 func ParseTransportAddr(s string) (TransportAddr, error) {
 	kind, value, ok := strings.Cut(s, ":")
 	if !ok {
-		return nil, fmt.Errorf("transport address %q: missing ':' separator", s)
+		return ParseCustomAddr(s)
 	}
 	switch kind {
 	case "relay":

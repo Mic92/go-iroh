@@ -22,8 +22,8 @@ func TestCustomAddrRoundTrip(t *testing.T) {
 	}
 	for _, c := range cases {
 		a := NewCustomAddr(c.id, c.data)
-		if got := a.BareString(); got != c.want {
-			t.Errorf("BareString() = %q, want %q", got, c.want)
+		if got := a.String(); got != c.want {
+			t.Errorf("String() = %q, want %q", got, c.want)
 		}
 		parsed, err := ParseCustomAddr(c.want)
 		if err != nil {
@@ -31,6 +31,13 @@ func TestCustomAddrRoundTrip(t *testing.T) {
 		}
 		if parsed.ID() != c.id || string(parsed.Data()) != string(c.data) {
 			t.Errorf("parsed = (%d,%x), want (%d,%x)", parsed.ID(), parsed.Data(), c.id, c.data)
+		}
+		prefixed, err := ParseCustomAddr("custom:" + c.want)
+		if err != nil {
+			t.Fatalf("ParseCustomAddr(custom:%s): %v", c.want, err)
+		}
+		if prefixed.Compare(a) != 0 {
+			t.Errorf("prefixed parse = %s, want %s", prefixed, a)
 		}
 	}
 }
@@ -66,6 +73,13 @@ func TestCustomAddrBinary(t *testing.T) {
 	}
 	if _, err := CustomAddrFromBytes([]byte{1, 2, 3}); !errors.Is(err, ErrCustomAddrTooShort) {
 		t.Errorf("short bytes: got %v", err)
+	}
+	var a3 CustomAddr
+	if err := a3.UnmarshalBinary(b); err != nil {
+		t.Fatal(err)
+	}
+	if a3.Compare(a) != 0 {
+		t.Errorf("UnmarshalBinary round-trip mismatch")
 	}
 }
 

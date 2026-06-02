@@ -133,7 +133,7 @@ func (e EndpointInfo) toAttrs() *txtAttrs {
 		case netaddr.IPAddr:
 			attrs[attrAddr] = append(attrs[attrAddr], v.Addr.String())
 		case netaddr.CustomAddr:
-			attrs[attrAddr] = append(attrs[attrAddr], v.BareString())
+			attrs[attrAddr] = append(attrs[attrAddr], v.String())
 		}
 	}
 	if e.Data.userData != nil {
