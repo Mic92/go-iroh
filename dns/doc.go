@@ -4,7 +4,7 @@
 //
 // It is a port of the Rust crate iroh-dns. The central types are [EndpointData]
 // (a relay URL, direct addresses, and optional user data about an endpoint) and
-// [EndpointInfo] (an [base.EndpointId] coupled with its [EndpointData]).
+// [EndpointInfo] (an [key.EndpointId] coupled with its [EndpointData]).
 //
 // Records are published under the name "_iroh.<z32-endpoint-id>.<origin>" as TXT
 // records of the form "key=value" (RFC 1464), with keys "relay", "addr", and

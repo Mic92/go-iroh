@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 func TestEndpointQLOGDIRWritesConnectionTraces(t *testing.T) {
@@ -21,7 +22,7 @@ func TestEndpointQLOGDIRWritesConnectionTraces(t *testing.T) {
 	t.Setenv("QLOGDIR", qlogDir)
 
 	const alpn = "iroh-qlog/0"
-	srvKey, err := base.GenerateSecretKey()
+	srvKey, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}

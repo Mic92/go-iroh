@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 // DNS origin and timeout defaults, matching iroh-dns/src/dns.rs.
@@ -52,7 +52,7 @@ func (r *Resolver) lookuper() TxtLookuper {
 // LookupEndpointById resolves the endpoint info for id published under
 // "_iroh.<z32-id>.<origin>". Pass [N0DNSEndpointOriginProd] for the number0
 // production service.
-func (r *Resolver) LookupEndpointById(ctx context.Context, id base.EndpointId, origin string) (EndpointInfo, error) {
+func (r *Resolver) LookupEndpointById(ctx context.Context, id key.EndpointId, origin string) (EndpointInfo, error) {
 	name := IrohTxtName + "." + id.Z32() + "." + ensureTrailingDot(origin)
 	return r.LookupEndpointByDomainName(ctx, name)
 }

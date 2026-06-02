@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 type testHooks struct {
@@ -41,7 +42,7 @@ func TestEndpointHooksRejectBeforeConnect(t *testing.T) {
 	}
 	defer client.Close(ctx)
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	addr := base.NewEndpointAddr(sk.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1"))
 	if _, err := client.Connect(ctx, addr, []byte("iroh-hooks/0")); !errors.Is(err, ErrConnectRejected) {
 		t.Fatalf("Connect err = %v, want ErrConnectRejected", err)
@@ -53,7 +54,7 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 	defer cancel()
 
 	const alpn = "iroh-hooks/0"
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx,
 		WithSecretKey(srvKey),
 		WithALPNs([]byte(alpn)),

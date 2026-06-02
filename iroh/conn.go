@@ -8,9 +8,9 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
+	"github.com/tmc/go-iroh/key"
 )
 
 // Side reports whether a [Conn] was dialed locally or accepted from a peer.
@@ -48,13 +48,13 @@ type ReceiveStream = quic.ReceiveStream
 // [Conn.RemoteID].
 type Conn struct {
 	qc       *quic.Conn
-	remoteID base.EndpointId
+	remoteID key.EndpointId
 	alpn     []byte
 	side     Side
 	stableID uint64
 }
 
-func newConn(qc *quic.Conn, remoteID base.EndpointId, alpn []byte, side Side, stableID uint64) (*Conn, error) {
+func newConn(qc *quic.Conn, remoteID key.EndpointId, alpn []byte, side Side, stableID uint64) (*Conn, error) {
 	return &Conn{qc: qc, remoteID: remoteID, alpn: alpn, side: side, stableID: stableID}, nil
 }
 
@@ -78,7 +78,7 @@ func (c *Connecting) ALPN(context.Context) ([]byte, error) {
 }
 
 // RemoteID returns the target endpoint id.
-func (c *Connecting) RemoteID() base.EndpointId {
+func (c *Connecting) RemoteID() key.EndpointId {
 	return c.conn.RemoteID()
 }
 
@@ -291,7 +291,7 @@ func (a *Accepting) Connection(ctx context.Context) (*Conn, error) {
 }
 
 // RemoteID returns the verified endpoint id of the peer.
-func (c *Conn) RemoteID() base.EndpointId { return c.remoteID }
+func (c *Conn) RemoteID() key.EndpointId { return c.remoteID }
 
 // ALPN returns the negotiated ALPN protocol.
 func (c *Conn) ALPN() []byte { return c.alpn }

@@ -12,6 +12,7 @@ import (
 	"github.com/tmc/go-iroh/base"
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/key"
 )
 
 // TestEndpoint0RTTResumption is the slice-E gate: a client connects to a server
@@ -25,7 +26,7 @@ func TestEndpoint0RTTResumption(t *testing.T) {
 
 	const alpn = "iroh-0rtt/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -162,8 +163,8 @@ func TestIroh0RTTRejectedFallsBackToFullHandshake(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	serverKey, _ := base.GenerateSecretKey()
-	clientKey, _ := base.GenerateSecretKey()
+	serverKey, _ := key.GenerateSecretKey()
+	clientKey, _ := key.GenerateSecretKey()
 	const alpn = "iroh-0rtt/0"
 
 	cache := tls.NewLRUClientSessionCache(maxTLSTickets)
@@ -194,7 +195,7 @@ func TestIroh0RTTRejectedFallsBackToFullHandshake(t *testing.T) {
 // allow0RTT) and a client that dials it with the iroh TLS configs and the given
 // session cache. It echoes one stream, returns whether the client connection
 // used 0-RTT, and tears both sides down.
-func dialOnceForTicket(t *testing.T, ctx context.Context, serverKey, clientKey base.SecretKey, alpn string, cache tls.ClientSessionCache, allow0RTT bool) bool {
+func dialOnceForTicket(t *testing.T, ctx context.Context, serverKey, clientKey key.SecretKey, alpn string, cache tls.ClientSessionCache, allow0RTT bool) bool {
 	t.Helper()
 
 	serverTLS, err := serverTLSConfig(serverKey, []string{alpn})

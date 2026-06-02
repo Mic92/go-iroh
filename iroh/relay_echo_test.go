@@ -9,6 +9,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/relayserver"
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -45,7 +46,7 @@ func TestRelayOnlyEcho(t *testing.T) {
 
 	const alpn = "iroh-relay-echo/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx,
 		WithSecretKey(srvKey),
 		WithALPNs([]byte(alpn)),
@@ -74,7 +75,7 @@ func TestRelayOnlyEcho(t *testing.T) {
 	}
 
 	type srvResult struct {
-		peer base.EndpointId
+		peer key.EndpointId
 		err  error
 	}
 	done := make(chan srvResult, 1)

@@ -14,6 +14,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
+	"github.com/tmc/go-iroh/key"
 )
 
 // drain collects every Result from ch until it is closed.
@@ -35,7 +36,7 @@ func relayURL(t *testing.T, s string) base.RelayUrl {
 }
 
 func TestMemoryLookup(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	m := NewMemoryLookup()
 
@@ -78,7 +79,7 @@ func TestMemoryLookup(t *testing.T) {
 }
 
 func TestMemoryLookupAddMerges(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	m := NewMemoryLookupWithProvenance("custom")
 
@@ -96,7 +97,7 @@ func TestMemoryLookupAddMerges(t *testing.T) {
 }
 
 func TestDNSTxtRoundTrip(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	relay := relayURL(t, "https://relay.example/")
 
@@ -130,7 +131,7 @@ func (f *fakeTxtLookuper) LookupTXT(_ context.Context, _ string) ([]string, erro
 }
 
 func TestDnsAddressLookupResolve(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	info := dns.NewEndpointInfo(id).WithRelayURL(relayURL(t, "https://relay.example/"))
 
@@ -186,7 +187,7 @@ func TestPkarrPublishResolveRoundTrip(t *testing.T) {
 	srv := pkarrTestRelay(t)
 	defer srv.Close()
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	relay := relayURL(t, "https://relay.example/")
 
@@ -237,7 +238,7 @@ func TestPkarrPublisherRelayOnlyFilter(t *testing.T) {
 	srv := pkarrTestRelay(t)
 	defer srv.Close()
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	relay := relayURL(t, "https://relay.example/")
 
@@ -286,7 +287,7 @@ type staticLookup struct {
 
 func (s staticLookup) Publish(dns.EndpointData) {}
 
-func (s staticLookup) Resolve(ctx context.Context, _ base.EndpointId) <-chan Result {
+func (s staticLookup) Resolve(ctx context.Context, _ key.EndpointId) <-chan Result {
 	out := make(chan Result, 1)
 	go func() {
 		defer close(out)
@@ -305,7 +306,7 @@ func (s staticLookup) Resolve(ctx context.Context, _ base.EndpointId) <-chan Res
 }
 
 func TestServicesNoServiceConfigured(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	var svcs AddressLookupServices
 	results := drain(svcs.Resolve(context.Background(), sk.Public()))
 	if len(results) != 1 || !errors.Is(results[0].Err, ErrNoServiceConfigured) {
@@ -314,7 +315,7 @@ func TestServicesNoServiceConfigured(t *testing.T) {
 }
 
 func TestServicesSucceedsAfterOtherErrors(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	info := dns.NewEndpointInfo(id).WithRelayURL(relayURL(t, "https://relay.example/"))
 
@@ -340,7 +341,7 @@ func TestServicesSucceedsAfterOtherErrors(t *testing.T) {
 }
 
 func TestServicesNoResults(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	var svcs AddressLookupServices
 	svcs.Add(staticLookup{provenance: "fail", err: errors.New("boom"), delay: time.Millisecond})
 
@@ -352,7 +353,7 @@ func TestServicesNoResults(t *testing.T) {
 }
 
 func TestServicesPublishAppliesFilter(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	rec := &recordingLookup{}
 
@@ -392,7 +393,7 @@ func (r *recordingLookup) Publish(data dns.EndpointData) {
 	r.published = append(r.published, data)
 }
 
-func (r *recordingLookup) Resolve(context.Context, base.EndpointId) <-chan Result { return nil }
+func (r *recordingLookup) Resolve(context.Context, key.EndpointId) <-chan Result { return nil }
 
 func TestServicesAddPublishesHistorical(t *testing.T) {
 	relay := relayURL(t, "https://relay.example/")

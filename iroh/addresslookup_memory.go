@@ -7,6 +7,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
+	"github.com/tmc/go-iroh/key"
 )
 
 // MemoryProvenance is the default provenance string for [MemoryLookup] items.
@@ -23,7 +24,7 @@ const MemoryProvenance = "memory_lookup"
 // It is the Go analog of iroh's MemoryLookup.
 type MemoryLookup struct {
 	mu         *sync.RWMutex
-	endpoints  map[base.EndpointId]storedInfo
+	endpoints  map[key.EndpointId]storedInfo
 	provenance string
 }
 
@@ -42,7 +43,7 @@ func NewMemoryLookup() MemoryLookup {
 func NewMemoryLookupWithProvenance(provenance string) MemoryLookup {
 	return MemoryLookup{
 		mu:         &sync.RWMutex{},
-		endpoints:  make(map[base.EndpointId]storedInfo),
+		endpoints:  make(map[key.EndpointId]storedInfo),
 		provenance: provenance,
 	}
 }
@@ -90,7 +91,7 @@ func (m MemoryLookup) AddEndpointAddr(addr base.EndpointAddr) {
 }
 
 // GetEndpointInfo returns the stored info for id and whether it exists.
-func (m MemoryLookup) GetEndpointInfo(id base.EndpointId) (dns.EndpointInfo, bool) {
+func (m MemoryLookup) GetEndpointInfo(id key.EndpointId) (dns.EndpointInfo, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	info, ok := m.endpoints[id]
@@ -102,7 +103,7 @@ func (m MemoryLookup) GetEndpointInfo(id base.EndpointId) (dns.EndpointInfo, boo
 
 // RemoveEndpointInfo removes and returns the info for id, and whether it
 // existed.
-func (m MemoryLookup) RemoveEndpointInfo(id base.EndpointId) (dns.EndpointInfo, bool) {
+func (m MemoryLookup) RemoveEndpointInfo(id key.EndpointId) (dns.EndpointInfo, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	info, ok := m.endpoints[id]
@@ -117,7 +118,7 @@ func (m MemoryLookup) RemoveEndpointInfo(id base.EndpointId) (dns.EndpointInfo, 
 func (m MemoryLookup) Publish(dns.EndpointData) {}
 
 // Resolve returns the stored info for id, or nil if there is no entry.
-func (m MemoryLookup) Resolve(ctx context.Context, id base.EndpointId) <-chan Result {
+func (m MemoryLookup) Resolve(ctx context.Context, id key.EndpointId) <-chan Result {
 	m.mu.RLock()
 	info, ok := m.endpoints[id]
 	m.mu.RUnlock()
@@ -159,6 +160,6 @@ func (f FilteredAddressLookup) Publish(data dns.EndpointData) {
 }
 
 // Resolve delegates to the inner service.
-func (f FilteredAddressLookup) Resolve(ctx context.Context, id base.EndpointId) <-chan Result {
+func (f FilteredAddressLookup) Resolve(ctx context.Context, id key.EndpointId) <-chan Result {
 	return f.inner.Resolve(ctx, id)
 }

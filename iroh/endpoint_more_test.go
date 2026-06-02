@@ -15,6 +15,7 @@ import (
 	"github.com/tmc/go-iroh/internal/netreport"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -80,7 +81,7 @@ func (t *endpointFakeCustomTransport) lastSend() (endpointFakeCustomSend, bool) 
 // its public half matches the endpoint id.
 func TestEndpointSecretKey(t *testing.T) {
 	ctx := context.Background()
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	ep, err := Bind(ctx, WithSecretKey(sk))
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +218,7 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 	if got := ep.Addr().IPAddrs(); len(got) != 0 {
 		t.Fatalf("WithoutIPTransports external Addr IPs = %v, want none", got)
 	}
-	remoteKey, _ := base.GenerateSecretKey()
+	remoteKey, _ := key.GenerateSecretKey()
 	addr := base.NewEndpointAddr(remoteKey.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1")).WithRelayURL(rurl)
 	targets := ep.dialTargets(addr)
 	if len(targets) != 1 {
@@ -348,7 +349,7 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	}
 
 	// With WithAddressLookup, the hook resolves through the registered services.
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	ip := netip.MustParseAddrPort("1.2.3.4:1234")
 
@@ -384,7 +385,7 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 
 func TestEndpointWithDNSResolver(t *testing.T) {
 	ctx := context.Background()
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	info := dns.NewEndpointInfo(id).WithIPAddrs(netip.MustParseAddrPort("127.0.0.1:1234"))
 
@@ -483,7 +484,7 @@ func TestEndpointIDMappedSendFansOut(t *testing.T) {
 	}
 	defer dst.Close()
 
-	remote, err := base.GenerateSecretKey()
+	remote, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -600,7 +601,7 @@ func TestEndpointExternalNATTraversalCandidatesReadvertiseActiveRemotes(t *testi
 	}
 	defer ep.Close(ctx)
 
-	remote, err := base.GenerateSecretKey()
+	remote, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -633,7 +634,7 @@ func TestEndpointExternalNATTraversalCandidatesRemoveStaleRemoteCandidate(t *tes
 	}
 	defer ep.Close(ctx)
 
-	remote, err := base.GenerateSecretKey()
+	remote, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -721,7 +722,7 @@ func TestEndpointApplyEmptyNetReportClearsExternalNATTraversalCandidates(t *test
 	}
 	defer ep.Close(ctx)
 
-	remote, err := base.GenerateSecretKey()
+	remote, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -782,7 +783,7 @@ func TestEndpointWithNetReportAdvertisesCandidates(t *testing.T) {
 		t.Fatal("netreport runner did not start")
 	}
 
-	remote, err := base.GenerateSecretKey()
+	remote, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}

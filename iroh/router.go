@@ -16,9 +16,8 @@ import (
 // Accept is called in its own goroutine for every accepted connection; it should
 // run for the lifetime of the connection and return when done. A returned error
 // is logged. A handler must not panic; a panic is recovered and logged and stops
-// the router's accept loop (the protocol-router wire contract, iroh/DESIGN.md
-// §2). It is the Go analog of the Rust ProtocolHandler trait
-// (iroh/src/protocol.rs:228).
+// the router's accept loop. It is the Go analog of the Rust ProtocolHandler
+// trait (iroh/src/protocol.rs:228).
 type ProtocolHandler interface {
 	// Accept handles an accepted connection. ctx is cancelled when the router
 	// shuts down.
@@ -161,7 +160,7 @@ func (b *RouterBuilder) Spawn() (*Router, error) {
 // Dispatch is by exact ALPN bytes. One goroutine runs the accept loop; each
 // accepted connection is handled in a child goroutine with a context derived
 // from the router's. A panic in a handler goroutine is recovered, logged, and
-// stops the accept loop (the protocol-router wire contract, iroh/DESIGN.md §2).
+// stops the accept loop.
 type Router struct {
 	ep                      *Endpoint
 	handlers                map[string]ProtocolHandler

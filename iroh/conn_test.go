@@ -11,6 +11,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/key"
 )
 
 // connPair binds a server and client endpoint on loopback, dials, and returns
@@ -22,7 +23,7 @@ func connPair(t *testing.T, alpn string) (client, server *Conn) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	t.Cleanup(cancel)
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	srvEP, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -277,7 +278,7 @@ func TestEndpointConnectWith(t *testing.T) {
 	defer cancel()
 
 	const alpn = "iroh-connect-with/0"
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -349,7 +350,7 @@ func ExampleConn_Close() {
 	defer cancel()
 
 	const alpn = "iroh-close-example/0"
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, _ := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	defer server.Close(ctx)

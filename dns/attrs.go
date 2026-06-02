@@ -9,6 +9,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/pkarr"
+	"github.com/tmc/go-iroh/key"
 )
 
 // Errors returned when parsing iroh DNS records.
@@ -44,27 +45,27 @@ func parseIrohAttr(s string) (irohAttr, bool) {
 // txtAttrs is the set of attributes parsed from "_iroh" TXT records: an endpoint
 // id plus a map from attribute key to its ordered values.
 type txtAttrs struct {
-	endpointId base.EndpointId
+	endpointId key.EndpointId
 	attrs      map[irohAttr][]string
 }
 
 // endpointIdFromTxtName parses an EndpointId from an iroh DNS name. The first
 // label must be "_iroh" and the second the z-base-32 endpoint id; later labels
 // are ignored.
-func endpointIdFromTxtName(name string) (base.EndpointId, error) {
+func endpointIdFromTxtName(name string) (key.EndpointId, error) {
 	labels := strings.Split(name, ".")
 	if len(labels) < 2 {
-		return base.EndpointId{}, fmt.Errorf("%w, received %d", ErrNumLabels, len(labels))
+		return key.EndpointId{}, fmt.Errorf("%w, received %d", ErrNumLabels, len(labels))
 	}
 	if labels[0] != IrohTxtName {
-		return base.EndpointId{}, fmt.Errorf("%w, got %q", ErrNotIrohRecord, labels[0])
+		return key.EndpointId{}, fmt.Errorf("%w, got %q", ErrNotIrohRecord, labels[0])
 	}
-	return base.PublicKeyFromZ32(labels[1])
+	return key.PublicKeyFromZ32(labels[1])
 }
 
 // txtAttrsFromStrings builds txtAttrs from an endpoint id and "key=value"
 // strings, preserving per-key value order.
-func txtAttrsFromStrings(id base.EndpointId, values []string) (*txtAttrs, error) {
+func txtAttrsFromStrings(id key.EndpointId, values []string) (*txtAttrs, error) {
 	attrs := map[irohAttr][]string{}
 	for _, s := range values {
 		key, value, ok := splitAttr(s)
@@ -118,7 +119,7 @@ func (a *txtAttrs) toTxtStrings() []string {
 	return out
 }
 
-func (a *txtAttrs) toPkarrSignedPacket(secretKey base.SecretKey, ttl uint32) (*pkarr.SignedPacket, error) {
+func (a *txtAttrs) toPkarrSignedPacket(secretKey key.SecretKey, ttl uint32) (*pkarr.SignedPacket, error) {
 	return pkarr.FromTxtStrings(secretKey, IrohTxtName, a.toTxtStrings(), ttl)
 }
 

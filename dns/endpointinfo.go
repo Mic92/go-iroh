@@ -7,6 +7,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/internal/pkarr"
+	"github.com/tmc/go-iroh/key"
 )
 
 // IrohTxtName is the DNS record name under which iroh TXT records are published.
@@ -153,22 +154,22 @@ func EndpointDataFromAddr(addr base.EndpointAddr) EndpointData {
 	return EndpointData{addrs: slices.Clone(addr.Addrs())}
 }
 
-// EndpointInfo couples an [base.EndpointId] with the [EndpointData] published
+// EndpointInfo couples an [key.EndpointId] with the [EndpointData] published
 // about it.
 type EndpointInfo struct {
 	// Id is the endpoint this information is about.
-	Id base.EndpointId
+	Id key.EndpointId
 	// Data is the addressing and metadata.
 	Data EndpointData
 }
 
 // NewEndpointInfo returns an EndpointInfo with empty data.
-func NewEndpointInfo(id base.EndpointId) EndpointInfo {
+func NewEndpointInfo(id key.EndpointId) EndpointInfo {
 	return EndpointInfo{Id: id}
 }
 
 // EndpointInfoFromParts returns an EndpointInfo from an id and data.
-func EndpointInfoFromParts(id base.EndpointId, data EndpointData) EndpointInfo {
+func EndpointInfoFromParts(id key.EndpointId, data EndpointData) EndpointInfo {
 	return EndpointInfo{Id: id, Data: data}
 }
 
@@ -216,7 +217,7 @@ func (e EndpointInfo) ToTxtStrings() []string {
 
 // ToPkarrSignedPacket builds a pkarr signed packet for this endpoint info,
 // signed with secretKey and using the given record TTL in seconds.
-func (e EndpointInfo) ToPkarrSignedPacket(secretKey base.SecretKey, ttl uint32) (*pkarr.SignedPacket, error) {
+func (e EndpointInfo) ToPkarrSignedPacket(secretKey key.SecretKey, ttl uint32) (*pkarr.SignedPacket, error) {
 	return e.toAttrs().toPkarrSignedPacket(secretKey, ttl)
 }
 

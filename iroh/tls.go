@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/tmc/go-iroh/base"
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
+	"github.com/tmc/go-iroh/key"
 )
 
 // alpn values and TLS parameters shared by iroh peers. iroh authenticates peers
@@ -33,25 +33,25 @@ const tlsNameSuffix = ".iroh.invalid"
 // ClientHello; the accepting endpoint proves it holds id by presenting id as
 // its raw public key. Deriving the name from the id (rather than a constant)
 // also keeps per-peer 0-RTT session tickets in separate cache buckets.
-func ServerName(id base.EndpointId) string {
+func ServerName(id key.EndpointId) string {
 	b := id.Bytes()
 	return base32DNSSEC.EncodeToString(b[:]) + tlsNameSuffix
 }
 
 // endpointIdFromServerName is the inverse of [ServerName]. It reports whether
 // name is a well-formed iroh server name and, if so, the encoded endpoint id.
-func endpointIdFromServerName(name string) (base.EndpointId, bool) {
+func endpointIdFromServerName(name string) (key.EndpointId, bool) {
 	rest, ok := strings.CutSuffix(name, tlsNameSuffix)
 	if !ok || strings.Contains(rest, ".") {
-		return base.EndpointId{}, false
+		return key.EndpointId{}, false
 	}
 	raw, err := base32DNSSEC.DecodeString(rest)
-	if err != nil || len(raw) != base.PublicKeyLength {
-		return base.EndpointId{}, false
+	if err != nil || len(raw) != key.PublicKeyLength {
+		return key.EndpointId{}, false
 	}
-	id, err := base.PublicKeyFromSlice(raw)
+	id, err := key.PublicKeyFromSlice(raw)
 	if err != nil {
-		return base.EndpointId{}, false
+		return key.EndpointId{}, false
 	}
 	return id, true
 }
@@ -59,7 +59,7 @@ func endpointIdFromServerName(name string) (base.EndpointId, bool) {
 // rawKeyCertificate builds the RFC 7250 certificate for sk: the leaf is sk's
 // ed25519 public key as a SubjectPublicKeyInfo, signed under sk during the
 // handshake.
-func rawKeyCertificate(sk base.SecretKey) (tls.Certificate, error) {
+func rawKeyCertificate(sk key.SecretKey) (tls.Certificate, error) {
 	seed := sk.Bytes()
 	priv := ed25519.NewKeyFromSeed(seed[:])
 	pub := priv.Public().(ed25519.PublicKey)
@@ -68,17 +68,17 @@ func rawKeyCertificate(sk base.SecretKey) (tls.Certificate, error) {
 
 // peerEndpointId extracts the peer's endpoint id from a completed raw-public-key
 // TLS handshake. It is the public key carried in the single peer certificate.
-func peerEndpointId(cs tls.ConnectionState) (base.EndpointId, error) {
+func peerEndpointId(cs tls.ConnectionState) (key.EndpointId, error) {
 	if len(cs.PeerCertificates) != 1 {
-		return base.EndpointId{}, fmt.Errorf("iroh: expected exactly one peer certificate, got %d", len(cs.PeerCertificates))
+		return key.EndpointId{}, fmt.Errorf("iroh: expected exactly one peer certificate, got %d", len(cs.PeerCertificates))
 	}
 	pub, ok := cs.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
 	if !ok {
-		return base.EndpointId{}, errors.New("iroh: peer key is not ed25519")
+		return key.EndpointId{}, errors.New("iroh: peer key is not ed25519")
 	}
-	id, err := base.PublicKeyFromSlice(pub)
+	id, err := key.PublicKeyFromSlice(pub)
 	if err != nil {
-		return base.EndpointId{}, fmt.Errorf("iroh: peer key: %w", err)
+		return key.EndpointId{}, fmt.Errorf("iroh: peer key: %w", err)
 	}
 	return id, nil
 }
@@ -94,7 +94,7 @@ func peerEndpointId(cs tls.ConnectionState) (base.EndpointId, error) {
 // of resumption (the connection then always performs a full handshake). This
 // mirrors the Rust client config, which enables early data and stores tickets
 // in a ClientSessionMemoryCache (iroh/src/tls.rs:86-87).
-func clientTLSConfig(sk base.SecretKey, want base.EndpointId, alpns []string, cache tls.ClientSessionCache) (*tls.Config, error) {
+func clientTLSConfig(sk key.SecretKey, want key.EndpointId, alpns []string, cache tls.ClientSessionCache) (*tls.Config, error) {
 	cert, err := rawKeyCertificate(sk)
 	if err != nil {
 		return nil, err
@@ -132,7 +132,7 @@ func clientTLSConfig(sk base.SecretKey, want base.EndpointId, alpns []string, ca
 // can later resume with for 0-RTT. The QUIC layer advertises max_early_data_size
 // = u32::MAX on those tickets when 0-RTT acceptance is enabled (RFC 9001 §4.6.1,
 // iroh/src/tls.rs:118); the iroh server opts in via [quic.Config.Allow0RTT].
-func serverTLSConfig(sk base.SecretKey, alpns []string) (*tls.Config, error) {
+func serverTLSConfig(sk key.SecretKey, alpns []string) (*tls.Config, error) {
 	cert, err := rawKeyCertificate(sk)
 	if err != nil {
 		return nil, err

@@ -7,12 +7,13 @@ import (
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/key"
 )
 
 // ExampleMemoryLookup resolves addressing information added out-of-band, such
 // as from an endpoint ticket.
 func ExampleMemoryLookup() {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 
 	lookup := iroh.NewMemoryLookup()
@@ -35,7 +36,7 @@ func ExampleMemoryLookup() {
 // ExampleAddressLookupServices combines several lookup services and resolves an
 // endpoint id across all of them, acting on the first usable result.
 func ExampleAddressLookupServices() {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	relay, _ := base.ParseRelayUrl("https://relay.example/")
 

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 func mustRelay(t *testing.T, s string) base.RelayUrl {
@@ -27,7 +28,7 @@ func TestTxtAttrRoundTrip(t *testing.T) {
 		base.RelayAddr{URL: mustRelay(t, "https://example.com")},
 		base.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 	).WithUserData(ud)
-	id, err := base.ParsePublicKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
+	id, err := key.ParsePublicKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +48,7 @@ func TestTxtAttrRoundTripCustomAddr(t *testing.T) {
 		bt,
 		tor,
 	)
-	id, err := base.ParsePublicKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
+	id, err := key.ParsePublicKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +59,7 @@ func TestTxtAttrRoundTripCustomAddr(t *testing.T) {
 
 // TestSignedPacketRoundTrip mirrors signed_packet_roundtrip.
 func TestSignedPacketRoundTrip(t *testing.T) {
-	sk, err := base.ParseSecretKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
+	sk, err := key.ParseSecretKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +82,7 @@ func TestSignedPacketRoundTrip(t *testing.T) {
 
 // TestSignedPacketRoundTripCustomAddr mirrors signed_packet_roundtrip_with_custom_addr.
 func TestSignedPacketRoundTripCustomAddr(t *testing.T) {
-	sk, err := base.ParseSecretKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
+	sk, err := key.ParseSecretKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +109,7 @@ func TestSignedPacketRoundTripCustomAddr(t *testing.T) {
 // TestFromTxtLookupMultiAddr mirrors test_from_hickory_lookup: more than one
 // addr record must be parsed, and records with the wrong name are excluded.
 func TestFromTxtLookupMultiAddr(t *testing.T) {
-	id, err := base.ParsePublicKey("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
+	id, err := key.ParsePublicKey("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,9 +188,9 @@ func TestUserDataTooLong(t *testing.T) {
 	}
 }
 
-func testID(t *testing.T) base.EndpointId {
+func testID(t *testing.T) key.EndpointId {
 	t.Helper()
-	id, err := base.ParsePublicKey("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
+	id, err := key.ParsePublicKey("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
 	if err != nil {
 		t.Fatal(err)
 	}

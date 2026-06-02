@@ -16,6 +16,7 @@ import (
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/qng/qlog"
 	"github.com/tmc/go-iroh/internal/socket"
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/relay"
 	"github.com/tmc/go-iroh/watch"
 )
@@ -25,7 +26,7 @@ import (
 //
 // An Endpoint is safe for concurrent use. Close it with [Endpoint.Close].
 type Endpoint struct {
-	secretKey base.SecretKey
+	secretKey key.SecretKey
 	alpns     [][]byte
 
 	udp          *net.UDPConn
@@ -44,8 +45,8 @@ type Endpoint struct {
 
 	// remotes is the per-remote state registry. The endpoint owns it: it
 	// registers every established connection so the actor for that remote can
-	// track paths and select between them (DESIGN.md §3.3). The actor never holds
-	// a reference back to the endpoint, so there is no import cycle.
+	// track paths and select between them. The actor never holds a reference
+	// back to the endpoint, so there is no import cycle.
 	remotes *socket.RemoteMap
 	lookup  *AddressLookupServices
 
@@ -62,7 +63,7 @@ type Endpoint struct {
 
 // config holds the options assembled by [Option] values before [Bind].
 type config struct {
-	secretKey       base.SecretKey
+	secretKey       key.SecretKey
 	haveKey         bool
 	alpns           [][]byte
 	bindAddr        netip.AddrPort
@@ -109,7 +110,7 @@ type QuicTransportConfig struct {
 
 // WithSecretKey sets the endpoint's identity. If unset, [Bind] generates a
 // random key.
-func WithSecretKey(sk base.SecretKey) Option {
+func WithSecretKey(sk key.SecretKey) Option {
 	return func(c *config) error {
 		c.secretKey = sk
 		c.haveKey = true
@@ -306,7 +307,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		c.netReportEvery = 5 * time.Minute
 	}
 	if !c.haveKey {
-		sk, err := base.GenerateSecretKey()
+		sk, err := key.GenerateSecretKey()
 		if err != nil {
 			return nil, fmt.Errorf("iroh: generate key: %w", err)
 		}
@@ -352,7 +353,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	// The QUIC transport is driven over the magic socket rather than the raw
 	// UDP socket: a single net.PacketConn that multiplexes every iroh path. The
 	// magic socket always carries the direct-IP transport and, when relays are
-	// configured, a relay transport (DESIGN.md §3).
+	// configured, a relay transport.
 	sock := socket.NewSocket()
 
 	var relayActor *socket.RelayActor
@@ -397,7 +398,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	// endpoint's address-lookup services (slice G), passed down as a func value
 	// so internal/socket does not import iroh.
 	ep.remotes = socket.NewRemoteMap(serveCtx, socket.BiasedRttPathSelector{}, ep.resolveFunc())
-	ep.magic.SetEndpointSender(func(id base.EndpointId, p []byte) bool {
+	ep.magic.SetEndpointSender(func(id key.EndpointId, p []byte) bool {
 		err := ep.remotes.Actor(id).SendDatagram(p, func(addr socket.Addr, data []byte) bool {
 			return ep.magic.SendAddr(addr, data)
 		})
@@ -512,10 +513,10 @@ func (e *Endpoint) SetALPNs(alpns [][]byte) error {
 }
 
 // ID returns the endpoint's identifier (its ed25519 public key).
-func (e *Endpoint) ID() base.EndpointId { return e.secretKey.Public() }
+func (e *Endpoint) ID() key.EndpointId { return e.secretKey.Public() }
 
 // SecretKey returns the endpoint's secret key.
-func (e *Endpoint) SecretKey() base.SecretKey { return e.secretKey }
+func (e *Endpoint) SecretKey() key.SecretKey { return e.secretKey }
 
 // LocalAddr returns the bound UDP address.
 func (e *Endpoint) LocalAddr() netip.AddrPort {
@@ -1066,7 +1067,7 @@ func (e *Endpoint) afterHandshake(ctx context.Context, conn *Conn) error {
 // available paths. Registration failures are non-fatal: the connection still
 // works; it just is not path-managed. It mirrors the Rust RemoteMap::add_connection
 // (iroh/src/socket/remote_map.rs:273).
-func (e *Endpoint) registerConn(remote base.EndpointId, qc *quic.Conn) {
+func (e *Endpoint) registerConn(remote key.EndpointId, qc *quic.Conn) {
 	if e.remotes == nil {
 		return
 	}
@@ -1115,7 +1116,7 @@ func (e *Endpoint) resolveFunc() socket.ResolveFunc {
 	if lookup == nil {
 		return nil
 	}
-	return func(ctx context.Context, id base.EndpointId) ([]base.TransportAddr, error) {
+	return func(ctx context.Context, id key.EndpointId) ([]base.TransportAddr, error) {
 		var addrs []base.TransportAddr
 		var lastErr error
 		for res := range lookup.Resolve(ctx, id) {

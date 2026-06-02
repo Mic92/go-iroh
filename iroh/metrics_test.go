@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 func TestEndpointMetrics(t *testing.T) {
@@ -14,7 +15,7 @@ func TestEndpointMetrics(t *testing.T) {
 	defer cancel()
 
 	const alpn = "iroh-metrics/0"
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx,
 		WithSecretKey(srvKey),
 		WithALPNs([]byte(alpn)),

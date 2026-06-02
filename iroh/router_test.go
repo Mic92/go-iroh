@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 // echoHandler is a ProtocolHandler that echoes one bidirectional stream back to
@@ -93,7 +94,7 @@ func TestRouterEcho(t *testing.T) {
 
 	const alpn = "iroh-router-echo/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -163,7 +164,7 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 
 	const alpn = "iroh-router-retry/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -234,7 +235,7 @@ func TestRouterUnsupportedALPN(t *testing.T) {
 
 	const goodALPN = "iroh-good/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -314,7 +315,7 @@ func TestRouterOnAccepting(t *testing.T) {
 
 	const alpn = "iroh-router-accepting/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {

@@ -12,7 +12,8 @@ Rust iroh. It is not affiliated with the n0 team.
 
 | Package | Purpose |
 |---|---|
-| `base` | endpoint IDs, keys, endpoint addresses, relay URLs |
+| `key` | endpoint IDs, Ed25519 keys, signatures |
+| `base` | endpoint addresses, transport addresses, relay URLs |
 | `dns` | pkarr TXT encoding and stdlib/DoH/DoT lookupers |
 | `relay` | public relay maps and relay configuration |
 | `watch` | small generic watch values |

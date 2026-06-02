@@ -8,6 +8,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	tls "github.com/tmc/go-iroh/internal/itls/tls"
+	"github.com/tmc/go-iroh/key"
 )
 
 // TestServerNameSnapshot pins the SNI encoding to iroh's golden vector
@@ -150,7 +151,7 @@ func TestTLSVerifyConnectionIdentityPolicy(t *testing.T) {
 // TestRawKeyCertificateMatchesKey checks the certificate's public key is the
 // endpoint id of the secret key.
 func TestRawKeyCertificateMatchesKey(t *testing.T) {
-	sk, err := base.GenerateSecretKey()
+	sk, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +169,7 @@ func TestRawKeyCertificateMatchesKey(t *testing.T) {
 	}
 }
 
-func checkRawKeyTLSConfig(t *testing.T, name string, cfg *tls.Config, sk base.SecretKey) {
+func checkRawKeyTLSConfig(t *testing.T, name string, cfg *tls.Config, sk key.SecretKey) {
 	t.Helper()
 	if !cfg.RawPublicKeys {
 		t.Errorf("%s RawPublicKeys = false", name)
@@ -212,7 +213,7 @@ func rawKeyCertificatePublicKey(t *testing.T, cert tls.Certificate) ed25519.Publ
 	return key
 }
 
-func connectionStateForKey(t *testing.T, sk base.SecretKey) tls.ConnectionState {
+func connectionStateForKey(t *testing.T, sk key.SecretKey) tls.ConnectionState {
 	t.Helper()
 	cert, err := rawKeyCertificate(sk)
 	if err != nil {

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/key"
 )
 
 // TestIrohTLSOverQUIC proves the iroh TLS configs work over the qng QUIC stack:
@@ -19,11 +19,11 @@ import (
 // other's true endpoint id. This is the connect/accept core the Endpoint builds
 // on, minus the connectivity (address resolution / relay / hole-punching).
 func TestIrohTLSOverQUIC(t *testing.T) {
-	serverKey, err := base.GenerateSecretKey()
+	serverKey, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientKey, err := base.GenerateSecretKey()
+	clientKey, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 	defer cancel()
 
 	type result struct {
-		peer base.EndpointId
+		peer key.EndpointId
 		err  error
 	}
 	serverDone := make(chan result, 1)
@@ -124,11 +124,11 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 }
 
 func TestIrohTLSOverQUICSelectsServerPreferredBinaryALPN(t *testing.T) {
-	serverKey, err := base.GenerateSecretKey()
+	serverKey, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientKey, err := base.GenerateSecretKey()
+	clientKey, err := key.GenerateSecretKey()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,9 +230,9 @@ func TestIrohTLSOverQUICSelectsServerPreferredBinaryALPN(t *testing.T) {
 // TestIrohTLSRejectsWrongServer ensures the SNI-derived server-identity check
 // fails the handshake when the dialer targets an id the server does not hold.
 func TestIrohTLSRejectsWrongServer(t *testing.T) {
-	serverKey, _ := base.GenerateSecretKey()
-	clientKey, _ := base.GenerateSecretKey()
-	wrong, _ := base.GenerateSecretKey() // an id the server does NOT have
+	serverKey, _ := key.GenerateSecretKey()
+	clientKey, _ := key.GenerateSecretKey()
+	wrong, _ := key.GenerateSecretKey() // an id the server does NOT have
 
 	const alpn = "iroh-test/0"
 	serverTLS, _ := serverTLSConfig(serverKey, []string{alpn})

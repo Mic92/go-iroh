@@ -15,6 +15,7 @@ import (
 	"github.com/tmc/go-iroh/base"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
+	"github.com/tmc/go-iroh/key"
 )
 
 // TestEndpointDirectEcho is the slice-B gate: two endpoints connect over a
@@ -26,7 +27,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 
 	const alpn = "iroh-echo/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -41,7 +42,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 	defer client.Close(ctx)
 
 	type srvResult struct {
-		peer base.EndpointId
+		peer key.EndpointId
 		mp   bool
 		err  error
 	}
@@ -145,7 +146,7 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 
 	const alpn = "iroh-accept-incoming/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -222,7 +223,7 @@ func TestEndpointSourceAddressValidationRetry(t *testing.T) {
 
 	const alpn = "iroh-retry/0"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	var retryCalls atomic.Int32
 	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs([]byte(alpn)),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
@@ -286,7 +287,7 @@ func TestEndpointBinaryALPN(t *testing.T) {
 
 	alpn := []byte{'i', 'r', 'o', 'h', '/', 0xff, 0x00, '/', '1'}
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -356,7 +357,7 @@ func TestEndpointNoAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ep.Close(ctx)
-	other, _ := base.GenerateSecretKey()
+	other, _ := key.GenerateSecretKey()
 	_, err = ep.Connect(ctx, base.NewEndpointAddr(other.Public()), []byte("x"))
 	if err != ErrNoAddress {
 		t.Errorf("Connect(no addr) err = %v, want ErrNoAddress", err)

@@ -9,13 +9,14 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/dns"
+	"github.com/tmc/go-iroh/key"
 )
 
 // TestMemoryLookupFromInfo checks the pre-populating constructor and the
 // EndpointInfo accessor on the resolved item.
 func TestMemoryLookupFromInfo(t *testing.T) {
-	skA, _ := base.GenerateSecretKey()
-	skB, _ := base.GenerateSecretKey()
+	skA, _ := key.GenerateSecretKey()
+	skB, _ := key.GenerateSecretKey()
 	idA, idB := skA.Public(), skB.Public()
 	relay := relayURL(t, "https://relay.example/")
 
@@ -24,7 +25,7 @@ func TestMemoryLookupFromInfo(t *testing.T) {
 
 	m := MemoryLookupFromInfo(infoA, infoB)
 
-	for _, id := range []base.EndpointId{idA, idB} {
+	for _, id := range []key.EndpointId{idA, idB} {
 		results := drain(m.Resolve(context.Background(), id))
 		if len(results) != 1 || results[0].Err != nil {
 			t.Fatalf("Resolve(%s) = %+v, want one success", id, results)
@@ -39,7 +40,7 @@ func TestMemoryLookupFromInfo(t *testing.T) {
 // TestMemoryLookupSetEndpointInfo verifies SetEndpointInfo replaces all stored
 // info and reports the previous entry.
 func TestMemoryLookupSetEndpointInfo(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	m := NewMemoryLookup()
 
@@ -75,7 +76,7 @@ func TestMemoryLookupSetEndpointInfo(t *testing.T) {
 // TestFilteredAddressLookupResolveAndInner verifies the Inner accessor and that
 // Resolve is delegated to the wrapped lookup unchanged.
 func TestFilteredAddressLookupResolveAndInner(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	relay := relayURL(t, "https://relay.example/")
 
@@ -149,7 +150,7 @@ func TestPkarrPublisherOptions(t *testing.T) {
 	srv := pkarrTestRelay(t)
 	defer srv.Close()
 
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	relay := relayURL(t, "https://relay.example/")
 	ip := netip.MustParseAddrPort("1.2.3.4:9999")
@@ -203,7 +204,7 @@ func TestPkarrPublisherOptions(t *testing.T) {
 // without error and that the publisher's Resolve and the resolver's Publish are
 // the documented no-ops.
 func TestN0PkarrConstructors(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 
 	pub, err := N0PkarrPublisher().Build(sk)
 	if err != nil {
@@ -262,7 +263,7 @@ func TestN0DnsAddressLookup(t *testing.T) {
 
 	// With an explicit resolver, resolution uses the configured origin. A canned
 	// TXT lookuper makes this deterministic.
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	info := dns.NewEndpointInfo(id).WithRelayURL(relayURL(t, "https://relay.example/"))
 	resolver := &dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}

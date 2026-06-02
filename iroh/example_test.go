@@ -8,6 +8,7 @@ import (
 
 	"github.com/tmc/go-iroh/base"
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/relay"
 )
 
@@ -73,7 +74,7 @@ func ExampleRouter() {
 	ctx := context.Background()
 	const alpn = "iroh/echo/1"
 
-	srvKey, _ := base.GenerateSecretKey()
+	srvKey, _ := key.GenerateSecretKey()
 	server, err := iroh.Bind(ctx, iroh.WithSecretKey(srvKey),
 		iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {

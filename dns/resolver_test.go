@@ -5,7 +5,7 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/tmc/go-iroh/base"
+	"github.com/tmc/go-iroh/key"
 )
 
 // fakeLookuper returns canned TXT values for the expected name.
@@ -23,7 +23,7 @@ func (f fakeLookuper) LookupTXT(_ context.Context, name string) ([]string, error
 }
 
 func TestLookupEndpointById(t *testing.T) {
-	sk, _ := base.GenerateSecretKey()
+	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	wantName := IrohTxtName + "." + id.Z32() + "." + N0DNSEndpointOriginProd
 	r := &Resolver{Lookuper: fakeLookuper{
