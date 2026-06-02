@@ -125,6 +125,9 @@ func (c *Conn) logShortHeaderPacketWithDatagramID(p shortHeaderPacket, ecn proto
 		for _, f := range p.Frames {
 			wire.LogFrame(c.logger, f.Frame, true)
 		}
+		if p.HasStreamFrame {
+			wire.LogFrame(c.logger, p.StreamFrame.Frame, true)
+		}
 		for _, f := range p.StreamFrames {
 			wire.LogFrame(c.logger, f.Frame, true)
 		}
@@ -133,6 +136,9 @@ func (c *Conn) logShortHeaderPacketWithDatagramID(p shortHeaderPacket, ecn proto
 	// tracing
 	if c.qlogger != nil {
 		numFrames := len(p.Frames) + len(p.StreamFrames)
+		if p.HasStreamFrame {
+			numFrames++
+		}
 		if p.Ack != nil {
 			numFrames++
 		}
@@ -142,6 +148,9 @@ func (c *Conn) logShortHeaderPacketWithDatagramID(p shortHeaderPacket, ecn proto
 		}
 		for _, f := range p.Frames {
 			fs = append(fs, toQlogFrame(f.Frame))
+		}
+		if p.HasStreamFrame {
+			fs = append(fs, toQlogFrame(p.StreamFrame.Frame))
 		}
 		for _, f := range p.StreamFrames {
 			fs = append(fs, toQlogFrame(f.Frame))

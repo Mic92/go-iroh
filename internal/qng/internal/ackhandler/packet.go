@@ -15,6 +15,8 @@ type packetWithPacketNumber struct {
 // A Packet is a packet
 type packet struct {
 	SendTime        monotime.Time
+	StreamFrame     StreamFrame
+	HasStreamFrame  bool
 	StreamFrames    []StreamFrame
 	Frames          []Frame
 	LargestAcked    protocol.PacketNumber // InvalidPacketNumber if the packet doesn't contain an ACK
@@ -39,7 +41,7 @@ func (p *packet) Outstanding() bool {
 }
 
 func (p *packet) IsAckEliciting() bool {
-	return len(p.StreamFrames) > 0 || len(p.Frames) > 0
+	return p.HasStreamFrame || len(p.StreamFrames) > 0 || len(p.Frames) > 0
 }
 
 var packetPool = sync.Pool{New: func() any { return &packet{} }}
@@ -47,6 +49,8 @@ var packetPool = sync.Pool{New: func() any { return &packet{} }}
 func getPacket() *packet {
 	p := packetPool.Get().(*packet)
 	p.StreamFrames = nil
+	p.StreamFrame = StreamFrame{}
+	p.HasStreamFrame = false
 	p.Frames = nil
 	p.LargestAcked = 0
 	p.Length = 0
@@ -64,5 +68,7 @@ func getPacket() *packet {
 func putPacket(p *packet) {
 	p.Frames = nil
 	p.StreamFrames = nil
+	p.StreamFrame = StreamFrame{}
+	p.HasStreamFrame = false
 	packetPool.Put(p)
 }

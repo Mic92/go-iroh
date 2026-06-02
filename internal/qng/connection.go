@@ -2123,6 +2123,49 @@ func (c *Conn) handleFrames(
 			}
 			wire.LogFrame(c.logger, datagramFrame, false)
 			handleErr = c.handleDatagramFrame(datagramFrame)
+		} else if frameType == wire.FrameTypeMaxData {
+			maximumData, l, err := wire.ParseMaxDataFrame(data)
+			if err != nil {
+				return false, false, nil, err
+			}
+			data = data[l:]
+
+			if log != nil || c.logger.Debug() {
+				frame := wire.MaxDataFrame{MaximumData: maximumData}
+				if log != nil {
+					frames = append(frames, toQlogFrame(&frame))
+				}
+				if !skipHandling {
+					wire.LogFrame(c.logger, &frame, false)
+				}
+			}
+			if skipHandling {
+				continue
+			}
+			if c.connFlowController.UpdateSendWindow(maximumData) {
+				c.streamsMap.OnConnectionSendWindowUpdated()
+				c.scheduleSending()
+			}
+		} else if frameType == wire.FrameTypeMaxStreamData {
+			id, maximumStreamData, l, err := wire.ParseMaxStreamDataFrame(data)
+			if err != nil {
+				return false, false, nil, err
+			}
+			data = data[l:]
+
+			if log != nil || c.logger.Debug() {
+				frame := wire.MaxStreamDataFrame{StreamID: id, MaximumStreamData: maximumStreamData}
+				if log != nil {
+					frames = append(frames, toQlogFrame(&frame))
+				}
+				if !skipHandling {
+					wire.LogFrame(c.logger, &frame, false)
+				}
+			}
+			if skipHandling {
+				continue
+			}
+			handleErr = c.streamsMap.HandleMaxStreamDataFrameFields(id, maximumStreamData)
 		} else {
 			frame, l, err := c.frameParser.ParseLessCommonFrame(frameType, data, c.version)
 			if err != nil {
@@ -2189,7 +2232,10 @@ func (c *Conn) handleFrame(
 	case *wire.ResetStreamFrame:
 		err = c.streamsMap.HandleResetStreamFrame(frame, rcvTime)
 	case *wire.MaxDataFrame:
-		c.connFlowController.UpdateSendWindow(frame.MaximumData)
+		if c.connFlowController.UpdateSendWindow(frame.MaximumData) {
+			c.streamsMap.OnConnectionSendWindowUpdated()
+			c.scheduleSending()
+		}
 	case *wire.MaxStreamDataFrame:
 		err = c.streamsMap.HandleMaxStreamDataFrame(frame)
 	case *wire.MaxStreamsFrame:
@@ -2578,12 +2624,12 @@ func (c *Conn) handlePathResponseFrame(f *wire.PathResponseFrame, source netip.A
 		if c.qntNegotiated() && c.pathManagerOutgoing.Load() == nil && c.qntAcceptsUnmatchedPathResponse(source) {
 			return nil
 		}
-		return c.handlePathResponseFrameClient(f)
+		return c.handlePathResponseFrameClient(f, source)
 	case protocol.PerspectiveServer:
 		if c.qntNegotiated() && c.pathManager == nil && c.qntAcceptsUnmatchedPathResponse(source) {
 			return nil
 		}
-		return c.handlePathResponseFrameServer(f)
+		return c.handlePathResponseFrameServer(f, source)
 	default:
 		panic("unreachable")
 	}
@@ -2597,9 +2643,12 @@ func (c *Conn) handleQNTPathResponseFrame(f *wire.PathResponseFrame, source neti
 	return false
 }
 
-func (c *Conn) handlePathResponseFrameClient(f *wire.PathResponseFrame) error {
+func (c *Conn) handlePathResponseFrameClient(f *wire.PathResponseFrame, source netip.AddrPort) error {
 	pm := c.pathManagerOutgoing.Load()
 	if pm == nil {
+		if c.pathResponseFromCurrentPeer(source) {
+			return nil
+		}
 		return &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
 			ErrorMessage: "unexpected PATH_RESPONSE frame",
@@ -2609,8 +2658,11 @@ func (c *Conn) handlePathResponseFrameClient(f *wire.PathResponseFrame) error {
 	return nil
 }
 
-func (c *Conn) handlePathResponseFrameServer(f *wire.PathResponseFrame) error {
+func (c *Conn) handlePathResponseFrameServer(f *wire.PathResponseFrame, source netip.AddrPort) error {
 	if c.pathManager == nil {
+		if c.pathResponseFromCurrentPeer(source) {
+			return nil
+		}
 		// since we didn't send PATH_CHALLENGEs yet, we don't expect PATH_RESPONSEs
 		return &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
@@ -2619,6 +2671,26 @@ func (c *Conn) handlePathResponseFrameServer(f *wire.PathResponseFrame) error {
 	}
 	c.pathManager.HandlePathResponseFrame(f)
 	return nil
+}
+
+func (c *Conn) pathResponseFromCurrentPeer(source netip.AddrPort) bool {
+	if !source.IsValid() || c.conn == nil {
+		return false
+	}
+	return addrPortEqual(c.RemoteAddr(), source)
+}
+
+func addrPortEqual(addr net.Addr, ap netip.AddrPort) bool {
+	if addr == nil || !ap.IsValid() {
+		return false
+	}
+	if a, ok := addr.(interface{ AddrPort() netip.AddrPort }); ok {
+		return a.AddrPort() == ap
+	}
+	if udp, ok := addr.(*net.UDPAddr); ok {
+		return udp.AddrPort() == ap
+	}
+	return false
 }
 
 func (c *Conn) handleNewTokenFrame(frame *wire.NewTokenFrame) error {
@@ -3276,7 +3348,7 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 	}
 
 	if offset := c.connFlowController.GetWindowUpdate(now); offset > 0 {
-		c.framer.QueueControlFrame(&wire.MaxDataFrame{MaximumData: offset})
+		c.framer.QueueMaxDataFrame(offset)
 	}
 	if cf := c.cryptoStreamManager.GetPostHandshakeData(protocol.MaxPostHandshakeCryptoFrameSize); cf != nil {
 		c.queueControlFrame(cf)
@@ -3516,7 +3588,7 @@ func (c *Conn) registerPackedShortHeaderPacket(p shortHeaderPacket, ecn protocol
 		)
 		return
 	}
-	if c.firstAckElicitingPacketAfterIdleSentTime.IsZero() && (len(p.StreamFrames) > 0 || ackhandler.HasAckElicitingFrames(p.Frames)) {
+	if c.firstAckElicitingPacketAfterIdleSentTime.IsZero() && p.IsAckEliciting() {
 		c.firstAckElicitingPacketAfterIdleSentTime = now
 	}
 
@@ -3539,6 +3611,20 @@ func (c *Conn) registerPackedShortHeaderPacket(p shortHeaderPacket, ecn protocol
 			p.Length,
 			p.IsPathMTUProbePacket,
 		)
+		return
+	}
+	if p.HasStreamFrame && len(p.StreamFrames) == 0 {
+		c.sentPacketHandler.SentPacketOneStream(
+			now,
+			p.PacketNumber,
+			largestAcked,
+			p.StreamFrame,
+			p.Frames,
+			ecn,
+			p.Length,
+			p.IsPathMTUProbePacket,
+		)
+		c.connIDManager.SentPacket()
 		return
 	}
 	c.sentPacketHandler.SentPacket(

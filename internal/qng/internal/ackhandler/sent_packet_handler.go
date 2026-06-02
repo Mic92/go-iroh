@@ -441,6 +441,58 @@ func (h *sentPacketHandler) SentPacket(
 	h.sentPacket(t, pn, largestAcked, protocol.PathIDZero, streamFrames, frames, encLevel, ecn, size, isPathMTUProbePacket, isPathProbePacket)
 }
 
+func (h *sentPacketHandler) SentPacketOneStream(
+	t monotime.Time,
+	pn, largestAcked protocol.PacketNumber,
+	streamFrame StreamFrame,
+	frames []Frame,
+	ecn protocol.ECN,
+	size protocol.ByteCount,
+	isPathMTUProbePacket bool,
+) {
+	h.bytesSent += size
+	h.connStats.BytesSent.Add(uint64(size))
+	h.connStats.PacketsSent.Add(1)
+
+	pnSpace := h.getAppDataPath(protocol.PathIDZero).space
+	if h.logger.Debug() && (pnSpace.history.HasOutstandingPackets() || pnSpace.history.HasOutstandingPathProbes()) {
+		for p := max(0, pnSpace.largestSent+1); p < pn; p++ {
+			h.logger.Debugf("Skipping packet number %d", p)
+		}
+	}
+	pnSpace.largestSent = pn
+
+	p := getPacket()
+	p.SendTime = t
+	p.EncryptionLevel = protocol.Encryption1RTT
+	p.Length = size
+	p.Frames = frames
+	p.LargestAcked = largestAcked
+	p.StreamFrame = streamFrame
+	p.HasStreamFrame = true
+	p.IsPathMTUProbePacket = isPathMTUProbePacket
+
+	isAckEliciting := p.IsAckEliciting()
+	pathData := h.getAppDataPath(protocol.PathIDZero)
+	if isAckEliciting {
+		pnSpace.lastAckElicitingPacketTime = t
+		pathData.bytesInFlight += size
+		p.includedInBytesInFlight = true
+		if pathData.numProbesToSend > 0 {
+			pathData.numProbesToSend--
+		}
+	}
+	pathData.congestion.OnPacketSent(t, h.totalBytesInFlight(), pn, size, isAckEliciting)
+	if pathData.ecnTracker != nil {
+		pathData.ecnTracker.SentPacket(pn, ecn)
+	}
+	pnSpace.history.SentPacket(pn, p)
+	if h.qlogger != nil {
+		h.qlogMetricsUpdated()
+	}
+	h.setLossDetectionTimer(t)
+}
+
 // SentPacketForPath records a 1-RTT packet sent on the application-data path
 // pid. It is the multipath counterpart of SentPacket: the packet number, the
 // bytes-in-flight, and the per-path send bookkeeping land on pid's own
@@ -941,6 +993,9 @@ func (h *sentPacketHandler) detectAndRemoveAckedPackets(
 			if f.Handler != nil {
 				f.Handler.OnAcked(f.Frame)
 			}
+		}
+		if p.HasStreamFrame && p.StreamFrame.Handler != nil {
+			p.StreamFrame.Handler.OnAcked(p.StreamFrame.Frame)
 		}
 		for _, f := range p.StreamFrames {
 			if f.Handler != nil {
@@ -1492,7 +1547,7 @@ func (h *sentPacketHandler) QueueProbePacket(encLevel protocol.EncryptionLevel) 
 }
 
 func (h *sentPacketHandler) queueFramesForRetransmission(p *packet) {
-	if len(p.Frames) == 0 && len(p.StreamFrames) == 0 {
+	if len(p.Frames) == 0 && !p.HasStreamFrame && len(p.StreamFrames) == 0 {
 		panic("no frames")
 	}
 	for _, f := range p.Frames {
@@ -1500,11 +1555,16 @@ func (h *sentPacketHandler) queueFramesForRetransmission(p *packet) {
 			f.Handler.OnLost(f.Frame)
 		}
 	}
+	if p.HasStreamFrame && p.StreamFrame.Handler != nil {
+		p.StreamFrame.Handler.OnLost(p.StreamFrame.Frame)
+	}
 	for _, f := range p.StreamFrames {
 		if f.Handler != nil {
 			f.Handler.OnLost(f.Frame)
 		}
 	}
+	p.StreamFrame = StreamFrame{}
+	p.HasStreamFrame = false
 	p.StreamFrames = nil
 	p.Frames = nil
 }

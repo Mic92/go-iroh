@@ -80,6 +80,32 @@ func TestReceivedPacketHandlerAppDataAckFrame(t *testing.T) {
 	}
 }
 
+func TestReceivedPacketHandlerAppDataAckDecimation(t *testing.T) {
+	h := newOracleReceivedHandler()
+	now := monotime.Now()
+
+	for pn := protocol.PacketNumber(0); pn < packetsBeforeAck-1; pn++ {
+		if err := h.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+			t.Fatalf("ReceivedPacket(%d): %v", pn, err)
+		}
+		if ack := h.GetAckFrame(protocol.Encryption1RTT, now, true); ack != nil {
+			t.Fatalf("ack queued after %d packets; want none before %d", pn+1, packetsBeforeAck)
+		}
+	}
+
+	pn := protocol.PacketNumber(packetsBeforeAck - 1)
+	if err := h.ReceivedPacket(pn, protocol.ECNNon, protocol.Encryption1RTT, now, true); err != nil {
+		t.Fatalf("ReceivedPacket(%d): %v", pn, err)
+	}
+	ack := h.GetAckFrame(protocol.Encryption1RTT, now, true)
+	if ack == nil {
+		t.Fatalf("ack not queued after %d packets", packetsBeforeAck)
+	}
+	if got := ack.LargestAcked(); got != pn {
+		t.Fatalf("largest acked = %d, want %d", got, pn)
+	}
+}
+
 // TestReceivedPacketHandlerInitialHandshakeUnchanged pins that the
 // Initial/Handshake spaces are independent from the appData space: an ACK frame
 // for one space does not surface packet numbers from another, and dropping a

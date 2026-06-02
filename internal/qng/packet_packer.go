@@ -37,10 +37,19 @@ type sealer interface {
 }
 
 type payload struct {
-	streamFrames []ackhandler.StreamFrame
-	frames       []ackhandler.Frame
-	ack          *wire.AckFrame
-	length       protocol.ByteCount
+	streamFrame    ackhandler.StreamFrame
+	hasStreamFrame bool
+	streamFrames   []ackhandler.StreamFrame
+	frames         []ackhandler.Frame
+	ack            *wire.AckFrame
+	length         protocol.ByteCount
+}
+
+func (p payload) numStreamFrames() int {
+	if p.hasStreamFrame {
+		return 1
+	}
+	return len(p.streamFrames)
 }
 
 type longHeaderPacket struct {
@@ -55,6 +64,8 @@ type longHeaderPacket struct {
 type shortHeaderPacket struct {
 	PacketNumber         protocol.PacketNumber
 	Frames               []ackhandler.Frame
+	StreamFrame          ackhandler.StreamFrame
+	HasStreamFrame       bool
 	StreamFrames         []ackhandler.StreamFrame
 	Ack                  *wire.AckFrame
 	Length               protocol.ByteCount
@@ -74,7 +85,9 @@ type shortHeaderPacket struct {
 	KeyPhase        protocol.KeyPhaseBit
 }
 
-func (p *shortHeaderPacket) IsAckEliciting() bool { return ackhandler.HasAckElicitingFrames(p.Frames) }
+func (p *shortHeaderPacket) IsAckEliciting() bool {
+	return p.HasStreamFrame || len(p.StreamFrames) > 0 || ackhandler.HasAckElicitingFrames(p.Frames)
+}
 
 type coalescedPacket struct {
 	buffer         *packetBuffer
@@ -122,7 +135,7 @@ type sealingManager interface {
 
 type frameSource interface {
 	HasData() bool
-	Append([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount, monotime.Time, protocol.Version) ([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount)
+	Append([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount, monotime.Time, protocol.Version) ([]ackhandler.Frame, ackhandler.StreamFrame, bool, []ackhandler.StreamFrame, protocol.ByteCount)
 }
 
 type ackFrameSource interface {
@@ -702,7 +715,7 @@ func (p *packetPacker) maybeGetAppDataPacket(
 	pl := p.composeNextPacket(maxPayloadSize, onlyAck, ackAllowed, now, v)
 
 	// check if we have anything to send
-	if len(pl.frames) == 0 && len(pl.streamFrames) == 0 {
+	if len(pl.frames) == 0 && pl.numStreamFrames() == 0 {
 		if pl.ack == nil {
 			return payload{}
 		}
@@ -786,7 +799,7 @@ func (p *packetPacker) composeNextPacket(
 	if hasData {
 		var lengthAdded protocol.ByteCount
 		startLen := len(pl.frames)
-		pl.frames, pl.streamFrames, lengthAdded = p.framer.Append(pl.frames, pl.streamFrames, maxPayloadSize-pl.length, now, v)
+		pl.frames, pl.streamFrame, pl.hasStreamFrame, pl.streamFrames, lengthAdded = p.framer.Append(pl.frames, pl.streamFrames, maxPayloadSize-pl.length, now, v)
 		pl.length += lengthAdded
 		// add handlers for the control frames that were added
 		for i := startLen; i < len(pl.frames); i++ {
@@ -1067,6 +1080,8 @@ func (p *packetPacker) appendShortHeaderPacket(
 		PacketNumberLen:      pnLen,
 		KeyPhase:             kp,
 		PathID:               pid,
+		StreamFrame:          pl.streamFrame,
+		HasStreamFrame:       pl.hasStreamFrame,
 		StreamFrames:         pl.streamFrames,
 		Frames:               pl.frames,
 		Ack:                  pl.ack,
@@ -1098,6 +1113,13 @@ func (p *packetPacker) appendPacketPayload(raw []byte, pl payload, paddingLen pr
 	for _, f := range pl.frames {
 		var err error
 		raw, err = f.Frame.Append(raw, v)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if pl.hasStreamFrame {
+		var err error
+		raw, err = pl.streamFrame.Frame.Append(raw, v)
 		if err != nil {
 			return nil, err
 		}

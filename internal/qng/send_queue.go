@@ -31,7 +31,8 @@ type sendQueue struct {
 
 var _ sender = &sendQueue{}
 
-const sendQueueCapacity = 8
+const sendQueueCapacity = 64
+const sendQueueInlinePacketSize = 256
 
 func newSendQueue(conn sendConn) sender {
 	return &sendQueue{
@@ -47,6 +48,12 @@ func newSendQueue(conn sendConn) sender {
 // Callers need to make sure that there's actually space in the send queue by calling WouldBlock.
 // Otherwise Send will panic.
 func (h *sendQueue) Send(p *packetBuffer, gsoSize uint16, ecn protocol.ECN) {
+	if gsoSize == 0 && len(p.Data) <= sendQueueInlinePacketSize && len(h.queue) == 0 {
+		if err := h.conn.Write(p.Data, gsoSize, ecn); err == nil || isSendMsgSizeErr(err) {
+			p.Release()
+			return
+		}
+	}
 	select {
 	case h.queue <- queueEntry{buf: p, gsoSize: gsoSize, ecn: ecn}:
 		// clear available channel if we've reached capacity

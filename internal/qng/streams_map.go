@@ -227,14 +227,18 @@ func (m *streamsMap) getSendStream(id protocol.StreamID) (sendStreamFrameHandler
 }
 
 func (m *streamsMap) HandleMaxStreamDataFrame(f *wire.MaxStreamDataFrame) error {
-	str, err := m.getSendStream(f.StreamID)
+	return m.HandleMaxStreamDataFrameFields(f.StreamID, f.MaximumStreamData)
+}
+
+func (m *streamsMap) HandleMaxStreamDataFrameFields(id protocol.StreamID, maximumStreamData protocol.ByteCount) error {
+	str, err := m.getSendStream(id)
 	if err != nil {
 		return err
 	}
 	if str == nil { // stream already deleted
 		return nil
 	}
-	str.updateSendWindow(f.MaximumStreamData)
+	str.updateSendWindow(maximumStreamData)
 	return nil
 }
 
@@ -325,6 +329,11 @@ func (m *streamsMap) HandleTransportParameters(p *wire.TransportParameters) {
 	m.outgoingBidiStreams.SetMaxStream(p.MaxBidiStreamNum.StreamID(protocol.StreamTypeBidi, m.perspective))
 	m.outgoingUniStreams.UpdateSendWindow(p.InitialMaxStreamDataUni)
 	m.outgoingUniStreams.SetMaxStream(p.MaxUniStreamNum.StreamID(protocol.StreamTypeUni, m.perspective))
+}
+
+func (m *streamsMap) OnConnectionSendWindowUpdated() {
+	m.outgoingBidiStreams.OnConnectionSendWindowUpdated()
+	m.outgoingUniStreams.OnConnectionSendWindowUpdated()
 }
 
 func (m *streamsMap) CloseWithError(err error) {

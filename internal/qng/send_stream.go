@@ -558,6 +558,15 @@ func (s *SendStream) updateSendWindow(limit protocol.ByteCount) {
 	}
 }
 
+func (s *SendStream) onConnectionSendWindowUpdated() {
+	s.mutex.Lock()
+	hasStreamData := s.dataForWriting != nil || s.nextFrame != nil
+	s.mutex.Unlock()
+	if hasStreamData {
+		s.sender.onHasStreamData(s.streamID, s)
+	}
+}
+
 func (s *SendStream) handleStopSendingFrame(f *wire.StopSendingFrame) {
 	s.mutex.Lock()
 	if s.shutdownErr != nil {

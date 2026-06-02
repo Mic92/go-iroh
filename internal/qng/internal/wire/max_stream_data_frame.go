@@ -12,22 +12,31 @@ type MaxStreamDataFrame struct {
 }
 
 func parseMaxStreamDataFrame(b []byte, _ protocol.Version) (*MaxStreamDataFrame, int, error) {
+	streamID, maximumStreamData, l, err := ParseMaxStreamDataFrame(b)
+	if err != nil {
+		return nil, 0, err
+	}
+	return &MaxStreamDataFrame{
+		StreamID:          streamID,
+		MaximumStreamData: maximumStreamData,
+	}, l, nil
+}
+
+// ParseMaxStreamDataFrame parses the payload of a MAX_STREAM_DATA frame.
+func ParseMaxStreamDataFrame(b []byte) (protocol.StreamID, protocol.ByteCount, int, error) {
 	startLen := len(b)
 	sid, l, err := quicvarint.Parse(b)
 	if err != nil {
-		return nil, 0, replaceUnexpectedEOF(err)
+		return 0, 0, 0, replaceUnexpectedEOF(err)
 	}
 	b = b[l:]
 	offset, l, err := quicvarint.Parse(b)
 	if err != nil {
-		return nil, 0, replaceUnexpectedEOF(err)
+		return 0, 0, 0, replaceUnexpectedEOF(err)
 	}
 	b = b[l:]
 
-	return &MaxStreamDataFrame{
-		StreamID:          protocol.StreamID(sid),
-		MaximumStreamData: protocol.ByteCount(offset),
-	}, startLen - len(b), nil
+	return protocol.StreamID(sid), protocol.ByteCount(offset), startLen - len(b), nil
 }
 
 func (f *MaxStreamDataFrame) Append(b []byte, _ protocol.Version) ([]byte, error) {

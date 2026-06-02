@@ -40,6 +40,8 @@ type framer struct {
 	controlFrameMutex          sync.Mutex
 	controlFrames              []wire.Frame
 	pathResponses              []*wire.PathResponseFrame
+	maxDataFrame               wire.MaxDataFrame
+	hasMaxDataFrame            bool
 	connFlowController         flowcontrol.ConnectionFlowController
 	queuedTooManyControlFrames bool
 }
@@ -86,18 +88,29 @@ func (f *framer) QueueControlFrame(frame wire.Frame) {
 	f.controlFrames = append(f.controlFrames, frame)
 }
 
+func (f *framer) QueueMaxDataFrame(offset protocol.ByteCount) {
+	f.controlFrameMutex.Lock()
+	if !f.hasMaxDataFrame || offset > f.maxDataFrame.MaximumData {
+		f.maxDataFrame.MaximumData = offset
+		f.hasMaxDataFrame = true
+	}
+	f.controlFrameMutex.Unlock()
+}
+
 func (f *framer) Append(
 	frames []ackhandler.Frame,
 	streamFrames []ackhandler.StreamFrame,
 	maxLen protocol.ByteCount,
 	now monotime.Time,
 	v protocol.Version,
-) ([]ackhandler.Frame, []ackhandler.StreamFrame, protocol.ByteCount) {
+) ([]ackhandler.Frame, ackhandler.StreamFrame, bool, []ackhandler.StreamFrame, protocol.ByteCount) {
 	f.controlFrameMutex.Lock()
 	frames, controlFrameLen := f.appendControlFrames(frames, maxLen, now, v)
 	maxLen -= controlFrameLen
 
 	var lastFrame ackhandler.StreamFrame
+	var singleFrame ackhandler.StreamFrame
+	var hasSingleFrame bool
 	var streamFrameLen protocol.ByteCount
 	f.mutex.Lock()
 	// pop STREAM frames, until less than 128 bytes are left in the packet
@@ -108,7 +121,17 @@ func (f *framer) Append(
 		}
 		sf, blocked := f.getNextStreamFrame(maxLen, v)
 		if sf.Frame != nil {
-			streamFrames = append(streamFrames, sf)
+			if !hasSingleFrame && len(streamFrames) == 0 {
+				singleFrame = sf
+				hasSingleFrame = true
+			} else {
+				if hasSingleFrame {
+					streamFrames = append(streamFrames, singleFrame)
+					singleFrame = ackhandler.StreamFrame{}
+					hasSingleFrame = false
+				}
+				streamFrames = append(streamFrames, sf)
+			}
 			maxLen -= sf.Frame.Length(v)
 			lastFrame = sf
 			streamFrameLen += sf.Frame.Length(v)
@@ -151,7 +174,7 @@ func (f *framer) Append(
 		streamFrameLen += lastFrame.Frame.Length(v)
 	}
 
-	return frames, streamFrames, controlFrameLen + streamFrameLen
+	return frames, singleFrame, hasSingleFrame, streamFrames, controlFrameLen + streamFrameLen
 }
 
 func (f *framer) appendControlFrames(
@@ -169,6 +192,15 @@ func (f *framer) appendControlFrames(
 			frames = append(frames, ackhandler.Frame{Frame: frame})
 			length += frameLen
 			f.pathResponses = f.pathResponses[1:]
+		}
+	}
+
+	if f.hasMaxDataFrame {
+		frameLen := f.maxDataFrame.Length(v)
+		if length+frameLen <= maxLen {
+			frames = append(frames, ackhandler.Frame{Frame: &f.maxDataFrame})
+			length += frameLen
+			f.hasMaxDataFrame = false
 		}
 	}
 

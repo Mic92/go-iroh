@@ -19,6 +19,9 @@ type sentPacketHistory struct {
 
 	firstPacketNumber   protocol.PacketNumber
 	highestPacketNumber protocol.PacketNumber
+
+	packetIterDepth     int
+	cleanupStartPending bool
 }
 
 func newSentPacketHistory(isAppData bool) *sentPacketHistory {
@@ -77,6 +80,14 @@ func (h *sentPacketHistory) Packets() iter.Seq2[protocol.PacketNumber, *packet] 
 		// h.firstPacketNumber might be updated in the yield function,
 		// so we need to save it here.
 		firstPacketNumber := h.firstPacketNumber
+		h.packetIterDepth++
+		defer func() {
+			h.packetIterDepth--
+			if h.packetIterDepth == 0 && h.cleanupStartPending {
+				h.cleanupStartPending = false
+				h.cleanupStart()
+			}
+		}()
 		for i, p := range h.packets {
 			if p == nil {
 				continue
@@ -164,7 +175,7 @@ func (h *sentPacketHistory) Remove(pn protocol.PacketNumber) error {
 	if !hasPacketBefore {
 		h.cleanupStart()
 	}
-	if len(h.packets) > 0 && h.packets[0] == nil {
+	if h.packetIterDepth == 0 && len(h.packets) > 0 && h.packets[0] == nil {
 		panic("cleanup failed")
 	}
 	return nil
@@ -216,13 +227,20 @@ func (h *sentPacketHistory) HasOutstandingPathProbes() bool {
 
 // delete all nil entries at the beginning of the packets slice
 func (h *sentPacketHistory) cleanupStart() {
+	if h.packetIterDepth > 0 {
+		h.cleanupStartPending = true
+		return
+	}
 	for i, p := range h.packets {
 		if p != nil {
-			h.packets = h.packets[i:]
+			copy(h.packets, h.packets[i:])
+			clear(h.packets[len(h.packets)-i:])
+			h.packets = h.packets[:len(h.packets)-i]
 			h.firstPacketNumber += protocol.PacketNumber(i)
 			return
 		}
 	}
+	clear(h.packets)
 	h.packets = h.packets[:0]
 	h.firstPacketNumber = protocol.InvalidPacketNumber
 }

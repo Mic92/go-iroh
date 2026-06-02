@@ -3,6 +3,7 @@ package quic
 import (
 	"crypto/rand"
 	"net"
+	"net/netip"
 	"slices"
 	"time"
 
@@ -196,6 +197,11 @@ func (pm *pathManagerAckHandler) OnLost(f wire.Frame) {
 func addrsEqual(addr1, addr2 net.Addr) bool {
 	if addr1 == nil || addr2 == nil {
 		return false
+	}
+	ap1, ok1 := addr1.(interface{ AddrPort() netip.AddrPort })
+	ap2, ok2 := addr2.(interface{ AddrPort() netip.AddrPort })
+	if ok1 && ok2 {
+		return ap1.AddrPort() == ap2.AddrPort()
 	}
 	a1, ok1 := addr1.(*net.UDPAddr)
 	a2, ok2 := addr2.(*net.UDPAddr)

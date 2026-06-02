@@ -181,6 +181,10 @@ func (s *Stream) updateSendWindow(limit protocol.ByteCount) {
 	s.sendStr.updateSendWindow(limit)
 }
 
+func (s *Stream) onConnectionSendWindowUpdated() {
+	s.sendStr.onConnectionSendWindowUpdated()
+}
+
 func (s *Stream) enableResetStreamAt() {
 	s.sendStr.enableResetStreamAt()
 }

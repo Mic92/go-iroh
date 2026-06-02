@@ -12,6 +12,9 @@ import (
 type SentPacketHandler interface {
 	// SentPacket may modify the packet
 	SentPacket(t monotime.Time, pn, largestAcked protocol.PacketNumber, streamFrames []StreamFrame, frames []Frame, encLevel protocol.EncryptionLevel, ecn protocol.ECN, size protocol.ByteCount, isPathMTUProbePacket, isPathProbePacket bool)
+	// SentPacketOneStream records the common 1-RTT packet containing one
+	// STREAM frame without allocating a one-element slice.
+	SentPacketOneStream(t monotime.Time, pn, largestAcked protocol.PacketNumber, streamFrame StreamFrame, frames []Frame, ecn protocol.ECN, size protocol.ByteCount, isPathMTUProbePacket bool)
 	// SentPacketForPath records a 1-RTT packet sent on the application-data
 	// path pid (multipath). The bytes-in-flight, packet-number bookkeeping, and
 	// congestion accounting land on pid's own appDataPath. For PathIDZero it is
