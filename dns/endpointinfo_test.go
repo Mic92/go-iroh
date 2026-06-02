@@ -165,6 +165,18 @@ func TestTxtStringsGolden(t *testing.T) {
 	}
 }
 
+func TestEndpointDataAddrsReturnsCopy(t *testing.T) {
+	ip1 := netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")}
+	ip2 := netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:2")}
+	data := NewEndpointData(ip1)
+	addrs := data.Addrs()
+	addrs[0] = ip2
+	got := data.Addrs()
+	if len(got) != 1 || got[0].Compare(ip1) != 0 {
+		t.Fatalf("Addrs exposed internal slice: %v", got)
+	}
+}
+
 func TestTxtAttrsSplitLikeRust(t *testing.T) {
 	id := testID(t)
 	name := "_iroh." + id.Z32() + ".dns.iroh.link."

@@ -111,8 +111,8 @@ func (d *EndpointData) ClearRelayURLs() {
 	})
 }
 
-// Addrs returns the ordered transport addresses. The result must not be mutated.
-func (d EndpointData) Addrs() []netaddr.TransportAddr { return d.addrs }
+// Addrs returns the ordered transport addresses.
+func (d EndpointData) Addrs() []netaddr.TransportAddr { return slices.Clone(d.addrs) }
 
 // RelayURLs returns the relay URLs in order.
 func (d EndpointData) RelayURLs() []netaddr.RelayURL {
