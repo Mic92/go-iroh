@@ -57,39 +57,9 @@ func newConn(qc *quic.Conn, remoteID key.EndpointID, alpn string, side Side, sta
 	return &Conn{qc: qc, remoteID: remoteID, alpn: alpn, side: side, stableID: stableID}, nil
 }
 
-// ConnectOptions configures [Endpoint.ConnectWith]. It is reserved for future
-// pre-handshake controls; the zero value uses the same behavior as [Endpoint.Connect].
-type ConnectOptions struct{}
-
-// Connecting is a dialed connection handle returned by [Endpoint.ConnectWith].
-// In this build it wraps the qng DialEarly connection returned by [Endpoint.Connect].
-type Connecting struct {
-	conn *Conn
-}
-
 // ServerConfig is reserved for per-connection server TLS options in
 // [Incoming.AcceptWith]. The zero value uses the endpoint listener config.
 type ServerConfig struct{}
-
-// ALPN returns the negotiated ALPN protocol.
-func (c *Connecting) ALPN(context.Context) (string, error) {
-	return c.conn.ALPN(), nil
-}
-
-// RemoteID returns the target endpoint id.
-func (c *Connecting) RemoteID() key.EndpointID {
-	return c.conn.RemoteID()
-}
-
-// EarlyConnection returns the connection and whether 0-RTT was accepted.
-func (c *Connecting) EarlyConnection() (*Conn, bool) {
-	return c.conn, c.conn.Used0RTT()
-}
-
-// Connection returns the established connection.
-func (c *Connecting) Connection(context.Context) (*Conn, error) {
-	return c.conn, nil
-}
 
 // IncomingAddr is the transport address of an incoming connection attempt.
 type IncomingAddr struct {

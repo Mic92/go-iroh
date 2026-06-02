@@ -942,18 +942,6 @@ func (e *Endpoint) Dial(ctx context.Context, addr netaddr.EndpointAddr, alpn str
 	return stream, nil
 }
 
-// ConnectWith dials addr and returns a [Connecting] handle. The current
-// implementation uses the same DialEarly path as [Endpoint.Connect]; future
-// options can expose more pre-handshake controls without changing callers.
-func (e *Endpoint) ConnectWith(ctx context.Context, addr netaddr.EndpointAddr, alpn string, opts ConnectOptions) (*Connecting, error) {
-	_ = opts
-	conn, err := e.Connect(ctx, addr, alpn)
-	if err != nil {
-		return nil, err
-	}
-	return &Connecting{conn: conn}, nil
-}
-
 // dialTargets returns the ordered net.Addr dial targets for addr: real UDP
 // addresses for direct IPs, then relay mapped addresses (when relays are
 // enabled) for each relay URL. Each relay target is registered in the
