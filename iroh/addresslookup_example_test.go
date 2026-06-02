@@ -41,7 +41,10 @@ func ExampleAddressLookupServices() {
 	relay, _ := netaddr.ParseRelayURL("https://relay.example/")
 
 	mem := iroh.NewMemoryLookup()
-	mem.AddEndpointInfo(dns.NewEndpointInfo(id).WithRelayURL(relay))
+	mem.AddEndpointInfo(dns.EndpointInfo{
+		ID:   id,
+		Data: dns.NewEndpointData(netaddr.RelayAddr{URL: relay}),
+	})
 
 	var services iroh.AddressLookupServices
 	services.Add(mem)

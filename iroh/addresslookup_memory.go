@@ -96,7 +96,7 @@ func (m *MemoryLookup) GetEndpointInfo(id key.EndpointID) (dns.EndpointInfo, boo
 	if !ok {
 		return dns.EndpointInfo{}, false
 	}
-	return dns.EndpointInfoFromParts(id, info.data), true
+	return dns.EndpointInfo{ID: id, Data: info.data}, true
 }
 
 // RemoveEndpointInfo removes and returns the info for id, and whether it
@@ -109,7 +109,7 @@ func (m *MemoryLookup) RemoveEndpointInfo(id key.EndpointID) (dns.EndpointInfo, 
 		return dns.EndpointInfo{}, false
 	}
 	delete(m.endpoints, id)
-	return dns.EndpointInfoFromParts(id, info.data), true
+	return dns.EndpointInfo{ID: id, Data: info.data}, true
 }
 
 // Publish is a no-op: a MemoryLookup is populated through its own methods.
@@ -124,7 +124,7 @@ func (m *MemoryLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Re
 		return nil
 	}
 	lastUpdated := uint64(info.lastUpdated.UnixMicro())
-	item := NewItem(dns.EndpointInfoFromParts(id, info.data), m.provenance, &lastUpdated)
+	item := NewItem(dns.EndpointInfo{ID: id, Data: info.data}, m.provenance, &lastUpdated)
 	out := make(chan Result, 1)
 	out <- Result{Item: item}
 	close(out)

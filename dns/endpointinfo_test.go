@@ -32,7 +32,7 @@ func TestTxtAttrRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := EndpointInfoFromParts(id, data)
+	want := EndpointInfo{ID: id, Data: data}
 	attrs := want.toAttrs()
 	got := endpointInfoFromAttrs(attrs)
 	assertEndpointInfoEqual(t, got, want)
@@ -52,7 +52,7 @@ func TestTxtAttrRoundTripCustomAddr(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := EndpointInfoFromParts(id, data)
+	want := EndpointInfo{ID: id, Data: data}
 	got := endpointInfoFromAttrs(want.toAttrs())
 	assertEndpointInfoEqual(t, got, want)
 }
@@ -68,7 +68,7 @@ func TestSignedPacketRoundTrip(t *testing.T) {
 		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com")},
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 	).WithUserData(ud)
-	want := EndpointInfoFromParts(sk.Public(), data)
+	want := EndpointInfo{ID: sk.Public(), Data: data}
 	packet, err := want.ToPkarrSignedPacket(sk, 30)
 	if err != nil {
 		t.Fatalf("ToPkarrSignedPacket: %v", err)
@@ -94,7 +94,7 @@ func TestSignedPacketRoundTripCustomAddr(t *testing.T) {
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 		bt, tor,
 	).WithUserData(ud)
-	want := EndpointInfoFromParts(sk.Public(), data)
+	want := EndpointInfo{ID: sk.Public(), Data: data}
 	packet, err := want.ToPkarrSignedPacket(sk, 30)
 	if err != nil {
 		t.Fatal(err)
@@ -123,22 +123,21 @@ func TestFromTxtLookupMultiAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EndpointInfoFromTxtLookup: %v", err)
 	}
-	want := NewEndpointInfo(id).
-		WithRelayURL(mustRelay(t, "https://euw1-1.relay.iroh.network./")).
-		WithIPAddrs(
-			netip.MustParseAddrPort("192.168.96.145:60165"),
-			netip.MustParseAddrPort("213.208.157.87:60165"),
-		)
+	want := EndpointInfo{ID: id, Data: NewEndpointData(
+		netaddr.RelayAddr{URL: mustRelay(t, "https://euw1-1.relay.iroh.network./")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("192.168.96.145:60165")},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("213.208.157.87:60165")},
+	)}
 	assertEndpointInfoEqual(t, got, want)
 }
 
 func TestTxtStringsOrder(t *testing.T) {
 	// Reference BTreeMap order is relay, addr, user-data (enum order), not lexical.
 	ud, _ := NewUserData("x")
-	info := EndpointInfoFromParts(testID(t), NewEndpointData(
+	info := EndpointInfo{ID: testID(t), Data: NewEndpointData(
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")},
 		netaddr.RelayAddr{URL: mustRelay(t, "https://r.example.com")},
-	).WithUserData(ud))
+	).WithUserData(ud)}
 	got := info.ToTxtStrings()
 	// relay first, then addr, then user-data.
 	if len(got) != 3 || got[0][:6] != "relay=" || got[1][:5] != "addr=" || got[2][:10] != "user-data=" {
@@ -148,11 +147,11 @@ func TestTxtStringsOrder(t *testing.T) {
 
 func TestTxtStringsGolden(t *testing.T) {
 	ud, _ := NewUserData("foobar")
-	info := EndpointInfoFromParts(testID(t), NewEndpointData(
+	info := EndpointInfo{ID: testID(t), Data: NewEndpointData(
 		netaddr.RelayAddr{URL: mustRelay(t, "https://example.com/")},
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 		netaddr.NewCustomAddr(1, []byte{0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6}),
-	).WithUserData(ud))
+	).WithUserData(ud)}
 	got := info.ToTxtStrings()
 	want := []string{
 		"relay=https://example.com/",
@@ -184,8 +183,8 @@ func TestTxtAttrsSplitLikeRust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EndpointInfoFromTxtLookup: %v", err)
 	}
-	if got.UserData() == nil || got.UserData().String() != "a" {
-		t.Fatalf("UserData = %v, want a", got.UserData())
+	if got.Data.UserData() == nil || got.Data.UserData().String() != "a" {
+		t.Fatalf("UserData = %v, want a", got.Data.UserData())
 	}
 }
 
@@ -225,7 +224,7 @@ func assertEndpointInfoEqual(t *testing.T, got, want EndpointInfo) {
 	if !slices.Equal(gs, ws) {
 		t.Errorf("addrs mismatch: %v != %v", gs, ws)
 	}
-	gu, wu := got.UserData(), want.UserData()
+	gu, wu := got.Data.UserData(), want.Data.UserData()
 	switch {
 	case gu == nil && wu == nil:
 	case gu == nil || wu == nil:

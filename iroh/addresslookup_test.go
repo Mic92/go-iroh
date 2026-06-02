@@ -35,6 +35,30 @@ func relayURL(t *testing.T, s string) netaddr.RelayURL {
 	return u
 }
 
+func endpointInfoWithRelay(id key.EndpointID, relay netaddr.RelayURL) dns.EndpointInfo {
+	return dns.EndpointInfo{
+		ID:   id,
+		Data: dns.NewEndpointData(netaddr.RelayAddr{URL: relay}),
+	}
+}
+
+func endpointInfoWithIP(id key.EndpointID, ip netip.AddrPort) dns.EndpointInfo {
+	return dns.EndpointInfo{
+		ID:   id,
+		Data: dns.NewEndpointData(netaddr.IPAddr{Addr: ip}),
+	}
+}
+
+func endpointInfoWithRelayAndIP(id key.EndpointID, relay netaddr.RelayURL, ip netip.AddrPort) dns.EndpointInfo {
+	return dns.EndpointInfo{
+		ID: id,
+		Data: dns.NewEndpointData(
+			netaddr.RelayAddr{URL: relay},
+			netaddr.IPAddr{Addr: ip},
+		),
+	}
+}
+
 func TestMemoryLookup(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
@@ -54,8 +78,8 @@ func TestMemoryLookup(t *testing.T) {
 	if !ok {
 		t.Fatal("expected stored info")
 	}
-	if len(got.RelayURLs()) != 1 {
-		t.Fatalf("RelayURLs = %v, want one", got.RelayURLs())
+	if len(got.Data.RelayURLs()) != 1 {
+		t.Fatalf("RelayURLs = %v, want one", got.Data.RelayURLs())
 	}
 
 	results := drain(m.Resolve(context.Background(), id))
@@ -87,8 +111,8 @@ func TestMemoryLookupAddMerges(t *testing.T) {
 	m.AddEndpointAddr(netaddr.NewEndpointAddr(id).WithIP(netip.MustParseAddrPort("5.6.7.8:2")))
 
 	got, _ := m.GetEndpointInfo(id)
-	if len(got.IPAddrs()) != 2 {
-		t.Fatalf("IPAddrs = %v, want two after merge", got.IPAddrs())
+	if len(got.Data.IPAddrs()) != 2 {
+		t.Fatalf("IPAddrs = %v, want two after merge", got.Data.IPAddrs())
 	}
 	results := drain(m.Resolve(context.Background(), id))
 	if results[0].Item.Provenance() != "custom" {
@@ -101,7 +125,10 @@ func TestDNSTxtRoundTrip(t *testing.T) {
 	id := sk.Public()
 	relay := relayURL(t, "https://relay.example/")
 
-	info := dns.NewEndpointInfo(id).WithRelayURL(relay).WithIPAddrs(netip.MustParseAddrPort("9.9.9.9:1234"))
+	info := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(
+		netaddr.RelayAddr{URL: relay},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("9.9.9.9:1234")},
+	)}
 	values := info.ToTxtStrings()
 
 	name := dns.IrohTxtName + "." + id.Z32() + "." + dns.N0DNSEndpointOriginProd
@@ -112,11 +139,11 @@ func TestDNSTxtRoundTrip(t *testing.T) {
 	if !back.ID.Equal(id) {
 		t.Errorf("id = %s, want %s", back.ID, id)
 	}
-	if len(back.RelayURLs()) != 1 || !back.RelayURLs()[0].Equal(relay) {
-		t.Errorf("RelayURLs = %v", back.RelayURLs())
+	if len(back.Data.RelayURLs()) != 1 || !back.Data.RelayURLs()[0].Equal(relay) {
+		t.Errorf("RelayURLs = %v", back.Data.RelayURLs())
 	}
-	if len(back.IPAddrs()) != 1 {
-		t.Errorf("IPAddrs = %v", back.IPAddrs())
+	if len(back.Data.IPAddrs()) != 1 {
+		t.Errorf("IPAddrs = %v", back.Data.IPAddrs())
 	}
 }
 
@@ -133,7 +160,9 @@ func (f *fakeTxtLookuper) LookupTXT(_ context.Context, _ string) ([]string, erro
 func TestDNSAddressLookupResolve(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
-	info := dns.NewEndpointInfo(id).WithRelayURL(relayURL(t, "https://relay.example/"))
+	info := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(
+		netaddr.RelayAddr{URL: relayURL(t, "https://relay.example/")},
+	)}
 
 	resolver := &dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}
 	lookup := NewDNSAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
@@ -315,7 +344,9 @@ func TestServicesNoServiceConfigured(t *testing.T) {
 func TestServicesSucceedsAfterOtherErrors(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
-	info := dns.NewEndpointInfo(id).WithRelayURL(relayURL(t, "https://relay.example/"))
+	info := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(
+		netaddr.RelayAddr{URL: relayURL(t, "https://relay.example/")},
+	)}
 
 	var svcs AddressLookupServices
 	svcs.Add(staticLookup{provenance: "fail", err: errors.New("boom"), delay: 10 * time.Millisecond})

@@ -355,7 +355,7 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	ip := netip.MustParseAddrPort("1.2.3.4:1234")
 
 	mem := NewMemoryLookup()
-	mem.AddEndpointInfo(dns.NewEndpointInfo(id).WithIPAddrs(ip))
+	mem.AddEndpointInfo(endpointInfoWithIP(id, ip))
 	var svcs AddressLookupServices
 	svcs.Add(mem)
 
@@ -388,7 +388,7 @@ func TestEndpointWithDNSResolver(t *testing.T) {
 	ctx := context.Background()
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
-	info := dns.NewEndpointInfo(id).WithIPAddrs(netip.MustParseAddrPort("127.0.0.1:1234"))
+	info := endpointInfoWithIP(id, netip.MustParseAddrPort("127.0.0.1:1234"))
 
 	ep, err := Bind(ctx, WithDNSResolver(&dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}))
 	if err != nil {

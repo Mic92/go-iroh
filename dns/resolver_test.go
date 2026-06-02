@@ -38,10 +38,10 @@ func TestLookupEndpointByID(t *testing.T) {
 	if !info.ID.Equal(id) {
 		t.Errorf("id = %s, want %s", info.ID, id)
 	}
-	if got := info.IPAddrs(); len(got) != 1 || got[0] != netip.MustParseAddrPort("127.0.0.1:1234") {
+	if got := info.Data.IPAddrs(); len(got) != 1 || got[0] != netip.MustParseAddrPort("127.0.0.1:1234") {
 		t.Errorf("IPAddrs = %v", got)
 	}
-	if got := info.RelayURLs(); len(got) != 1 {
+	if got := info.Data.RelayURLs(); len(got) != 1 {
 		t.Errorf("RelayURLs = %v", got)
 	}
 }

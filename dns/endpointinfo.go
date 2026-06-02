@@ -165,68 +165,15 @@ type EndpointInfo struct {
 	Data EndpointData
 }
 
-// NewEndpointInfo returns an EndpointInfo with empty data.
-//
-// Deprecated: use EndpointInfo{ID: id}.
-func NewEndpointInfo(id key.EndpointID) EndpointInfo {
-	return EndpointInfo{ID: id}
-}
-
-// EndpointInfoFromParts returns an EndpointInfo from an id and data.
-//
-// Deprecated: use EndpointInfo{ID: id, Data: data}.
-func EndpointInfoFromParts(id key.EndpointID, data EndpointData) EndpointInfo {
-	return EndpointInfo{ID: id, Data: data}
-}
-
 // EndpointInfoFromAddr converts an [netaddr.EndpointAddr] into an EndpointInfo.
 func EndpointInfoFromAddr(addr netaddr.EndpointAddr) EndpointInfo {
 	return EndpointInfo{ID: addr.ID, Data: EndpointDataFromAddr(addr)}
-}
-
-// WithRelayURL adds the relay URL and returns the updated info.
-//
-// Deprecated: use [EndpointData.AddRelayURL] on [EndpointInfo.Data].
-func (e EndpointInfo) WithRelayURL(u netaddr.RelayURL) EndpointInfo {
-	e.Data.AddRelayURL(u)
-	return e
-}
-
-// WithIPAddrs adds the IP addresses and returns the updated info.
-//
-// Deprecated: use [EndpointData.AddIPAddrs] on [EndpointInfo.Data].
-func (e EndpointInfo) WithIPAddrs(addrs ...netip.AddrPort) EndpointInfo {
-	e.Data.AddIPAddrs(addrs...)
-	return e
-}
-
-// WithUserData sets the user data and returns the updated info.
-//
-// Deprecated: use [EndpointData.SetUserData] on [EndpointInfo.Data].
-func (e EndpointInfo) WithUserData(u *UserData) EndpointInfo {
-	e.Data.SetUserData(u)
-	return e
 }
 
 // Addr converts the info into an [netaddr.EndpointAddr].
 func (e EndpointInfo) Addr() netaddr.EndpointAddr {
 	return netaddr.NewEndpointAddr(e.ID, e.Data.addrs...)
 }
-
-// RelayURLs returns the endpoint's relay URLs.
-//
-// Deprecated: use e.Data.RelayURLs.
-func (e EndpointInfo) RelayURLs() []netaddr.RelayURL { return e.Data.RelayURLs() }
-
-// IPAddrs returns the endpoint's direct IP addresses.
-//
-// Deprecated: use e.Data.IPAddrs.
-func (e EndpointInfo) IPAddrs() []netip.AddrPort { return e.Data.IPAddrs() }
-
-// UserData returns the endpoint's user data, or nil.
-//
-// Deprecated: use e.Data.UserData.
-func (e EndpointInfo) UserData() *UserData { return e.Data.UserData() }
 
 // ToTxtStrings renders the endpoint info as "key=value" TXT record strings.
 func (e EndpointInfo) ToTxtStrings() []string {

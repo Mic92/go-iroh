@@ -134,7 +134,7 @@ func N0PkarrPublisher(secretKey key.SecretKey, cfg *PkarrPublisherConfig) (*Pkar
 // background.
 func (p *PkarrPublisher) Publish(data dns.EndpointData) {
 	filtered := applyFilter(data, p.addrFilter)
-	info := dns.EndpointInfoFromParts(p.endpointID, filtered)
+	info := dns.EndpointInfo{ID: p.endpointID, Data: filtered}
 	p.value.Set(&info)
 }
 

@@ -20,8 +20,8 @@ func TestMemoryLookupFromInfo(t *testing.T) {
 	idA, idB := skA.Public(), skB.Public()
 	relay := relayURL(t, "https://relay.example/")
 
-	infoA := dns.NewEndpointInfo(idA).WithRelayURL(relay)
-	infoB := dns.NewEndpointInfo(idB).WithIPAddrs(netip.MustParseAddrPort("1.2.3.4:1"))
+	infoA := dns.EndpointInfo{ID: idA, Data: dns.NewEndpointData(netaddr.RelayAddr{URL: relay})}
+	infoB := dns.EndpointInfo{ID: idB, Data: dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")})}
 
 	m := MemoryLookupFromInfo(infoA, infoB)
 
@@ -44,7 +44,7 @@ func TestMemoryLookupSetEndpointInfo(t *testing.T) {
 	id := sk.Public()
 	m := NewMemoryLookup()
 
-	first := dns.NewEndpointInfo(id).WithIPAddrs(netip.MustParseAddrPort("1.2.3.4:1"))
+	first := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")})}
 	prev, existed := m.SetEndpointInfo(first)
 	if existed {
 		t.Errorf("SetEndpointInfo on empty store reported existed=true")
@@ -55,7 +55,7 @@ func TestMemoryLookupSetEndpointInfo(t *testing.T) {
 
 	// Replacing returns the previous data and does not merge: only the new
 	// address remains.
-	second := dns.NewEndpointInfo(id).WithIPAddrs(netip.MustParseAddrPort("5.6.7.8:2"))
+	second := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("5.6.7.8:2")})}
 	prev, existed = m.SetEndpointInfo(second)
 	if !existed {
 		t.Errorf("SetEndpointInfo replacing existing reported existed=false")
@@ -68,8 +68,8 @@ func TestMemoryLookupSetEndpointInfo(t *testing.T) {
 	if !ok {
 		t.Fatal("expected stored info after SetEndpointInfo")
 	}
-	if len(got.IPAddrs()) != 1 || got.IPAddrs()[0] != netip.MustParseAddrPort("5.6.7.8:2") {
-		t.Errorf("after replace IPAddrs = %v, want [5.6.7.8:2] (replace, not merge)", got.IPAddrs())
+	if len(got.Data.IPAddrs()) != 1 || got.Data.IPAddrs()[0] != netip.MustParseAddrPort("5.6.7.8:2") {
+		t.Errorf("after replace IPAddrs = %v, want [5.6.7.8:2] (replace, not merge)", got.Data.IPAddrs())
 	}
 }
 
@@ -81,7 +81,7 @@ func TestFilteredAddressLookupResolveAndInner(t *testing.T) {
 	relay := relayURL(t, "https://relay.example/")
 
 	mem := NewMemoryLookup()
-	mem.AddEndpointInfo(dns.NewEndpointInfo(id).WithRelayURL(relay))
+	mem.AddEndpointInfo(dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(netaddr.RelayAddr{URL: relay})})
 
 	f := NewFilteredAddressLookup(mem, IPOnlyFilter)
 
@@ -267,7 +267,9 @@ func TestN0DNSAddressLookup(t *testing.T) {
 	// TXT lookuper makes this deterministic.
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
-	info := dns.NewEndpointInfo(id).WithRelayURL(relayURL(t, "https://relay.example/"))
+	info := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(
+		netaddr.RelayAddr{URL: relayURL(t, "https://relay.example/")},
+	)}
 	resolver := &dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}
 
 	lookup = N0DNSAddressLookup(resolver)
