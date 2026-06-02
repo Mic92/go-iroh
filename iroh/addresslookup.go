@@ -155,7 +155,7 @@ func applyFilter(data dns.EndpointData, f AddrFilter) dns.EndpointData {
 	}
 	out := dns.NewEndpointData(f(data.Addrs())...)
 	if u := data.UserData(); u != nil {
-		out.SetUserData(u)
+		out = out.WithUserData(u)
 	}
 	return out
 }

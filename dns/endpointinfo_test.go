@@ -183,6 +183,53 @@ func TestEndpointDataAddrsReturnsCopy(t *testing.T) {
 	}
 }
 
+func TestEndpointDataWithMethods(t *testing.T) {
+	relay := mustRelay(t, "https://relay.example/")
+	ip1 := netip.MustParseAddrPort("127.0.0.1:1")
+	ip2 := netip.MustParseAddrPort("127.0.0.1:2")
+	custom := netaddr.NewCustomAddr(7, []byte{0xde, 0xad})
+	ud, _ := NewUserData("hello")
+
+	base := NewEndpointData(netaddr.IPAddr{Addr: ip1})
+	next := base.
+		WithRelayURL(relay).
+		WithIPAddrs(ip1, ip2).
+		WithAddrs(custom).
+		WithUserData(&ud)
+
+	if got := strs(base.Addrs()); !slices.Equal(got, []string{"ip:127.0.0.1:1"}) {
+		t.Fatalf("base changed: %v", got)
+	}
+	want := []string{
+		"ip:127.0.0.1:1",
+		"relay:https://relay.example/",
+		"ip:127.0.0.1:2",
+		"7_dead",
+	}
+	if got := strs(next.Addrs()); !slices.Equal(got, want) {
+		t.Fatalf("With methods addrs = %v, want %v", got, want)
+	}
+	if next.UserData() == nil || next.UserData().String() != "hello" {
+		t.Fatalf("UserData = %v, want hello", next.UserData())
+	}
+
+	withoutIP := next.WithoutIPAddrs()
+	if got, want := strs(withoutIP.Addrs()), []string{"relay:https://relay.example/", "7_dead"}; !slices.Equal(got, want) {
+		t.Fatalf("WithoutIPAddrs = %v, want %v", got, want)
+	}
+	withoutRelay := next.WithoutRelayURLs()
+	if got, want := strs(withoutRelay.Addrs()), []string{"ip:127.0.0.1:1", "ip:127.0.0.1:2", "7_dead"}; !slices.Equal(got, want) {
+		t.Fatalf("WithoutRelayURLs = %v, want %v", got, want)
+	}
+	cleared := next.WithUserData(nil)
+	if cleared.UserData() != nil {
+		t.Fatalf("WithUserData(nil) = %v, want nil", cleared.UserData())
+	}
+	if next.UserData() == nil {
+		t.Fatal("WithUserData(nil) changed original")
+	}
+}
+
 func TestEndpointDataString(t *testing.T) {
 	if got, want := (EndpointData{}).String(), "EndpointData{addrs:[]}"; got != want {
 		t.Fatalf("empty String = %q, want %q", got, want)

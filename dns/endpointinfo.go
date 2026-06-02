@@ -77,10 +77,24 @@ func NewEndpointData(addrs ...netaddr.TransportAddr) EndpointData {
 	return d
 }
 
+// WithRelayURL returns a copy of d with u added to the end of the address list,
+// unless already present.
+func (d EndpointData) WithRelayURL(u netaddr.RelayURL) EndpointData {
+	return d.WithAddrs(netaddr.RelayAddr{URL: u})
+}
+
 // AddRelayURL adds a relay URL to the end of the address list, unless already
 // present.
 func (d *EndpointData) AddRelayURL(u netaddr.RelayURL) {
 	d.AddAddrs(netaddr.RelayAddr{URL: u})
+}
+
+// WithIPAddrs returns a copy of d with addrs added in order, skipping
+// duplicates and existing ones.
+func (d EndpointData) WithIPAddrs(addrs ...netip.AddrPort) EndpointData {
+	d = d.clone()
+	d.AddIPAddrs(addrs...)
+	return d
 }
 
 // AddIPAddrs adds IP addresses in order, skipping duplicates and existing ones.
@@ -90,6 +104,14 @@ func (d *EndpointData) AddIPAddrs(addrs ...netip.AddrPort) {
 		conv[i] = netaddr.IPAddr{Addr: a}
 	}
 	d.AddAddrs(conv...)
+}
+
+// WithAddrs returns a copy of d with addrs added in order, skipping duplicates
+// and existing ones.
+func (d EndpointData) WithAddrs(addrs ...netaddr.TransportAddr) EndpointData {
+	d = d.clone()
+	d.AddAddrs(addrs...)
+	return d
 }
 
 // AddAddrs adds addresses in order, skipping duplicates and ones already
@@ -102,8 +124,22 @@ func (d *EndpointData) AddAddrs(addrs ...netaddr.TransportAddr) {
 	}
 }
 
+// WithUserData returns a copy of d with the user data set or cleared.
+func (d EndpointData) WithUserData(u *UserData) EndpointData {
+	d = d.clone()
+	d.userData = u
+	return d
+}
+
 // SetUserData sets or clears the user data.
 func (d *EndpointData) SetUserData(u *UserData) { d.userData = u }
+
+// WithoutIPAddrs returns a copy of d with all direct IP addresses removed.
+func (d EndpointData) WithoutIPAddrs() EndpointData {
+	d = d.clone()
+	d.ClearIPAddrs()
+	return d
+}
 
 // ClearIPAddrs removes all direct IP addresses.
 func (d *EndpointData) ClearIPAddrs() {
@@ -111,6 +147,13 @@ func (d *EndpointData) ClearIPAddrs() {
 		_, ok := a.(netaddr.IPAddr)
 		return ok
 	})
+}
+
+// WithoutRelayURLs returns a copy of d with all relay addresses removed.
+func (d EndpointData) WithoutRelayURLs() EndpointData {
+	d = d.clone()
+	d.ClearRelayURLs()
+	return d
 }
 
 // ClearRelayURLs removes all relay addresses.
@@ -175,6 +218,11 @@ func (d EndpointData) contains(a netaddr.TransportAddr) bool {
 	return slices.ContainsFunc(d.addrs, func(x netaddr.TransportAddr) bool {
 		return x.Compare(a) == 0
 	})
+}
+
+func (d EndpointData) clone() EndpointData {
+	d.addrs = slices.Clone(d.addrs)
+	return d
 }
 
 // EndpointDataFromAddr builds EndpointData from an [netaddr.EndpointAddr], taking
