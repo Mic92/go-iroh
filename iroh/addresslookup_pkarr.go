@@ -152,7 +152,7 @@ func (b *PkarrPublisherBuilder) Build(secretKey key.SecretKey) (*PkarrPublisher,
 func (p *PkarrPublisher) Publish(data dns.EndpointData) {
 	filtered := applyFilter(data, p.addrFilter)
 	info := dns.EndpointInfoFromParts(p.endpointID, filtered)
-	p.value.Set(&info, nil)
+	p.value.Set(&info)
 }
 
 // Resolve always returns nil: a publisher does not resolve.

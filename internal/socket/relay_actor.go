@@ -198,7 +198,7 @@ func NewRelayActor(cfg RelayActorConfig) *RelayActor {
 		dialer:  dialer,
 		recvCh:  make(chan RelayRecvDatagram, relayRecvQueueDepth),
 		sendCh:  make(chan RelaySendItem, relaySendChannelDepth),
-		homeURL: watch.NewValue[*RelayStatus](nil),
+		homeURL: watch.NewValueFunc[*RelayStatus](nil, statusEqual),
 		active:  make(map[string]*activeRelay),
 	}
 }
@@ -225,7 +225,7 @@ func (a *RelayActor) InsertRelay(url netaddr.RelayURL, cfg relay.Config) (relay.
 	prev, ok := a.cfg.Map.Insert(cfg)
 	if a.home.IsZero() {
 		a.home = url
-		a.homeURL.Set(&RelayStatus{URL: url, State: RelayConnecting}, statusEqual)
+		a.homeURL.Set(&RelayStatus{URL: url, State: RelayConnecting})
 		a.ensureActiveLocked(url, true)
 	}
 	return prev, ok
@@ -251,10 +251,10 @@ func (a *RelayActor) RemoveRelay(url netaddr.RelayURL) (relay.Config, bool) {
 		return prev, true
 	}
 	a.home = netaddr.RelayURL{}
-	a.homeURL.Set(nil, statusEqual)
+	a.homeURL.Set(nil)
 	for _, next := range a.cfg.Map.URLs() {
 		a.home = next
-		a.homeURL.Set(&RelayStatus{URL: next, State: RelayConnecting}, statusEqual)
+		a.homeURL.Set(&RelayStatus{URL: next, State: RelayConnecting})
 		for key, ar := range a.active {
 			ar.setHome(key == next.String())
 		}
@@ -296,7 +296,7 @@ func (a *RelayActor) SetHomeRelay(url netaddr.RelayURL) {
 	}
 	if url.IsZero() {
 		a.home = netaddr.RelayURL{}
-		a.homeURL.Set(nil, statusEqual)
+		a.homeURL.Set(nil)
 		for _, ar := range a.active {
 			ar.setHome(false)
 		}
@@ -308,7 +308,7 @@ func (a *RelayActor) SetHomeRelay(url netaddr.RelayURL) {
 	a.home = url
 	// Publish Connecting on the URL change; the active actor republishes its
 	// real state when it becomes home.
-	a.homeURL.Set(&RelayStatus{URL: url, State: RelayConnecting}, statusEqual)
+	a.homeURL.Set(&RelayStatus{URL: url, State: RelayConnecting})
 	for key, ar := range a.active {
 		ar.setHome(key == url.String())
 	}
@@ -418,7 +418,7 @@ func (a *RelayActor) publishStatus(url netaddr.RelayURL, state RelayConnState, l
 	if !isHome {
 		return
 	}
-	a.homeURL.Set(&RelayStatus{URL: url, State: state, LastError: lastErr}, statusEqual)
+	a.homeURL.Set(&RelayStatus{URL: url, State: state, LastError: lastErr})
 }
 
 // authTokenFor returns the configured auth token for url, if any.

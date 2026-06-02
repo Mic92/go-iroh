@@ -422,7 +422,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 			return nil, err
 		}
 	}
-	ep.addrWatch = watch.NewValue(ep.Addr())
+	ep.addrWatch = watch.NewValueFunc(ep.Addr(), endpointAddrEqual)
 	if ep.netReport != nil {
 		go ep.runNetReport(serveCtx, c.netReportEvery)
 	}
@@ -709,17 +709,19 @@ func (e *Endpoint) WatchAddr() watch.Watcher[netaddr.EndpointAddr] {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.addrWatch == nil {
-		e.addrWatch = watch.NewValue(e.addrLocked())
+		e.addrWatch = watch.NewValueFunc(e.addrLocked(), endpointAddrEqual)
 	}
 	return e.addrWatch.Watch()
 }
 
 func (e *Endpoint) updateAddrWatchLocked() {
 	if e.addrWatch != nil {
-		e.addrWatch.Set(e.addrLocked(), func(a, b netaddr.EndpointAddr) bool {
-			return a.ID.Equal(b.ID) && equalTransportAddrs(a.Addrs(), b.Addrs())
-		})
+		e.addrWatch.Set(e.addrLocked())
 	}
+}
+
+func endpointAddrEqual(a, b netaddr.EndpointAddr) bool {
+	return a.ID.Equal(b.ID) && equalTransportAddrs(a.Addrs(), b.Addrs())
 }
 
 func (e *Endpoint) addrLocked() netaddr.EndpointAddr {

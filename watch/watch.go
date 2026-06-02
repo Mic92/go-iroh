@@ -22,6 +22,7 @@ type Value[T any] struct {
 	set     bool
 	version uint64
 	notify  chan struct{} // closed and replaced on each Set
+	equal   func(a, b T) bool
 }
 
 // NewValue returns a Value initialized to v.
@@ -29,13 +30,17 @@ func NewValue[T any](v T) *Value[T] {
 	return &Value[T]{val: v, set: true}
 }
 
-// Set updates the value and notifies all watchers if it changed. It uses the
-// provided equal function to suppress notifications for no-op updates; pass nil
-// to always notify.
-func (s *Value[T]) Set(v T, equal func(a, b T) bool) {
+// NewValueFunc returns a Value initialized to v. The equal function, if non-nil,
+// suppresses notifications for no-op updates.
+func NewValueFunc[T any](v T, equal func(a, b T) bool) *Value[T] {
+	return &Value[T]{val: v, set: true, equal: equal}
+}
+
+// Set updates the value and notifies all watchers if it changed.
+func (s *Value[T]) Set(v T) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.set && equal != nil && equal(s.val, v) {
+	if s.set && s.equal != nil && s.equal(s.val, v) {
 		return
 	}
 	s.val = v

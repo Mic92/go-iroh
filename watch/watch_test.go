@@ -11,7 +11,7 @@ func TestValueGetSet(t *testing.T) {
 	if v.Get() != 1 {
 		t.Fatalf("Get = %d, want 1", v.Get())
 	}
-	v.Set(2, nil)
+	v.Set(2)
 	if v.Get() != 2 {
 		t.Fatalf("Get = %d, want 2", v.Get())
 	}
@@ -44,7 +44,7 @@ func TestWatcherUpdatedBlocksUntilChange(t *testing.T) {
 			t.Fatal("Updated returned before change")
 		default:
 		}
-		v.Set(42, nil)
+		v.Set(42)
 		synctest.Wait()
 		select {
 		case got := <-done:
@@ -70,10 +70,10 @@ func TestWatcherUpdatedContextCancel(t *testing.T) {
 
 func TestSetEqualSuppressesNoop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		v := NewValue(5)
+		eq := func(a, b int) bool { return a == b }
+		v := NewValueFunc(5, eq)
 		w := v.Watch()
 		w.Updated(context.Background())
-		eq := func(a, b int) bool { return a == b }
 		done := make(chan struct{})
 		go func() {
 			w.Updated(context.Background())
@@ -81,14 +81,14 @@ func TestSetEqualSuppressesNoop(t *testing.T) {
 		}()
 
 		synctest.Wait()
-		v.Set(5, eq) // no-op, should not notify
+		v.Set(5) // no-op, should not notify
 		synctest.Wait()
 		select {
 		case <-done:
 			t.Fatal("no-op Set notified")
 		default:
 		}
-		v.Set(6, eq) // real change
+		v.Set(6) // real change
 		synctest.Wait()
 		select {
 		case <-done:
@@ -106,7 +106,7 @@ func TestStream(t *testing.T) {
 	if got := <-ch; got != 0 {
 		t.Fatalf("first stream value = %d, want 0", got)
 	}
-	v.Set(1, nil)
+	v.Set(1)
 	if got := <-ch; got != 1 {
 		t.Fatalf("stream value = %d, want 1", got)
 	}
