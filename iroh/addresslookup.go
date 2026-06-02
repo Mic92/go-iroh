@@ -13,32 +13,33 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-// AddressLookup is a system for publishing and resolving the addressing
-// information of an [key.EndpointID]. It lets an [Endpoint] connect to a peer
-// knowing only its id, by looking up a [netaddr.EndpointAddr] (a relay URL and/or
-// direct addresses) through one or more lookup services.
-//
-// Multiple implementations coexist: pkarr-relay ([PkarrPublisher] /
-// [PkarrResolver]), DNS ([DNSAddressLookup]), and in-memory ([MemoryLookup]).
-// An [Endpoint] combines them with [AddressLookupServices].
-//
-// It is the Go analog of iroh's AddressLookup trait
-// (iroh/src/address_lookup.rs).
-type AddressLookup interface {
-	// Publish records the endpoint data with the lookup service. It is
-	// fire-and-forget: the call must not block, starting any background work
-	// itself. A service that only resolves leaves this a no-op.
+// AddressPublisher publishes the endpoint's addressing information.
+type AddressPublisher interface {
+	// Publish records endpoint data with the service. It is fire-and-forget:
+	// the call must not block, starting any background work itself.
 	Publish(data dns.EndpointData)
+}
 
+// AddressResolver resolves the addressing information of a [key.EndpointID].
+// It lets an [Endpoint] connect to a peer knowing only its id, by looking up a
+// [netaddr.EndpointAddr] (a relay URL and/or direct addresses) through one or
+// more lookup services.
+//
+// Multiple implementations coexist: pkarr-relay ([PkarrResolver]), DNS
+// ([DNSAddressLookup]), and in-memory ([MemoryLookup]). An [Endpoint] combines
+// them with [AddressLookupServices].
+//
+// It is the Go analog of iroh's address lookup resolution path.
+type AddressResolver interface {
 	// Resolve looks up addressing information for id. It returns a sequence of
-	// discovered [Item] values and per-service errors, or nil if the service
-	// does not perform resolution. Cancel ctx to stop pending work.
+	// discovered [Item] values and per-service errors. Cancel ctx to stop
+	// pending work.
 	Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error]
 }
 
 // Item is a single address-lookup result: the [dns.EndpointInfo] discovered for
 // an endpoint plus metadata about the lookup source. It is the item carried in
-// the streams returned by [AddressLookup.Resolve].
+// the streams returned by [AddressResolver.Resolve].
 //
 // It is the Go analog of iroh's address_lookup::Item.
 type Item struct {
@@ -159,9 +160,9 @@ func applyFilter(data dns.EndpointData, f AddrFilter) dns.EndpointData {
 	return out
 }
 
-// AddressLookupServices is the registry of [AddressLookup] services for an
-// [Endpoint]. It publishes the endpoint's own info to every service and merges
-// their resolution streams.
+// AddressLookupServices is the registry of address lookup services for an
+// [Endpoint]. It publishes the endpoint's own info to every publisher and merges
+// resolver streams.
 //
 // The zero value is an empty, ready-to-use registry. It is safe for concurrent
 // use.
@@ -169,7 +170,8 @@ func applyFilter(data dns.EndpointData, f AddrFilter) dns.EndpointData {
 // It is the Go analog of iroh's AddressLookupServices.
 type AddressLookupServices struct {
 	mu         sync.RWMutex
-	services   []AddressLookup
+	publishers []AddressPublisher
+	resolvers  []AddressResolver
 	lastData   *dns.EndpointData
 	addrFilter AddrFilter
 }
@@ -182,42 +184,50 @@ func (s *AddressLookupServices) SetAddrFilter(f AddrFilter) {
 	s.addrFilter = f
 }
 
-// Add registers a service. If data has already been published, it is published
-// to the new service immediately.
-func (s *AddressLookupServices) Add(service AddressLookup) {
+// AddPublisher registers a publisher. If data has already been published, it is
+// published to the new service immediately.
+func (s *AddressLookupServices) AddPublisher(publisher AddressPublisher) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.lastData != nil {
-		service.Publish(*s.lastData)
+		publisher.Publish(*s.lastData)
 	}
-	s.services = append(s.services, service)
+	s.publishers = append(s.publishers, publisher)
 }
 
-// Len returns the number of registered services.
+// AddResolver registers a resolver.
+func (s *AddressLookupServices) AddResolver(resolver AddressResolver) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolvers = append(s.resolvers, resolver)
+}
+
+// Len returns the number of registered publishers and resolvers.
 func (s *AddressLookupServices) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.services)
+	return len(s.publishers) + len(s.resolvers)
 }
 
-// IsEmpty reports whether no services are registered.
+// IsEmpty reports whether no publishers or resolvers are registered.
 func (s *AddressLookupServices) IsEmpty() bool { return s.Len() == 0 }
 
-// Clear removes all registered services.
+// Clear removes all registered publishers and resolvers.
 func (s *AddressLookupServices) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.services = nil
+	s.publishers = nil
+	s.resolvers = nil
 }
 
-// Publish publishes data on every registered service, applying the registry's
+// Publish publishes data on every registered publisher, applying the registry's
 // address filter first, and records it for services added later.
 func (s *AddressLookupServices) Publish(data dns.EndpointData) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	filtered := applyFilter(data, s.addrFilter)
-	for _, service := range s.services {
-		service.Publish(filtered)
+	for _, publisher := range s.publishers {
+		publisher.Publish(filtered)
 	}
 	s.lastData = &filtered
 }
@@ -235,11 +245,11 @@ func (s *AddressLookupServices) Publish(data dns.EndpointData) {
 // Cancel ctx to stop all services and end the sequence.
 func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
 	s.mu.RLock()
-	services := slices.Clone(s.services)
+	resolvers := slices.Clone(s.resolvers)
 	s.mu.RUnlock()
 
 	return func(yield func(Item, error) bool) {
-		if len(services) == 0 {
+		if len(resolvers) == 0 {
 			if ctx.Err() == nil {
 				yield(Item{}, ErrNoServiceConfigured)
 			}
@@ -247,11 +257,8 @@ func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) 
 		}
 		var wg sync.WaitGroup
 		merged := make(chan lookupResult)
-		for _, service := range services {
-			seq := service.Resolve(ctx, id)
-			if seq == nil {
-				continue
-			}
+		for _, resolver := range resolvers {
+			seq := resolver.Resolve(ctx, id)
 			wg.Add(1)
 			go func(seq iter.Seq2[Item, error]) {
 				defer wg.Done()

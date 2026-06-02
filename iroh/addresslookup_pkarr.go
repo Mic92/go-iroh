@@ -39,8 +39,7 @@ const (
 )
 
 // PkarrPublisher publishes endpoint addressing information to a pkarr relay
-// over HTTP. It implements [AddressLookup] as a publish-only service; pair it
-// with a [PkarrResolver] or [DNSAddressLookup] to resolve.
+// over HTTP. Pair it with a [PkarrResolver] or [DNSAddressLookup] to resolve.
 //
 // Publishing is fire-and-forget: [PkarrPublisher.Publish] updates an internal
 // value and returns immediately while a background goroutine performs the HTTP
@@ -139,9 +138,6 @@ func (p *PkarrPublisher) Publish(data dns.EndpointData) {
 	p.value.Set(&info)
 }
 
-// Resolve always returns nil: a publisher does not resolve.
-func (p *PkarrPublisher) Resolve(context.Context, key.EndpointID) iter.Seq2[Item, error] { return nil }
-
 // Close stops the background publish goroutine and waits for it to exit.
 func (p *PkarrPublisher) Close() {
 	p.cancel()
@@ -220,7 +216,7 @@ func resetTimer(t *time.Timer, d time.Duration) {
 }
 
 // PkarrResolver resolves endpoint addressing information from a pkarr relay over
-// HTTP. It implements [AddressLookup] as a resolve-only service.
+// HTTP.
 //
 // The zero value is not usable; create one with [NewPkarrResolver] or
 // [N0PkarrResolver].
@@ -256,9 +252,6 @@ func NewPkarrResolver(relayURL string, cfg *PkarrResolverConfig) (*PkarrResolver
 func N0PkarrResolver(cfg *PkarrResolverConfig) (*PkarrResolver, error) {
 	return NewPkarrResolver(N0DNSPkarrRelayProd, cfg)
 }
-
-// Publish is a no-op: a resolver does not publish.
-func (r *PkarrResolver) Publish(dns.EndpointData) {}
 
 // Resolve fetches the signed packet for id from the pkarr relay and decodes its
 // endpoint info.

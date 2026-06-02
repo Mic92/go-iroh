@@ -357,7 +357,7 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	mem := NewMemoryLookup()
 	mem.AddEndpointInfo(endpointInfoWithIP(id, ip))
 	var svcs AddressLookupServices
-	svcs.Add(mem)
+	svcs.AddResolver(mem)
 
 	ep, err := Bind(ctx, WithAddressLookup(&svcs))
 	if err != nil {

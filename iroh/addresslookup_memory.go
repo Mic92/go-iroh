@@ -14,7 +14,7 @@ import (
 // MemoryProvenance is the default provenance string for [MemoryLookup] items.
 const MemoryProvenance = "memory_lookup"
 
-// MemoryLookup is an in-memory [AddressLookup] for addressing information added
+// MemoryLookup is an in-memory [AddressResolver] for addressing information added
 // out-of-band, such as from an endpoint ticket. Applications add and remove
 // entries; resolution returns the stored info for an id.
 //
@@ -113,9 +113,6 @@ func (m *MemoryLookup) RemoveEndpointInfo(id key.EndpointID) (dns.EndpointInfo, 
 	return dns.EndpointInfo{ID: id, Data: info.data}, true
 }
 
-// Publish is a no-op: a MemoryLookup is populated through its own methods.
-func (m *MemoryLookup) Publish(dns.EndpointData) {}
-
 // Resolve returns the stored info for id, or nil if there is no entry.
 func (m *MemoryLookup) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
 	m.mu.RLock()
@@ -133,33 +130,25 @@ func (m *MemoryLookup) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2
 	}
 }
 
-// FilteredAddressLookup wraps an [AddressLookup], applying an [AddrFilter] to
-// the data before publishing it to the inner service. Resolution is delegated
-// unchanged.
+// FilteredAddressPublisher wraps an [AddressPublisher], applying an
+// [AddrFilter] to the data before publishing it to the inner service.
 //
-// The zero value is not usable; create one with [NewFilteredAddressLookup].
-//
-// It is the Go analog of iroh's FilteredAddressLookup.
-type FilteredAddressLookup struct {
-	inner  AddressLookup
+// The zero value is not usable; create one with [NewFilteredAddressPublisher].
+type FilteredAddressPublisher struct {
+	inner  AddressPublisher
 	filter AddrFilter
 }
 
-// NewFilteredAddressLookup wraps inner so that published data is filtered by f
-// before reaching inner.
-func NewFilteredAddressLookup(inner AddressLookup, f AddrFilter) FilteredAddressLookup {
-	return FilteredAddressLookup{inner: inner, filter: f}
+// NewFilteredAddressPublisher wraps inner so that published data is filtered by
+// f before reaching inner.
+func NewFilteredAddressPublisher(inner AddressPublisher, f AddrFilter) FilteredAddressPublisher {
+	return FilteredAddressPublisher{inner: inner, filter: f}
 }
 
-// Inner returns the wrapped lookup.
-func (f FilteredAddressLookup) Inner() AddressLookup { return f.inner }
+// Inner returns the wrapped publisher.
+func (f FilteredAddressPublisher) Inner() AddressPublisher { return f.inner }
 
 // Publish filters data and publishes it to the inner service.
-func (f FilteredAddressLookup) Publish(data dns.EndpointData) {
+func (f FilteredAddressPublisher) Publish(data dns.EndpointData) {
 	f.inner.Publish(applyFilter(data, f.filter))
-}
-
-// Resolve delegates to the inner service.
-func (f FilteredAddressLookup) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
-	return f.inner.Resolve(ctx, id)
 }

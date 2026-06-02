@@ -47,7 +47,7 @@ func ExampleAddressLookupServices() {
 	})
 
 	var services iroh.AddressLookupServices
-	services.Add(mem)
+	services.AddResolver(mem)
 
 	for item, err := range services.Resolve(context.Background(), id) {
 		if err != nil {

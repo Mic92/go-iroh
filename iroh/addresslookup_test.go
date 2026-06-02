@@ -312,7 +312,7 @@ func TestPkarrPublisherRelayOnlyFilter(t *testing.T) {
 	}
 }
 
-// staticLookup is a test [AddressLookup] that resolves to a fixed info after a
+// staticLookup is a test [AddressResolver] that resolves to a fixed info after a
 // delay, or yields a fixed error.
 type staticLookup struct {
 	provenance string
@@ -320,8 +320,6 @@ type staticLookup struct {
 	err        error
 	delay      time.Duration
 }
-
-func (s staticLookup) Publish(dns.EndpointData) {}
 
 func (s staticLookup) Resolve(ctx context.Context, _ key.EndpointID) iter.Seq2[Item, error] {
 	return func(yield func(Item, error) bool) {
@@ -355,8 +353,8 @@ func TestServicesSucceedsAfterOtherErrors(t *testing.T) {
 	)}
 
 	var svcs AddressLookupServices
-	svcs.Add(staticLookup{provenance: "fail", err: errors.New("boom"), delay: 10 * time.Millisecond})
-	svcs.Add(staticLookup{provenance: "ok", info: &info, delay: 80 * time.Millisecond})
+	svcs.AddResolver(staticLookup{provenance: "fail", err: errors.New("boom"), delay: 10 * time.Millisecond})
+	svcs.AddResolver(staticLookup{provenance: "ok", info: &info, delay: 80 * time.Millisecond})
 
 	results := drain(svcs.Resolve(context.Background(), id))
 	var sawErr, sawOK bool
@@ -378,7 +376,7 @@ func TestServicesSucceedsAfterOtherErrors(t *testing.T) {
 func TestServicesNoResults(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	var svcs AddressLookupServices
-	svcs.Add(staticLookup{provenance: "fail", err: errors.New("boom"), delay: time.Millisecond})
+	svcs.AddResolver(staticLookup{provenance: "fail", err: errors.New("boom"), delay: time.Millisecond})
 
 	results := drain(svcs.Resolve(context.Background(), sk.Public()))
 	last := results[len(results)-1]
@@ -388,13 +386,11 @@ func TestServicesNoResults(t *testing.T) {
 }
 
 func TestServicesPublishAppliesFilter(t *testing.T) {
-	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
 	rec := &recordingLookup{}
 
 	var svcs AddressLookupServices
 	svcs.SetAddrFilter(RelayOnlyFilter)
-	svcs.Add(rec)
+	svcs.AddPublisher(rec)
 
 	relay := relayURL(t, "https://relay.example/")
 	data := dns.NewEndpointData(
@@ -413,7 +409,6 @@ func TestServicesPublishAppliesFilter(t *testing.T) {
 	if len(got.RelayURLs()) != 1 {
 		t.Errorf("relay address should be kept, got %v", got.RelayURLs())
 	}
-	_ = id
 }
 
 // recordingLookup records published data.
@@ -428,8 +423,6 @@ func (r *recordingLookup) Publish(data dns.EndpointData) {
 	r.published = append(r.published, data)
 }
 
-func (r *recordingLookup) Resolve(context.Context, key.EndpointID) iter.Seq2[Item, error] { return nil }
-
 func TestServicesAddPublishesHistorical(t *testing.T) {
 	relay := relayURL(t, "https://relay.example/")
 	data := dns.NewEndpointData(netaddr.RelayAddr{URL: relay})
@@ -438,15 +431,15 @@ func TestServicesAddPublishesHistorical(t *testing.T) {
 	svcs.Publish(data)
 
 	rec := &recordingLookup{}
-	svcs.Add(rec) // added after publish; should receive the historical data
+	svcs.AddPublisher(rec) // added after publish; should receive the historical data
 	if len(rec.published) != 1 {
 		t.Fatalf("late-added service got %d publishes, want 1", len(rec.published))
 	}
 }
 
-func TestFilteredAddressLookup(t *testing.T) {
+func TestFilteredAddressPublisher(t *testing.T) {
 	rec := &recordingLookup{}
-	f := NewFilteredAddressLookup(rec, IPOnlyFilter)
+	f := NewFilteredAddressPublisher(rec, IPOnlyFilter)
 
 	relay := relayURL(t, "https://relay.example/")
 	data := dns.NewEndpointData(

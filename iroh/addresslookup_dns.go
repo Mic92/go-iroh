@@ -23,9 +23,6 @@ var dnsStaggerMs = []int{200, 300, 600, 1000, 2000, 3000}
 // TXT records under "_iroh.<z32-endpoint-id>.<origin>" using the endpoint's DNS
 // resolver, where <origin> is the discovery origin domain.
 //
-// Publishing to a DNS-backed service is done with a [PkarrPublisher] pointing at
-// a pkarr relay that also serves DNS, so DNSAddressLookup does not publish.
-//
 // The zero value is not usable; create one with [NewDNSAddressLookup] or
 // [N0DNSAddressLookup].
 //
@@ -50,10 +47,6 @@ func NewDNSAddressLookup(origin string, resolver *dns.Resolver) *DNSAddressLooku
 func N0DNSAddressLookup(resolver *dns.Resolver) *DNSAddressLookup {
 	return NewDNSAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
 }
-
-// Publish is a no-op: DNS records are published indirectly through a
-// [PkarrPublisher].
-func (d *DNSAddressLookup) Publish(dns.EndpointData) {}
 
 // Resolve looks up id in DNS, issuing staggered concurrent queries and yielding
 // the first successful result or an error.

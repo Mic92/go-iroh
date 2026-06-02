@@ -73,37 +73,6 @@ func TestMemoryLookupSetEndpointInfo(t *testing.T) {
 	}
 }
 
-// TestFilteredAddressLookupResolveAndInner verifies the Inner accessor and that
-// Resolve is delegated to the wrapped lookup unchanged.
-func TestFilteredAddressLookupResolveAndInner(t *testing.T) {
-	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
-	relay := relayURL(t, "https://relay.example/")
-
-	mem := NewMemoryLookup()
-	mem.AddEndpointInfo(dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(netaddr.RelayAddr{URL: relay})})
-
-	f := NewFilteredAddressLookup(mem, IPOnlyFilter)
-
-	// Inner returns the wrapped lookup: it resolves the entry added to mem.
-	inner, ok := f.Inner().(*MemoryLookup)
-	if !ok {
-		t.Fatalf("Inner() type = %T, want *MemoryLookup", f.Inner())
-	}
-	if _, ok := inner.GetEndpointInfo(id); !ok {
-		t.Error("Inner() is not the wrapped MemoryLookup: missing the added entry")
-	}
-
-	// Resolution is delegated unchanged: the memory entry resolves through.
-	results := drain(f.Resolve(context.Background(), id))
-	if len(results) != 1 || results[0].err != nil {
-		t.Fatalf("Resolve = %+v, want one success", results)
-	}
-	if !results[0].item.EndpointID().Equal(id) {
-		t.Errorf("resolved id = %s, want %s", results[0].item.EndpointID(), id)
-	}
-}
-
 // TestLookupErrorUnwrap checks LookupError wraps the underlying error for
 // errors.Is/errors.As.
 func TestLookupErrorUnwrap(t *testing.T) {
@@ -127,13 +96,13 @@ func TestAddressLookupServicesLenIsEmptyClear(t *testing.T) {
 		t.Errorf("zero registry Len() = %d, want 0", svcs.Len())
 	}
 
-	svcs.Add(NewMemoryLookup())
-	svcs.Add(NewMemoryLookup())
+	svcs.AddResolver(NewMemoryLookup())
+	svcs.AddPublisher(&recordingLookup{})
 	if svcs.Len() != 2 {
-		t.Errorf("Len() = %d after two Adds, want 2", svcs.Len())
+		t.Errorf("Len() = %d after one resolver and one publisher, want 2", svcs.Len())
 	}
 	if svcs.IsEmpty() {
-		t.Error("IsEmpty() = true after Add, want false")
+		t.Error("IsEmpty() = true after registration, want false")
 	}
 
 	svcs.Clear()
@@ -200,9 +169,7 @@ func TestPkarrPublisherOptions(t *testing.T) {
 	}
 }
 
-// TestN0PkarrConstructors smoke-tests the number0 production constructors build
-// without error and that the publisher's Resolve and the resolver's Publish are
-// the documented no-ops.
+// TestN0PkarrConstructors smoke-tests the number0 production constructors.
 func TestN0PkarrConstructors(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 
@@ -211,17 +178,14 @@ func TestN0PkarrConstructors(t *testing.T) {
 		t.Fatalf("N0PkarrPublisher: %v", err)
 	}
 	defer pub.Close()
-	// A publisher does not resolve.
-	if ch := pub.Resolve(context.Background(), sk.Public()); ch != nil {
-		t.Error("PkarrPublisher.Resolve returned a non-nil channel, want nil")
-	}
 
 	res, err := N0PkarrResolver(nil)
 	if err != nil {
 		t.Fatalf("N0PkarrResolver: %v", err)
 	}
-	// A resolver does not publish: Publish is a no-op and must not panic.
-	res.Publish(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
+	if res.client == nil {
+		t.Fatal("resolver client is nil")
+	}
 }
 
 func TestPkarrDefaults(t *testing.T) {
@@ -255,13 +219,10 @@ func TestPkarrDefaults(t *testing.T) {
 	}
 }
 
-// TestN0DNSAddressLookup smoke-tests the number0 production DNS constructor and
-// its no-op Publish.
+// TestN0DNSAddressLookup smoke-tests the number0 production DNS constructor.
 func TestN0DNSAddressLookup(t *testing.T) {
-	// nil resolver falls back to the system DNS resolver; construction must not
-	// panic and Publish is a no-op.
-	lookup := N0DNSAddressLookup(nil)
-	lookup.Publish(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")}))
+	// nil resolver falls back to the system DNS resolver; construction must not panic.
+	_ = N0DNSAddressLookup(nil)
 
 	// With an explicit resolver, resolution uses the configured origin. A canned
 	// TXT lookuper makes this deterministic.
@@ -272,7 +233,7 @@ func TestN0DNSAddressLookup(t *testing.T) {
 	)}
 	resolver := &dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}
 
-	lookup = N0DNSAddressLookup(resolver)
+	lookup := N0DNSAddressLookup(resolver)
 	results := drain(lookup.Resolve(context.Background(), id))
 	if len(results) != 1 || results[0].err != nil {
 		t.Fatalf("Resolve = %+v, want one success", results)
