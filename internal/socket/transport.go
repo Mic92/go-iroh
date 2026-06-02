@@ -50,7 +50,7 @@ type MagicConn struct {
 	writeDeadline deadline
 
 	endpointMu     sync.RWMutex
-	endpointSender func(key.EndpointId, []byte) bool
+	endpointSender func(key.EndpointID, []byte) bool
 }
 
 // NewMagicConn returns a MagicConn whose sole transport is an [IpTransport]
@@ -100,7 +100,7 @@ func (m *MagicConn) Relay() *RelayTransport { return m.transports.relay }
 // SetEndpointSender sets the callback used for endpoint-id mapped addresses.
 // The callback should route p through the remote endpoint's actor and report
 // whether it accepted the datagram. A nil callback restores blackhole behavior.
-func (m *MagicConn) SetEndpointSender(send func(key.EndpointId, []byte) bool) {
+func (m *MagicConn) SetEndpointSender(send func(key.EndpointID, []byte) bool) {
 	m.endpointMu.Lock()
 	m.endpointSender = send
 	m.endpointMu.Unlock()
@@ -169,7 +169,7 @@ func mappedUDPAddr(a netip.Addr) *net.UDPAddr {
 // WriteTo routes p to the transport addressed by addr and reports success.
 //
 // addr is classified by [Classify]: a real IP routes to the IP transport; the
-// EndpointId, relay, and custom mapped ULAs route to their transports. A send to
+// EndpointID, relay, and custom mapped ULAs route to their transports. A send to
 // a path with no live transport, an unknown mapped address, or a closed socket
 // is blackholed — WriteTo still returns (len(p), nil). quic-go observes the send
 // as successful and its loss recovery retransmits the lost datagram, matching

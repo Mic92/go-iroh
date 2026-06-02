@@ -84,7 +84,7 @@ func fakeRelay(t *testing.T, deny bool) *httptest.Server {
 			if msg.Type == relayproto.FrameClientToRelayDatagram || msg.Type == relayproto.FrameClientToRelayDatagramBat {
 				reply := relayproto.RelayToClientMsg{
 					Type:             relayproto.FrameRelayToClientDatagram,
-					RemoteEndpointId: msg.DstEndpointId,
+					RemoteEndpointID: msg.DstEndpointID,
 					Datagrams:        msg.Datagrams,
 				}
 				conn.Write(ctx, websocket.MessageBinary, reply.AppendTo(nil))
@@ -94,9 +94,9 @@ func fakeRelay(t *testing.T, deny bool) *httptest.Server {
 	return httptest.NewServer(mux)
 }
 
-func relayURL(t *testing.T, ts *httptest.Server) netaddr.RelayUrl {
+func relayURL(t *testing.T, ts *httptest.Server) netaddr.RelayURL {
 	t.Helper()
-	u, err := netaddr.ParseRelayUrl(ts.URL)
+	u, err := netaddr.ParseRelayURL(ts.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestClientConnectAndEcho(t *testing.T) {
 	payload := []byte("hello relay")
 	err = c.Send(ctx, relayproto.ClientToRelayMsg{
 		Type:          relayproto.FrameClientToRelayDatagram,
-		DstEndpointId: dst.Public(),
+		DstEndpointID: dst.Public(),
 		Datagrams:     relayproto.DatagramsFromBytes(payload),
 	})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestClientConnectAndEcho(t *testing.T) {
 	if string(msg.Datagrams.Contents) != string(payload) {
 		t.Errorf("echo = %q, want %q", msg.Datagrams.Contents, payload)
 	}
-	if !msg.RemoteEndpointId.Equal(dst.Public()) {
+	if !msg.RemoteEndpointID.Equal(dst.Public()) {
 		t.Error("remote endpoint id mismatch")
 	}
 }
@@ -162,7 +162,7 @@ func TestWebsocketURL(t *testing.T) {
 		{"http://localhost:8080", "ws://localhost:8080/relay"},
 	}
 	for _, c := range cases {
-		u, err := netaddr.ParseRelayUrl(c.in)
+		u, err := netaddr.ParseRelayURL(c.in)
 		if err != nil {
 			t.Fatal(err)
 		}

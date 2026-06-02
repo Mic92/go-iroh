@@ -19,11 +19,11 @@ func v6Addr(port uint16) Addr {
 
 func relayAddr(t *testing.T, host string) Addr {
 	t.Helper()
-	u, err := netaddr.ParseRelayUrl("https://" + host)
+	u, err := netaddr.ParseRelayURL("https://" + host)
 	if err != nil {
 		t.Fatalf("parse relay url: %v", err)
 	}
-	var eid key.EndpointId
+	var eid key.EndpointID
 	return RelayAddr(u, eid)
 }
 

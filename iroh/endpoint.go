@@ -398,7 +398,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	// endpoint's address-lookup services (slice G), passed down as a func value
 	// so internal/socket does not import iroh.
 	ep.remotes = socket.NewRemoteMap(serveCtx, socket.BiasedRttPathSelector{}, ep.resolveFunc())
-	ep.magic.SetEndpointSender(func(id key.EndpointId, p []byte) bool {
+	ep.magic.SetEndpointSender(func(id key.EndpointID, p []byte) bool {
 		err := ep.remotes.Actor(id).SendDatagram(p, func(addr socket.Addr, data []byte) bool {
 			return ep.magic.SendAddr(addr, data)
 		})
@@ -513,7 +513,7 @@ func (e *Endpoint) SetALPNs(alpns [][]byte) error {
 }
 
 // ID returns the endpoint's identifier (its ed25519 public key).
-func (e *Endpoint) ID() key.EndpointId { return e.secretKey.Public() }
+func (e *Endpoint) ID() key.EndpointID { return e.secretKey.Public() }
 
 // SecretKey returns the endpoint's secret key.
 func (e *Endpoint) SecretKey() key.SecretKey { return e.secretKey }
@@ -716,7 +716,7 @@ func (e *Endpoint) WatchAddr() watch.Watcher[netaddr.EndpointAddr] {
 func (e *Endpoint) updateAddrWatchLocked() {
 	if e.addrWatch != nil {
 		e.addrWatch.Set(e.addrLocked(), func(a, b netaddr.EndpointAddr) bool {
-			return a.Id.Equal(b.Id) && equalTransportAddrs(a.Addrs(), b.Addrs())
+			return a.ID.Equal(b.ID) && equalTransportAddrs(a.Addrs(), b.Addrs())
 		})
 	}
 }
@@ -796,7 +796,7 @@ var ErrNoRelay = errors.New("iroh: no relays configured")
 
 // InsertRelay adds or replaces a relay server configuration. It returns the
 // previous config for url when one existed.
-func (e *Endpoint) InsertRelay(ctx context.Context, url netaddr.RelayUrl, cfg *RelayConfig) (*RelayConfig, error) {
+func (e *Endpoint) InsertRelay(ctx context.Context, url netaddr.RelayURL, cfg *RelayConfig) (*RelayConfig, error) {
 	_ = ctx
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
@@ -821,7 +821,7 @@ func (e *Endpoint) InsertRelay(ctx context.Context, url netaddr.RelayUrl, cfg *R
 
 // RemoveRelay removes a relay server configuration. It returns the removed
 // config, or nil if url was not configured.
-func (e *Endpoint) RemoveRelay(ctx context.Context, url netaddr.RelayUrl) *RelayConfig {
+func (e *Endpoint) RemoveRelay(ctx context.Context, url netaddr.RelayURL) *RelayConfig {
 	_ = ctx
 	if e.isClosed() || e.relay == nil {
 		return nil
@@ -870,7 +870,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
 	}
-	if addr.Id.Equal(e.ID()) {
+	if addr.ID.Equal(e.ID()) {
 		return nil, ErrSelfConnect
 	}
 	if err := e.beforeConnect(ctx, addr, alpn); err != nil {
@@ -882,7 +882,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 		return nil, ErrNoAddress
 	}
 
-	clientTLS, err := clientTLSConfig(e.secretKey, addr.Id, []string{string(alpn)}, e.sessionCache)
+	clientTLS, err := clientTLSConfig(e.secretKey, addr.ID, []string{string(alpn)}, e.sessionCache)
 	if err != nil {
 		return nil, err
 	}
@@ -895,12 +895,12 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 	}
 
 	// DialEarly attempts 0-RTT: if the session cache holds a valid ticket for
-	// addr.Id (bucketed by its SNI), the QUIC stack restores the session and
+	// addr.ID (bucketed by its SNI), the QUIC stack restores the session and
 	// DialEarly returns a Conn ready for 0-RTT early data before the handshake
 	// completes. Data written to such a Conn is sent as 0-RTT. Without a ticket,
 	// DialEarly returns only once the handshake completes, exactly like Dial.
 	//
-	// The peer identity is the dialed addr.Id; the RFC 7250 VerifyConnection
+	// The peer identity is the dialed addr.ID; the RFC 7250 VerifyConnection
 	// check enforces it once the handshake completes, so a 0-RTT Conn carries an
 	// asserted-but-not-yet-authenticated identity. Callers that sent 0-RTT data
 	// wait on [Conn.HandshakeComplete] and check [Conn.Used0RTT] to learn whether
@@ -914,11 +914,11 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 			}
 			continue
 		}
-		conn, err := newConn(qc, addr.Id, alpn, SideClient, e.connStableID(qc))
+		conn, err := newConn(qc, addr.ID, alpn, SideClient, e.connStableID(qc))
 		if err != nil {
 			return nil, err
 		}
-		e.registerConn(addr.Id, qc)
+		e.registerConn(addr.ID, qc)
 		if err := e.afterHandshake(ctx, conn); err != nil {
 			conn.CloseWithError(0, "rejected by hook")
 			return nil, err
@@ -927,7 +927,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 		ok = true
 		return conn, nil
 	}
-	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.Id, firstErr)
+	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, firstErr)
 }
 
 // ConnectWith dials addr and returns a [Connecting] handle. The current
@@ -956,7 +956,7 @@ func (e *Endpoint) dialTargets(addr netaddr.EndpointAddr) []net.Addr {
 	}
 	if e.relay != nil {
 		for _, u := range addr.RelayURLs() {
-			m := e.sock.RelayMappedAddrFor(u, addr.Id)
+			m := e.sock.RelayMappedAddrFor(u, addr.ID)
 			targets = append(targets, net.UDPAddrFromAddrPort(m.AddrPort()))
 		}
 	}
@@ -1015,7 +1015,7 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 		qc.CloseWithError(0, "")
 		return nil, ctx.Err()
 	}
-	remote, err := peerEndpointId(qc.ConnectionState().TLS)
+	remote, err := peerEndpointID(qc.ConnectionState().TLS)
 	if err != nil {
 		qc.CloseWithError(0, "bad peer certificate")
 		return nil, err
@@ -1067,7 +1067,7 @@ func (e *Endpoint) afterHandshake(ctx context.Context, conn *Conn) error {
 // available paths. Registration failures are non-fatal: the connection still
 // works; it just is not path-managed. It mirrors the Rust RemoteMap::add_connection
 // (iroh/src/socket/remote_map.rs:273).
-func (e *Endpoint) registerConn(remote key.EndpointId, qc *quic.Conn) {
+func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn) {
 	if e.remotes == nil {
 		return
 	}
@@ -1116,7 +1116,7 @@ func (e *Endpoint) resolveFunc() socket.ResolveFunc {
 	if lookup == nil {
 		return nil
 	}
-	return func(ctx context.Context, id key.EndpointId) ([]netaddr.TransportAddr, error) {
+	return func(ctx context.Context, id key.EndpointID) ([]netaddr.TransportAddr, error) {
 		var addrs []netaddr.TransportAddr
 		var lastErr error
 		for res := range lookup.Resolve(ctx, id) {

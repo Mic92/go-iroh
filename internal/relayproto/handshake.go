@@ -117,16 +117,16 @@ func ParseHandshakeFrame(content []byte) (any, error) {
 		copy(c.Challenge[:], body)
 		return &c, nil
 	case FrameClientAuth:
-		if len(body) < key.PublicKeyLength {
+		if len(body) < key.PublicKeySize {
 			return nil, ErrHandshakeDeserial
 		}
-		pk, err := key.PublicKeyFromSlice(body[:key.PublicKeyLength])
+		pk, err := key.PublicKeyFromSlice(body[:key.PublicKeySize])
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrHandshakeDeserial, err)
 		}
-		body = body[key.PublicKeyLength:]
+		body = body[key.PublicKeySize:]
 		n, rest, err := readPostcardVarint(body)
-		if err != nil || n != uint64(key.SignatureLength) || len(rest) != key.SignatureLength {
+		if err != nil || n != uint64(key.SignatureSize) || len(rest) != key.SignatureSize {
 			return nil, ErrHandshakeDeserial
 		}
 		sig, err := key.SignatureFromSlice(rest)

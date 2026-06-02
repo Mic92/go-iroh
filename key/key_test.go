@@ -2,6 +2,8 @@ package key
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -29,13 +31,13 @@ func TestPublicKeyFromStringHex(t *testing.T) {
 func TestPublicKeyAllZeroIsValid(t *testing.T) {
 	// The all-zero point is a valid (small-order) Ed25519 point and iroh
 	// accepts it; from_bytes(&[0;32]) succeeds in the Rust impl.
-	var zero [PublicKeyLength]byte
+	var zero [PublicKeySize]byte
 	if _, err := NewPublicKey(zero); err != nil {
 		t.Fatalf("NewPublicKey(zero): %v", err)
 	}
 }
 
-func TestParseEndpointIdRejectsGarbage(t *testing.T) {
+func TestParseEndpointIDRejectsGarbage(t *testing.T) {
 	// Regression: "foobarbaz" must not panic and must error.
 	if _, err := ParsePublicKey("foobarbaz"); err == nil {
 		t.Fatal("expected error parsing garbage")
@@ -46,7 +48,7 @@ func TestPublicKeyInvalidCurvePoint(t *testing.T) {
 	// y = 2 does not lie on the Edwards curve, so it cannot be decompressed to
 	// a valid point; this matches ed25519-dalek's VerifyingKey::from_bytes
 	// rejecting it.
-	var b [PublicKeyLength]byte
+	var b [PublicKeySize]byte
 	b[0] = 2
 	_, err := NewPublicKey(b)
 	if !errors.Is(err, ErrInvalidKeyData) {
@@ -67,6 +69,37 @@ func TestSignVerifyRoundTrip(t *testing.T) {
 	}
 	if err := pk.Verify([]byte("tampered"), sig); !errors.Is(err, ErrInvalidSignature) {
 		t.Errorf("Verify(tampered) = %v, want ErrInvalidSignature", err)
+	}
+}
+
+func TestEd25519Conversions(t *testing.T) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pk, err := PublicKeyFromEd25519(pub)
+	if err != nil {
+		t.Fatalf("PublicKeyFromEd25519: %v", err)
+	}
+	if !bytes.Equal(pk.Ed25519(), pub) {
+		t.Fatal("public key conversion mismatch")
+	}
+	sk, err := SecretKeyFromEd25519(priv)
+	if err != nil {
+		t.Fatalf("SecretKeyFromEd25519: %v", err)
+	}
+	priv[0] ^= 0xff
+	if bytes.Equal(sk.Ed25519(), priv) {
+		t.Fatal("secret key aliases caller storage")
+	}
+
+	msg := []byte("hello world")
+	sig, err := SignatureFromEd25519(ed25519.Sign(sk.Ed25519(), msg))
+	if err != nil {
+		t.Fatalf("SignatureFromEd25519: %v", err)
+	}
+	if err := sk.Public().Verify(msg, sig); err != nil {
+		t.Fatalf("verify converted signature: %v", err)
 	}
 }
 
@@ -97,7 +130,7 @@ func TestSecretKeyStringRoundTrip(t *testing.T) {
 }
 
 func TestPublicKeyJSON(t *testing.T) {
-	var zero [PublicKeyLength]byte
+	var zero [PublicKeySize]byte
 	k, _ := NewPublicKey(zero)
 	data, err := json.Marshal(k)
 	if err != nil {
@@ -119,8 +152,8 @@ func TestPublicKeyBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(data) != PublicKeyLength {
-		t.Errorf("MarshalBinary len = %d, want %d", len(data), PublicKeyLength)
+	if len(data) != PublicKeySize {
+		t.Errorf("MarshalBinary len = %d, want %d", len(data), PublicKeySize)
 	}
 	var k2 PublicKey
 	if err := k2.UnmarshalBinary(data); err != nil {
@@ -158,8 +191,8 @@ func TestPublicKeyShort(t *testing.T) {
 
 func TestPublicKeyCompareOrders(t *testing.T) {
 	// Use valid keys (derived from seeds) and order them by raw bytes.
-	k1 := NewSecretKey([SecretKeyLength]byte{0: 1}).Public()
-	k2 := NewSecretKey([SecretKeyLength]byte{0: 2}).Public()
+	k1 := NewSecretKey([SeedSize]byte{0: 1}).Public()
+	k2 := NewSecretKey([SeedSize]byte{0: 2}).Public()
 	lo, hi := k1, k2
 	if lo.Compare(hi) > 0 {
 		lo, hi = hi, lo
@@ -182,7 +215,7 @@ func TestParseBase32UpperAndLower(t *testing.T) {
 	// accept it (and its lowercase variant) since it is not 64 chars.
 	b := k.Bytes()
 	upper := stdBase32NoPad.EncodeToString(b[:])
-	if len(upper) == PublicKeyLength*2 {
+	if len(upper) == PublicKeySize*2 {
 		t.Skip("base32 form collides with hex length")
 	}
 	k2, err := ParsePublicKey(upper)

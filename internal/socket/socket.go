@@ -21,10 +21,10 @@ import (
 type Socket struct {
 	// endpointAddrs maps endpoint ids to endpoint-id mapped addresses used for
 	// initial packets before a concrete path is selected.
-	endpointAddrs *AddrMap[key.EndpointId, EndpointIDMappedAddr]
+	endpointAddrs *AddrMap[key.EndpointID, EndpointIDMappedAddr]
 
 	// relayAddrs maps (relay url, endpoint id) pairs to relay mapped addresses.
-	// The map key is the relay key's string form, because netaddr.RelayUrl wraps a
+	// The map key is the relay key's string form, because netaddr.RelayURL wraps a
 	// pointer and is not reliably comparable across separately-parsed URLs.
 	relayAddrs *AddrMap[string, RelayMappedAddr]
 	// relayByKey recovers the original RelayKey from its string form.
@@ -41,9 +41,9 @@ type Socket struct {
 	closed atomic.Bool
 }
 
-// relayKeyString renders a relay key as a stable map key. netaddr.RelayUrl
+// relayKeyString renders a relay key as a stable map key. netaddr.RelayURL
 // normalizes its string form, so equivalent URLs collapse to one key.
-func relayKeyString(url netaddr.RelayUrl, eid key.EndpointId) string {
+func relayKeyString(url netaddr.RelayURL, eid key.EndpointID) string {
 	return url.String() + "|" + eid.String()
 }
 
@@ -51,14 +51,14 @@ func relayKeyString(url netaddr.RelayUrl, eid key.EndpointId) string {
 // endpoint reached through it. It is the key type of the relay mapped-address
 // table.
 type RelayKey struct {
-	URL netaddr.RelayUrl
-	EID key.EndpointId
+	URL netaddr.RelayURL
+	EID key.EndpointID
 }
 
 // NewSocket returns a ready Socket with empty mapped-address tables.
 func NewSocket() *Socket {
 	return &Socket{
-		endpointAddrs: NewAddrMap[key.EndpointId, EndpointIDMappedAddr](
+		endpointAddrs: NewAddrMap[key.EndpointID, EndpointIDMappedAddr](
 			NewEndpointIDMappedAddr,
 			func(v EndpointIDMappedAddr) netip.Addr { return v.Addr() },
 		),
@@ -85,19 +85,19 @@ func (s *Socket) IsClosed() bool { return s.closed.Load() }
 
 // EndpointIDMappedAddrFor returns the endpoint-id mapped address for id,
 // allocating one on first use.
-func (s *Socket) EndpointIDMappedAddrFor(id key.EndpointId) EndpointIDMappedAddr {
+func (s *Socket) EndpointIDMappedAddrFor(id key.EndpointID) EndpointIDMappedAddr {
 	return s.endpointAddrs.Get(id)
 }
 
 // LookupEndpointID returns the endpoint id for an endpoint-id mapped address, if
 // known.
-func (s *Socket) LookupEndpointID(m EndpointIDMappedAddr) (key.EndpointId, bool) {
+func (s *Socket) LookupEndpointID(m EndpointIDMappedAddr) (key.EndpointID, bool) {
 	return s.endpointAddrs.Lookup(m.Addr())
 }
 
 // RelayMappedAddrFor returns the relay mapped address for the (url, eid) pair,
 // allocating one on first use.
-func (s *Socket) RelayMappedAddrFor(url netaddr.RelayUrl, eid key.EndpointId) RelayMappedAddr {
+func (s *Socket) RelayMappedAddrFor(url netaddr.RelayURL, eid key.EndpointID) RelayMappedAddr {
 	key := relayKeyString(url, eid)
 	s.relayMu.Lock()
 	s.relayByKey[key] = RelayKey{URL: url, EID: eid}
@@ -133,7 +133,7 @@ func (s *Socket) CustomMappedAddrFor(c netaddr.CustomAddr) CustomMappedAddr {
 // mapped address (or one whose mapping has been forgotten) falls back to an IP
 // path so the per-remote actor still tracks a stable address. remoteID is used
 // for relay paths, which are keyed by (relay url, endpoint id).
-func (s *Socket) PathAddr(remoteID key.EndpointId, ra net.Addr) Addr {
+func (s *Socket) PathAddr(remoteID key.EndpointID, ra net.Addr) Addr {
 	ap, ok := addrPort(ra)
 	if !ok {
 		return Addr{}

@@ -42,7 +42,7 @@ func TestEndpointDirectEcho(t *testing.T) {
 	defer client.Close(ctx)
 
 	type srvResult struct {
-		peer key.EndpointId
+		peer key.EndpointID
 		mp   bool
 		err  error
 	}

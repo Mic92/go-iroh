@@ -308,7 +308,7 @@ func TestMagicConnEndpointIDSend(t *testing.T) {
 	mapped := sock.EndpointIDMappedAddrFor(id)
 
 	got := make(chan []byte, 1)
-	m.SetEndpointSender(func(remote key.EndpointId, p []byte) bool {
+	m.SetEndpointSender(func(remote key.EndpointID, p []byte) bool {
 		if !remote.Equal(id) {
 			t.Errorf("remote = %s, want %s", remote, id)
 		}
@@ -386,7 +386,7 @@ func TestAddrCanonical(t *testing.T) {
 // (url, eid) pair to a stable mapped address and back.
 func TestSocketRelayRoundTrip(t *testing.T) {
 	s := socket.NewSocket()
-	url := netaddr.RelayUrl{}
+	url := netaddr.RelayURL{}
 	eid := key.PublicKey{}
 
 	m1 := s.RelayMappedAddrFor(url, eid)

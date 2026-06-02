@@ -399,7 +399,7 @@ func TestRunCaptivePortalUsesFirstRelay(t *testing.T) {
 
 	// Force a deterministic first-by-URL ordering: "a." sorts before "z.". We
 	// rewrite the httptest host into a sortable relay URL but must keep the real
-	// host:port for reachability, which RelayUrl preserves.
+	// host:port for reachability, which RelayURL preserves.
 	firstURL := mustRelay(t, first.URL)
 	secondURL := mustRelay(t, second.URL)
 	// Determine which sorts first; the captive portal check uses URLs()[0].

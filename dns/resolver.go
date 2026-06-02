@@ -49,10 +49,10 @@ func (r *Resolver) lookuper() TxtLookuper {
 	return netLookuper{}
 }
 
-// LookupEndpointById resolves the endpoint info for id published under
+// LookupEndpointByID resolves the endpoint info for id published under
 // "_iroh.<z32-id>.<origin>". Pass [N0DNSEndpointOriginProd] for the number0
 // production service.
-func (r *Resolver) LookupEndpointById(ctx context.Context, id key.EndpointId, origin string) (EndpointInfo, error) {
+func (r *Resolver) LookupEndpointByID(ctx context.Context, id key.EndpointID, origin string) (EndpointInfo, error) {
 	name := IrohTxtName + "." + id.Z32() + "." + ensureTrailingDot(origin)
 	return r.LookupEndpointByDomainName(ctx, name)
 }

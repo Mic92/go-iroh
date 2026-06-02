@@ -56,11 +56,11 @@ type Options struct {
 type Client struct {
 	conn    *websocket.Conn
 	version relayproto.ProtocolVersion
-	url     netaddr.RelayUrl
+	url     netaddr.RelayURL
 }
 
 // Connect dials the relay at u and completes the protocol handshake.
-func Connect(ctx context.Context, u netaddr.RelayUrl, opts Options) (*Client, error) {
+func Connect(ctx context.Context, u netaddr.RelayURL, opts Options) (*Client, error) {
 	dialURL, err := websocketURL(u)
 	if err != nil {
 		return nil, err
@@ -179,7 +179,7 @@ func (c *Client) writeFrame(ctx context.Context, data []byte) error {
 
 // websocketURL converts a relay URL (http/https) into the ws/wss dial URL with
 // the relay path, matching the Rust client.
-func websocketURL(u netaddr.RelayUrl) (string, error) {
+func websocketURL(u netaddr.RelayURL) (string, error) {
 	parsed := u.URL()
 	if parsed == nil {
 		return "", errors.New("relayclient: empty relay url")

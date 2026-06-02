@@ -10,7 +10,7 @@ import (
 )
 
 // clientKey is SecretKey::from_bytes(&[42u8; 32]) from the Rust snapshot tests.
-func clientKey(t *testing.T) key.EndpointId {
+func clientKey(t *testing.T) key.EndpointID {
 	t.Helper()
 	var seed [32]byte
 	for i := range seed {
@@ -59,13 +59,13 @@ func TestServerClientFramesSnapshot(t *testing.T) {
 			"0a 2a 2a 2a 2a 2a 2a 2a 2a"},
 		{"DatagramBatch", RelayToClientMsg{
 			Type:             FrameRelayToClientDatagramBat,
-			RemoteEndpointId: key,
+			RemoteEndpointID: key,
 			Datagrams:        Datagrams{Ecn: EcnCe, SegmentSize: 6, Contents: []byte("Hello World!")},
 		},
 			"07 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334 039bfa8b3d368d61 03 0006 48656c6c6f20576f726c6421"},
 		{"DatagramSingle", RelayToClientMsg{
 			Type:             FrameRelayToClientDatagram,
-			RemoteEndpointId: key,
+			RemoteEndpointID: key,
 			Datagrams:        Datagrams{Ecn: EcnCe, Contents: []byte("Hello World!")},
 		},
 			"06 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334 039bfa8b3d368d61 03 48656c6c6f20576f726c6421"},
@@ -75,7 +75,7 @@ func TestServerClientFramesSnapshot(t *testing.T) {
 			TryFor:      20 * time.Millisecond,
 		},
 			"0c 00 00 00 0a 00 00 00 14"},
-		{"Status", RelayToClientMsg{Type: FrameStatus, Status: StatusSameEndpointIdConnected},
+		{"Status", RelayToClientMsg{Type: FrameStatus, Status: StatusSameEndpointIDConnected},
 			"0d 01"},
 	}
 	for _, c := range cases {
@@ -106,13 +106,13 @@ func TestClientServerFramesSnapshot(t *testing.T) {
 			"0a 2a 2a 2a 2a 2a 2a 2a 2a"},
 		{"DatagramBatch", ClientToRelayMsg{
 			Type:          FrameClientToRelayDatagramBat,
-			DstEndpointId: key,
+			DstEndpointID: key,
 			Datagrams:     Datagrams{Ecn: EcnCe, SegmentSize: 6, Contents: []byte("Hello World!")},
 		},
 			"05 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334 039bfa8b3d368d61 03 0006 48656c6c6f20576f726c6421"},
 		{"DatagramSingle", ClientToRelayMsg{
 			Type:          FrameClientToRelayDatagram,
-			DstEndpointId: key,
+			DstEndpointID: key,
 			Datagrams:     Datagrams{Ecn: EcnCe, Contents: []byte("Hello World!")},
 		},
 			"04 197f6b23e16c8532c6abc838facd5ea789be0c76b2920334 039bfa8b3d368d61 03 48656c6c6f20576f726c6421"},
@@ -134,11 +134,11 @@ func TestClientServerFramesSnapshot(t *testing.T) {
 func TestRelayToClientRoundTrip(t *testing.T) {
 	key := clientKey(t)
 	msgs := []RelayToClientMsg{
-		{Type: FrameRelayToClientDatagram, RemoteEndpointId: key, Datagrams: Datagrams{Ecn: EcnEct0, Contents: []byte("data")}},
-		{Type: FrameRelayToClientDatagramBat, RemoteEndpointId: key, Datagrams: Datagrams{Ecn: EcnCe, SegmentSize: 2, Contents: []byte("data")}},
+		{Type: FrameRelayToClientDatagram, RemoteEndpointID: key, Datagrams: Datagrams{Ecn: EcnEct0, Contents: []byte("data")}},
+		{Type: FrameRelayToClientDatagramBat, RemoteEndpointID: key, Datagrams: Datagrams{Ecn: EcnCe, SegmentSize: 2, Contents: []byte("data")}},
 		{Type: FrameEndpointGone, EndpointGone: key},
 		{Type: FramePing, Ping: ping42()},
-		{Type: FrameStatus, Status: StatusSameEndpointIdConnected},
+		{Type: FrameStatus, Status: StatusSameEndpointIDConnected},
 		{Type: FrameRestarting, ReconnectIn: 5 * time.Millisecond, TryFor: 9 * time.Millisecond},
 	}
 	for _, m := range msgs {
@@ -156,8 +156,8 @@ func TestRelayToClientRoundTrip(t *testing.T) {
 func TestClientToRelayRoundTrip(t *testing.T) {
 	key := clientKey(t)
 	msgs := []ClientToRelayMsg{
-		{Type: FrameClientToRelayDatagram, DstEndpointId: key, Datagrams: Datagrams{Contents: []byte("x")}},
-		{Type: FrameClientToRelayDatagramBat, DstEndpointId: key, Datagrams: Datagrams{SegmentSize: 1, Contents: []byte("xy")}},
+		{Type: FrameClientToRelayDatagram, DstEndpointID: key, Datagrams: Datagrams{Contents: []byte("x")}},
+		{Type: FrameClientToRelayDatagramBat, DstEndpointID: key, Datagrams: Datagrams{SegmentSize: 1, Contents: []byte("xy")}},
 		{Type: FramePing, Ping: ping42()},
 		{Type: FramePong, Ping: ping42()},
 	}
@@ -182,7 +182,7 @@ func TestHealthRejectedInV2(t *testing.T) {
 }
 
 func TestStatusRejectedInV1(t *testing.T) {
-	m := RelayToClientMsg{Type: FrameStatus, Status: StatusSameEndpointIdConnected}
+	m := RelayToClientMsg{Type: FrameStatus, Status: StatusSameEndpointIDConnected}
 	encoded := m.AppendTo(nil)
 	if _, err := ParseRelayToClientMsg(encoded, ProtocolV1); err != ErrFrameNotAllowedInVersion {
 		t.Errorf("err = %v, want ErrFrameNotAllowedInVersion", err)

@@ -23,9 +23,9 @@ func newEchoRelayServer(t *testing.T) echoRelayServer {
 }
 
 // url returns the relay URL clients dial.
-func (s echoRelayServer) url(t *testing.T) netaddr.RelayUrl {
+func (s echoRelayServer) url(t *testing.T) netaddr.RelayURL {
 	t.Helper()
-	u, err := netaddr.ParseRelayUrl(s.ts.URL)
+	u, err := netaddr.ParseRelayURL(s.ts.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestRelayOnlyEcho(t *testing.T) {
 	}
 
 	type srvResult struct {
-		peer key.EndpointId
+		peer key.EndpointID
 		err  error
 	}
 	done := make(chan srvResult, 1)

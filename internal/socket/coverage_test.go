@@ -212,7 +212,7 @@ func TestRemotePathStateIsEmptyAndAddrs(t *testing.T) {
 // an IP addr. This backs the recvBatch routing (a RelayAddr surfaces a relay
 // path, a CustomAddr a custom path), recvbatch.go Addr.Relay/Addr.Custom.
 func TestAddrRelayAndCustom(t *testing.T) {
-	u, err := netaddr.ParseRelayUrl("https://relay.example.")
+	u, err := netaddr.ParseRelayURL("https://relay.example.")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,8 +254,8 @@ func TestAddrStringForms(t *testing.T) {
 	if got := ip.String(); !strings.HasPrefix(got, "ip:") {
 		t.Errorf("IP Addr.String() = %q, want ip: prefix", got)
 	}
-	u, _ := netaddr.ParseRelayUrl("https://relay.example.")
-	var eid key.EndpointId
+	u, _ := netaddr.ParseRelayURL("https://relay.example.")
+	var eid key.EndpointID
 	relay := RelayAddr(u, eid)
 	if got := relay.String(); !strings.HasPrefix(got, "relay:") || !strings.Contains(got, "|") {
 		t.Errorf("relay Addr.String() = %q, want relay:...|... form", got)
@@ -271,7 +271,7 @@ func TestAddrStringForms(t *testing.T) {
 
 // TestActiveRelaySetHomeHome checks the mutex-protected home flag round-trips.
 func TestActiveRelaySetHomeHome(t *testing.T) {
-	r := newActiveRelay(&RelayActor{}, netaddr.RelayUrl{}, false)
+	r := newActiveRelay(&RelayActor{}, netaddr.RelayURL{}, false)
 	if r.home() {
 		t.Error("newActiveRelay(home=false).home() = true")
 	}
@@ -285,7 +285,7 @@ func TestActiveRelaySetHomeHome(t *testing.T) {
 	}
 
 	// Construct home=true.
-	r2 := newActiveRelay(&RelayActor{}, netaddr.RelayUrl{}, true)
+	r2 := newActiveRelay(&RelayActor{}, netaddr.RelayURL{}, true)
 	if !r2.home() {
 		t.Error("newActiveRelay(home=true).home() = false")
 	}
@@ -295,7 +295,7 @@ func TestActiveRelaySetHomeHome(t *testing.T) {
 // no route; noteRoute records it (hasRoute=true); dropRoute (EndpointGone)
 // removes it again (relay_actor.go:448,456,468).
 func TestActiveRelayRoutes(t *testing.T) {
-	r := newActiveRelay(&RelayActor{}, netaddr.RelayUrl{}, false)
+	r := newActiveRelay(&RelayActor{}, netaddr.RelayURL{}, false)
 	sk, _ := key.GenerateSecretKey()
 	eid := sk.Public()
 
@@ -316,8 +316,8 @@ func TestActiveRelayRoutes(t *testing.T) {
 // a route to an endpoint, or nil when none does (relay_actor.go:301).
 func TestRouteForEndpointLocked(t *testing.T) {
 	a := NewRelayActor(RelayActorConfig{})
-	u1, _ := netaddr.ParseRelayUrl("https://relay1.example.")
-	u2, _ := netaddr.ParseRelayUrl("https://relay2.example.")
+	u1, _ := netaddr.ParseRelayURL("https://relay1.example.")
+	u2, _ := netaddr.ParseRelayURL("https://relay2.example.")
 	r1 := newActiveRelay(a, u1, false)
 	r2 := newActiveRelay(a, u2, false)
 	a.active[u1.String()] = r1
@@ -407,7 +407,7 @@ func TestRemoteStateActorID(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	id := testEndpointId(t)
+	id := testEndpointID(t)
 	a := m.Actor(id)
 	if !a.ID().Equal(id) {
 		t.Errorf("ID() = %s, want %s", a.ID(), id)
@@ -420,7 +420,7 @@ func TestRemoteStateActorPathEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 
 	ch, cancelSub := a.PathEvents()
 
@@ -468,14 +468,14 @@ func TestRemoteMapDropIfStopped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	id := testEndpointId(t)
+	id := testEndpointID(t)
 
 	// A stale actor reference whose registration was already replaced must not
 	// evict the current actor: m.actors[id] != stale, so dropIfStopped is a
 	// no-op. Use the live actor's own pointer offset by a fresh, unregistered
 	// actor under a different id to stand in as "stale for this id".
 	current := m.Actor(id)
-	other := m.Actor(testEndpointId(t)) // registered under a different id
+	other := m.Actor(testEndpointID(t)) // registered under a different id
 	if m.Len() != 2 {
 		t.Fatalf("Len = %d, want 2 after two distinct Actor() calls", m.Len())
 	}
@@ -505,7 +505,7 @@ func TestTriggerHolepunchSentinel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 	err := a.TriggerHolepunch()
 	if !errors.Is(err, ErrExtensionNotNegotiated) {
 		t.Errorf("TriggerHolepunch() = %v, want errors.Is ErrExtensionNotNegotiated", err)
@@ -516,7 +516,7 @@ func TestValidateDirectPathAfterMultipathNegotiated(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 	conn.multipathNegotiated = true
 	if _, ok := a.AddConnection(conn); !ok {
@@ -538,7 +538,7 @@ func TestValidateDirectPathRequiresMultipath(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 	if _, ok := a.AddConnection(conn); !ok {
 		t.Fatal("AddConnection failed")
@@ -555,7 +555,7 @@ func TestTriggerHolepunchAfterMultipathNegotiated(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 	conn.multipathNegotiated = true
 	if _, ok := a.AddConnection(conn); !ok {
@@ -596,7 +596,7 @@ func TestActorMultipathPathsDoNotFabricateQNGRoute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 
 	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
 	conn := newFakeConn(addr, time.Millisecond)
@@ -637,7 +637,7 @@ func TestActorMultipathPathsEmitQNGRouteEvents(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 
 	addr := IPAddr(netip.MustParseAddrPort("192.0.2.1:4433"))
 	route := IPAddr(netip.MustParseAddrPort("[2001:db8::1]:4433"))
@@ -720,7 +720,7 @@ func TestActorAddConnectionSeedsExistingNATTraversalAddresses(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 
 	candidates := []netip.AddrPort{
 		netip.MustParseAddrPort("192.0.2.10:1111"),
@@ -756,7 +756,7 @@ func TestActorAddNATTraversalAddressesHandoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 
 	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 	conn.multipathNegotiated = true
@@ -785,7 +785,7 @@ func TestActorNATTraversalAddresses(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 
 	if addrs, err := a.NATTraversalAddresses(); !errors.Is(err, ErrExtensionNotNegotiated) {
 		t.Fatalf("NATTraversalAddresses without QNT = %v, %v, want ErrExtensionNotNegotiated", addrs, err)
@@ -819,7 +819,7 @@ func TestActorAddNATTraversalAddressesCanonicalizesAndDedups(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 
 	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 	conn.multipathNegotiated = true
@@ -856,7 +856,7 @@ func TestActorAddNATTraversalAddressesRemovesStaleCandidates(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 
 	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 	conn.multipathNegotiated = true
@@ -888,7 +888,7 @@ func TestTriggerHolepunchInitiateRoundError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 	want := errors.New("round refused")
 	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 	conn.multipathNegotiated = true
@@ -941,7 +941,7 @@ func TestSocketCustomMappedAddrFor(t *testing.T) {
 // down to a fallback IP path (socket.go:115).
 func TestSocketPathAddr(t *testing.T) {
 	s := NewSocket()
-	u, _ := netaddr.ParseRelayUrl("https://relay.example.")
+	u, _ := netaddr.ParseRelayURL("https://relay.example.")
 	sk, _ := key.GenerateSecretKey()
 	eid := sk.Public()
 
@@ -1027,7 +1027,7 @@ func TestRelayTransportServeForwardsRecv(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	a := NewRelayActor(RelayActorConfig{
 		SecretKey: sk,
-		dialer:    func(context.Context, netaddr.RelayUrl, relayclient.Options) (relayClient, error) { return client, nil },
+		dialer:    func(context.Context, netaddr.RelayURL, relayclient.Options) (relayClient, error) { return client, nil },
 	})
 	sock := NewSocket()
 	recvCh := make(chan recvBatch, 16)
@@ -1049,7 +1049,7 @@ func TestRelayTransportServeForwardsRecv(t *testing.T) {
 	// A GRO batch with segment size 2 over 6 bytes -> three recvBatches.
 	client.recv <- relayproto.RelayToClientMsg{
 		Type:             relayproto.FrameRelayToClientDatagramBat,
-		RemoteEndpointId: src.Public(),
+		RemoteEndpointID: src.Public(),
 		Datagrams:        relayproto.Datagrams{SegmentSize: 2, Contents: []byte("aabbcc")},
 	}
 

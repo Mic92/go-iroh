@@ -46,7 +46,7 @@ func transportKind(a TransportAddr) int {
 }
 
 // RelayAddr is a [TransportAddr] reachable via a relay server.
-type RelayAddr struct{ URL RelayUrl }
+type RelayAddr struct{ URL RelayURL }
 
 // IPAddr is a [TransportAddr] reachable at an IP socket address.
 type IPAddr struct{ Addr netip.AddrPort }
@@ -109,8 +109,8 @@ func NewCustomAddr(id uint64, data []byte) CustomAddr {
 	return CustomAddr{id: id, data: slices.Clone(data)}
 }
 
-// Id returns the transport id.
-func (a CustomAddr) Id() uint64 { return a.id }
+// ID returns the transport id.
+func (a CustomAddr) ID() uint64 { return a.id }
 
 // Data returns the opaque address data. The returned slice must not be mutated.
 func (a CustomAddr) Data() []byte { return a.data }
@@ -174,7 +174,7 @@ func ParseTransportAddr(s string) (TransportAddr, error) {
 	}
 	switch kind {
 	case "relay":
-		u, err := ParseRelayUrl(value)
+		u, err := ParseRelayURL(value)
 		if err != nil {
 			return nil, err
 		}
@@ -192,33 +192,33 @@ func ParseTransportAddr(s string) (TransportAddr, error) {
 	}
 }
 
-// EndpointAddr combines an endpoint's [key.EndpointId] with the network-level
+// EndpointAddr combines an endpoint's [key.EndpointID] with the network-level
 // addresses at which it may be reached.
 //
-// To establish a connection both the key.EndpointId and at least one path (a relay
+// To establish a connection both the key.EndpointID and at least one path (a relay
 // URL or a direct IP address) are needed; an EndpointAddr with no addresses is
 // still usable together with an address-lookup service.
 type EndpointAddr struct {
-	// Id is the endpoint's identifier.
-	Id key.EndpointId
+	// ID is the endpoint's identifier.
+	ID key.EndpointID
 	// addrs is the sorted, deduplicated set of transport addresses.
 	addrs []TransportAddr
 }
 
 // NewEndpointAddr creates an EndpointAddr with the given id and no addresses.
-func NewEndpointAddr(id key.EndpointId) EndpointAddr {
-	return EndpointAddr{Id: id}
+func NewEndpointAddr(id key.EndpointID) EndpointAddr {
+	return EndpointAddr{ID: id}
 }
 
 // EndpointAddrFromParts creates an EndpointAddr from an id and a set of
 // transport addresses (deduplicated and sorted).
-func EndpointAddrFromParts(id key.EndpointId, addrs ...TransportAddr) EndpointAddr {
-	a := EndpointAddr{Id: id}
+func EndpointAddrFromParts(id key.EndpointID, addrs ...TransportAddr) EndpointAddr {
+	a := EndpointAddr{ID: id}
 	return a.WithAddrs(addrs...)
 }
 
 // WithRelayURL returns a copy of a with the given relay URL added.
-func (a EndpointAddr) WithRelayURL(u RelayUrl) EndpointAddr {
+func (a EndpointAddr) WithRelayURL(u RelayURL) EndpointAddr {
 	return a.WithAddrs(RelayAddr{URL: u})
 }
 
@@ -232,14 +232,14 @@ func (a EndpointAddr) WithIP(ap netip.AddrPort) EndpointAddr {
 func (a EndpointAddr) WithAddrs(addrs ...TransportAddr) EndpointAddr {
 	merged := append(slices.Clone(a.addrs), addrs...)
 	merged = sortDedupAddrs(merged)
-	return EndpointAddr{Id: a.Id, addrs: merged}
+	return EndpointAddr{ID: a.ID, addrs: merged}
 }
 
 // Addrs returns the sorted, deduplicated transport addresses. The returned
 // slice must not be mutated.
 func (a EndpointAddr) Addrs() []TransportAddr { return a.addrs }
 
-// IsEmpty reports whether only the key.EndpointId is present.
+// IsEmpty reports whether only the key.EndpointID is present.
 func (a EndpointAddr) IsEmpty() bool { return len(a.addrs) == 0 }
 
 // IPAddrs returns the IP socket addresses of this endpoint.
@@ -255,8 +255,8 @@ func (a EndpointAddr) IPAddrs() []netip.AddrPort {
 
 // RelayURLs returns the relay URLs of this endpoint. In practice this is
 // expected to be zero or one home relay.
-func (a EndpointAddr) RelayURLs() []RelayUrl {
-	var out []RelayUrl
+func (a EndpointAddr) RelayURLs() []RelayURL {
+	var out []RelayURL
 	for _, addr := range a.addrs {
 		if r, ok := addr.(RelayAddr); ok {
 			out = append(out, r.URL)

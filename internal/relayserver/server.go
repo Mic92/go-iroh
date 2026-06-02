@@ -26,12 +26,12 @@ const (
 // Server is an iroh relay protocol HTTP handler.
 type Server struct {
 	mu      sync.Mutex
-	clients map[key.EndpointId]*session
+	clients map[key.EndpointID]*session
 }
 
 // New returns a relay server.
 func New() *Server {
-	return &Server{clients: make(map[key.EndpointId]*session)}
+	return &Server{clients: make(map[key.EndpointID]*session)}
 }
 
 // ServeHTTP handles relay WebSocket requests at /relay.
@@ -44,7 +44,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type session struct {
-	id      key.EndpointId
+	id      key.EndpointID
 	version relayproto.ProtocolVersion
 	send    chan []byte
 }
@@ -79,7 +79,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	if old := s.register(sess); old != nil {
 		old.enqueue(relayproto.RelayToClientMsg{
 			Type:   relayproto.FrameStatus,
-			Status: relayproto.StatusSameEndpointIdConnected,
+			Status: relayproto.StatusSameEndpointIDConnected,
 		})
 	}
 	defer s.unregister(sess)
@@ -102,33 +102,33 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func authenticate(ctx context.Context, conn *websocket.Conn) (key.EndpointId, error) {
+func authenticate(ctx context.Context, conn *websocket.Conn) (key.EndpointID, error) {
 	var challenge relayproto.ServerChallenge
 	if _, err := rand.Read(challenge.Challenge[:]); err != nil {
-		return key.EndpointId{}, err
+		return key.EndpointID{}, err
 	}
 	if err := conn.Write(ctx, websocket.MessageBinary, challenge.AppendTo(nil)); err != nil {
-		return key.EndpointId{}, err
+		return key.EndpointID{}, err
 	}
 	_, data, err := conn.Read(ctx)
 	if err != nil {
-		return key.EndpointId{}, err
+		return key.EndpointID{}, err
 	}
 	frame, err := relayproto.ParseHandshakeFrame(data)
 	if err != nil {
-		return key.EndpointId{}, err
+		return key.EndpointID{}, err
 	}
 	auth, ok := frame.(*relayproto.ClientAuth)
 	if !ok {
 		deny(ctx, conn, "expected client auth")
-		return key.EndpointId{}, errors.New("relayserver: expected client auth")
+		return key.EndpointID{}, errors.New("relayserver: expected client auth")
 	}
 	if err := auth.Verify(challenge); err != nil {
 		deny(ctx, conn, "bad auth")
-		return key.EndpointId{}, err
+		return key.EndpointID{}, err
 	}
 	if err := conn.Write(ctx, websocket.MessageBinary, relayproto.ServerConfirmsAuth{}.AppendTo(nil)); err != nil {
-		return key.EndpointId{}, err
+		return key.EndpointID{}, err
 	}
 	return auth.PublicKey, nil
 }
@@ -153,13 +153,13 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, sess *session) {
 func (s *Server) handleClientMsg(src *session, msg relayproto.ClientToRelayMsg) {
 	switch msg.Type {
 	case relayproto.FrameClientToRelayDatagram, relayproto.FrameClientToRelayDatagramBat:
-		dst := s.lookup(msg.DstEndpointId)
+		dst := s.lookup(msg.DstEndpointID)
 		if dst == nil {
 			return
 		}
 		dst.enqueue(relayproto.RelayToClientMsg{
 			Type:             relayproto.FrameRelayToClientDatagram,
-			RemoteEndpointId: src.id,
+			RemoteEndpointID: src.id,
 			Datagrams:        msg.Datagrams,
 		})
 	case relayproto.FramePing:
@@ -189,7 +189,7 @@ func (s *Server) unregister(sess *session) {
 	s.mu.Unlock()
 }
 
-func (s *Server) lookup(id key.EndpointId) *session {
+func (s *Server) lookup(id key.EndpointID) *session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.clients[id]

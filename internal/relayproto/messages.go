@@ -60,20 +60,20 @@ type Status uint8
 const (
 	// StatusHealthy reports the connection recovered from previous problems.
 	StatusHealthy Status = 0
-	// StatusSameEndpointIdConnected reports another endpoint connected with the
+	// StatusSameEndpointIDConnected reports another endpoint connected with the
 	// same id; no more messages will be received.
-	StatusSameEndpointIdConnected Status = 1
+	StatusSameEndpointIDConnected Status = 1
 )
 
 // RelayToClientMsg is a message a relay sends to a client. Exactly one of its
 // fields is meaningful, selected by Type.
 type RelayToClientMsg struct {
 	Type FrameType
-	// Datagrams / RemoteEndpointId for FrameRelayToClientDatagram(Batch).
-	RemoteEndpointId key.EndpointId
+	// Datagrams / RemoteEndpointID for FrameRelayToClientDatagram(Batch).
+	RemoteEndpointID key.EndpointID
 	Datagrams        Datagrams
 	// EndpointGone for FrameEndpointGone.
-	EndpointGone key.EndpointId
+	EndpointGone key.EndpointID
 	// Status for FrameStatus.
 	Status Status
 	// Ping/Pong payload for FramePing/FramePong.
@@ -90,7 +90,7 @@ func (m RelayToClientMsg) AppendTo(dst []byte) []byte {
 	dst = writeFrameType(dst, m.frameType())
 	switch m.Type {
 	case FrameRelayToClientDatagram, FrameRelayToClientDatagramBat:
-		id := m.RemoteEndpointId.Bytes()
+		id := m.RemoteEndpointID.Bytes()
 		dst = append(dst, id[:]...)
 		dst = m.Datagrams.appendTo(dst)
 	case FrameEndpointGone:
@@ -153,20 +153,20 @@ func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClie
 	}
 	switch ft {
 	case FrameRelayToClientDatagram, FrameRelayToClientDatagramBat:
-		if len(rest) < key.PublicKeyLength {
+		if len(rest) < key.PublicKeySize {
 			return RelayToClientMsg{}, ErrInvalidFrame
 		}
-		id, err := key.PublicKeyFromSlice(rest[:key.PublicKeyLength])
+		id, err := key.PublicKeyFromSlice(rest[:key.PublicKeySize])
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
-		dg, err := datagramsFromBytes(rest[key.PublicKeyLength:], ft == FrameRelayToClientDatagramBat)
+		dg, err := datagramsFromBytes(rest[key.PublicKeySize:], ft == FrameRelayToClientDatagramBat)
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
-		return RelayToClientMsg{Type: ft, RemoteEndpointId: id, Datagrams: dg}, nil
+		return RelayToClientMsg{Type: ft, RemoteEndpointID: id, Datagrams: dg}, nil
 	case FrameEndpointGone:
-		if len(rest) != key.PublicKeyLength {
+		if len(rest) != key.PublicKeySize {
 			return RelayToClientMsg{}, ErrInvalidFrame
 		}
 		id, err := key.PublicKeyFromSlice(rest)
@@ -210,8 +210,8 @@ func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClie
 // fields is meaningful, selected by Type.
 type ClientToRelayMsg struct {
 	Type FrameType
-	// DstEndpointId / Datagrams for FrameClientToRelayDatagram(Batch).
-	DstEndpointId key.EndpointId
+	// DstEndpointID / Datagrams for FrameClientToRelayDatagram(Batch).
+	DstEndpointID key.EndpointID
 	Datagrams     Datagrams
 	// Ping/Pong payload for FramePing/FramePong.
 	Ping [8]byte
@@ -222,7 +222,7 @@ func (m ClientToRelayMsg) AppendTo(dst []byte) []byte {
 	dst = writeFrameType(dst, m.frameType())
 	switch m.Type {
 	case FrameClientToRelayDatagram, FrameClientToRelayDatagramBat:
-		id := m.DstEndpointId.Bytes()
+		id := m.DstEndpointID.Bytes()
 		dst = append(dst, id[:]...)
 		dst = m.Datagrams.appendTo(dst)
 	case FramePing, FramePong:
@@ -264,18 +264,18 @@ func ParseClientToRelayMsg(content []byte) (ClientToRelayMsg, error) {
 	}
 	switch ft {
 	case FrameClientToRelayDatagram, FrameClientToRelayDatagramBat:
-		if len(rest) < key.PublicKeyLength {
+		if len(rest) < key.PublicKeySize {
 			return ClientToRelayMsg{}, ErrInvalidFrame
 		}
-		id, err := key.PublicKeyFromSlice(rest[:key.PublicKeyLength])
+		id, err := key.PublicKeyFromSlice(rest[:key.PublicKeySize])
 		if err != nil {
 			return ClientToRelayMsg{}, err
 		}
-		dg, err := datagramsFromBytes(rest[key.PublicKeyLength:], ft == FrameClientToRelayDatagramBat)
+		dg, err := datagramsFromBytes(rest[key.PublicKeySize:], ft == FrameClientToRelayDatagramBat)
 		if err != nil {
 			return ClientToRelayMsg{}, err
 		}
-		return ClientToRelayMsg{Type: ft, DstEndpointId: id, Datagrams: dg}, nil
+		return ClientToRelayMsg{Type: ft, DstEndpointID: id, Datagrams: dg}, nil
 	case FramePing, FramePong:
 		if len(rest) != 8 {
 			return ClientToRelayMsg{}, ErrInvalidFrame

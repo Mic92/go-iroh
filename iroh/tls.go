@@ -18,7 +18,7 @@ import (
 // raw-public-key TLS implementation.
 
 // base32DNSSEC is data_encoding::BASE32_DNSSEC: RFC 4648 base32hex, lowercase,
-// unpadded. iroh encodes an EndpointId into the TLS server name with it (see
+// unpadded. iroh encodes an EndpointID into the TLS server name with it (see
 // [ServerName]); it differs from the z-base-32 used for human-facing key
 // strings.
 var base32DNSSEC = base32.NewEncoding("0123456789abcdefghijklmnopqrstuv").WithPadding(base32.NoPadding)
@@ -33,25 +33,25 @@ const tlsNameSuffix = ".iroh.invalid"
 // ClientHello; the accepting endpoint proves it holds id by presenting id as
 // its raw public key. Deriving the name from the id (rather than a constant)
 // also keeps per-peer 0-RTT session tickets in separate cache buckets.
-func ServerName(id key.EndpointId) string {
+func ServerName(id key.EndpointID) string {
 	b := id.Bytes()
 	return base32DNSSEC.EncodeToString(b[:]) + tlsNameSuffix
 }
 
-// endpointIdFromServerName is the inverse of [ServerName]. It reports whether
+// endpointIDFromServerName is the inverse of [ServerName]. It reports whether
 // name is a well-formed iroh server name and, if so, the encoded endpoint id.
-func endpointIdFromServerName(name string) (key.EndpointId, bool) {
+func endpointIDFromServerName(name string) (key.EndpointID, bool) {
 	rest, ok := strings.CutSuffix(name, tlsNameSuffix)
 	if !ok || strings.Contains(rest, ".") {
-		return key.EndpointId{}, false
+		return key.EndpointID{}, false
 	}
 	raw, err := base32DNSSEC.DecodeString(rest)
-	if err != nil || len(raw) != key.PublicKeyLength {
-		return key.EndpointId{}, false
+	if err != nil || len(raw) != key.PublicKeySize {
+		return key.EndpointID{}, false
 	}
 	id, err := key.PublicKeyFromSlice(raw)
 	if err != nil {
-		return key.EndpointId{}, false
+		return key.EndpointID{}, false
 	}
 	return id, true
 }
@@ -60,25 +60,24 @@ func endpointIdFromServerName(name string) (key.EndpointId, bool) {
 // ed25519 public key as a SubjectPublicKeyInfo, signed under sk during the
 // handshake.
 func rawKeyCertificate(sk key.SecretKey) (tls.Certificate, error) {
-	seed := sk.Bytes()
-	priv := ed25519.NewKeyFromSeed(seed[:])
+	priv := sk.Ed25519()
 	pub := priv.Public().(ed25519.PublicKey)
 	return tls.MarshalRawPublicKeyCertificate(pub, priv)
 }
 
-// peerEndpointId extracts the peer's endpoint id from a completed raw-public-key
+// peerEndpointID extracts the peer's endpoint id from a completed raw-public-key
 // TLS handshake. It is the public key carried in the single peer certificate.
-func peerEndpointId(cs tls.ConnectionState) (key.EndpointId, error) {
+func peerEndpointID(cs tls.ConnectionState) (key.EndpointID, error) {
 	if len(cs.PeerCertificates) != 1 {
-		return key.EndpointId{}, fmt.Errorf("iroh: expected exactly one peer certificate, got %d", len(cs.PeerCertificates))
+		return key.EndpointID{}, fmt.Errorf("iroh: expected exactly one peer certificate, got %d", len(cs.PeerCertificates))
 	}
 	pub, ok := cs.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
 	if !ok {
-		return key.EndpointId{}, errors.New("iroh: peer key is not ed25519")
+		return key.EndpointID{}, errors.New("iroh: peer key is not ed25519")
 	}
 	id, err := key.PublicKeyFromSlice(pub)
 	if err != nil {
-		return key.EndpointId{}, fmt.Errorf("iroh: peer key: %w", err)
+		return key.EndpointID{}, fmt.Errorf("iroh: peer key: %w", err)
 	}
 	return id, nil
 }
@@ -94,7 +93,7 @@ func peerEndpointId(cs tls.ConnectionState) (key.EndpointId, error) {
 // of resumption (the connection then always performs a full handshake). This
 // mirrors the Rust client config, which enables early data and stores tickets
 // in a ClientSessionMemoryCache (iroh/src/tls.rs:86-87).
-func clientTLSConfig(sk key.SecretKey, want key.EndpointId, alpns []string, cache tls.ClientSessionCache) (*tls.Config, error) {
+func clientTLSConfig(sk key.SecretKey, want key.EndpointID, alpns []string, cache tls.ClientSessionCache) (*tls.Config, error) {
 	cert, err := rawKeyCertificate(sk)
 	if err != nil {
 		return nil, err
@@ -110,7 +109,7 @@ func clientTLSConfig(sk key.SecretKey, want key.EndpointId, alpns []string, cach
 		ServerName:             ServerName(want),
 		InsecureSkipVerify:     true, // chain verification is replaced by VerifyConnection
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			got, err := peerEndpointId(cs)
+			got, err := peerEndpointID(cs)
 			if err != nil {
 				return err
 			}
@@ -150,7 +149,7 @@ func serverTLSConfig(sk key.SecretKey, alpns []string) (*tls.Config, error) {
 			// Authenticate that a client key is present and parseable; the
 			// signature over the handshake transcript proves possession. The
 			// concrete identity is surfaced to the application post-handshake.
-			_, err := peerEndpointId(cs)
+			_, err := peerEndpointID(cs)
 			return err
 		},
 	}, nil

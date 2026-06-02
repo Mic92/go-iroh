@@ -28,8 +28,8 @@ const (
 type Addr struct {
 	kind     AddrKind
 	ip       netip.AddrPort     // AddrIP
-	relayURL netaddr.RelayUrl   // AddrRelay
-	eid      key.EndpointId     // AddrRelay
+	relayURL netaddr.RelayURL   // AddrRelay
+	eid      key.EndpointID     // AddrRelay
 	custom   netaddr.CustomAddr // AddrCustom
 }
 
@@ -41,7 +41,7 @@ func IPAddr(ap netip.AddrPort) Addr {
 }
 
 // RelayAddr returns an [Addr] for a relay path reaching eid through url.
-func RelayAddr(url netaddr.RelayUrl, eid key.EndpointId) Addr {
+func RelayAddr(url netaddr.RelayURL, eid key.EndpointID) Addr {
 	return Addr{kind: AddrRelay, relayURL: url, eid: eid}
 }
 
@@ -75,7 +75,7 @@ func (a Addr) IP() (netip.AddrPort, bool) {
 }
 
 // Relay returns the relay URL, endpoint id, and true if a is an [AddrRelay].
-func (a Addr) Relay() (netaddr.RelayUrl, key.EndpointId, bool) {
+func (a Addr) Relay() (netaddr.RelayURL, key.EndpointID, bool) {
 	return a.relayURL, a.eid, a.kind == AddrRelay
 }
 

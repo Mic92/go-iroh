@@ -26,11 +26,11 @@ func drain(ch <-chan Result) []Result {
 	return out
 }
 
-func relayURL(t *testing.T, s string) netaddr.RelayUrl {
+func relayURL(t *testing.T, s string) netaddr.RelayURL {
 	t.Helper()
-	u, err := netaddr.ParseRelayUrl(s)
+	u, err := netaddr.ParseRelayURL(s)
 	if err != nil {
-		t.Fatalf("ParseRelayUrl(%q): %v", s, err)
+		t.Fatalf("ParseRelayURL(%q): %v", s, err)
 	}
 	return u
 }
@@ -70,7 +70,7 @@ func TestMemoryLookup(t *testing.T) {
 	}
 
 	removed, ok := m.RemoveEndpointInfo(id)
-	if !ok || removed.Id != id {
+	if !ok || removed.ID != id {
 		t.Fatalf("RemoveEndpointInfo = %v, %v", removed, ok)
 	}
 	if _, ok := m.GetEndpointInfo(id); ok {
@@ -109,8 +109,8 @@ func TestDNSTxtRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EndpointInfoFromTxtLookup: %v", err)
 	}
-	if !back.Id.Equal(id) {
-		t.Errorf("id = %s, want %s", back.Id, id)
+	if !back.ID.Equal(id) {
+		t.Errorf("id = %s, want %s", back.ID, id)
 	}
 	if len(back.RelayURLs()) != 1 || !back.RelayURLs()[0].Equal(relay) {
 		t.Errorf("RelayURLs = %v", back.RelayURLs())
@@ -287,7 +287,7 @@ type staticLookup struct {
 
 func (s staticLookup) Publish(dns.EndpointData) {}
 
-func (s staticLookup) Resolve(ctx context.Context, _ key.EndpointId) <-chan Result {
+func (s staticLookup) Resolve(ctx context.Context, _ key.EndpointID) <-chan Result {
 	out := make(chan Result, 1)
 	go func() {
 		defer close(out)
@@ -393,7 +393,7 @@ func (r *recordingLookup) Publish(data dns.EndpointData) {
 	r.published = append(r.published, data)
 }
 
-func (r *recordingLookup) Resolve(context.Context, key.EndpointId) <-chan Result { return nil }
+func (r *recordingLookup) Resolve(context.Context, key.EndpointID) <-chan Result { return nil }
 
 func TestServicesAddPublishesHistorical(t *testing.T) {
 	relay := relayURL(t, "https://relay.example/")

@@ -7,8 +7,8 @@ import (
 )
 
 func TestMapInsertGetRemove(t *testing.T) {
-	u1, _ := netaddr.ParseRelayUrl("https://a.example.com")
-	u2, _ := netaddr.ParseRelayUrl("https://b.example.com")
+	u1, _ := netaddr.ParseRelayURL("https://a.example.com")
+	u2, _ := netaddr.ParseRelayURL("https://b.example.com")
 	m := NewMap()
 	if !m.IsEmpty() {
 		t.Fatal("new map should be empty")
@@ -34,8 +34,8 @@ func TestMapInsertGetRemove(t *testing.T) {
 }
 
 func TestMapURLsSorted(t *testing.T) {
-	ub, _ := netaddr.ParseRelayUrl("https://b.example.com")
-	ua, _ := netaddr.ParseRelayUrl("https://a.example.com")
+	ub, _ := netaddr.ParseRelayURL("https://b.example.com")
+	ua, _ := netaddr.ParseRelayURL("https://a.example.com")
 	m := MapFromURLs(ub, ua)
 	urls := m.URLs()
 	if len(urls) != 2 || urls[0].String() != "https://a.example.com/" {
@@ -53,7 +53,7 @@ func TestModeMaps(t *testing.T) {
 	if ModeStaging().Map().Len() != 1 {
 		t.Errorf("staging map should have 1 relay, got %d", ModeStaging().Map().Len())
 	}
-	u, _ := netaddr.ParseRelayUrl("https://custom.example.com")
+	u, _ := netaddr.ParseRelayURL("https://custom.example.com")
 	if ModeCustomURLs(u).Map().Len() != 1 {
 		t.Error("custom mode map mismatch")
 	}

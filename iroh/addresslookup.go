@@ -13,7 +13,7 @@ import (
 )
 
 // AddressLookup is a system for publishing and resolving the addressing
-// information of an [key.EndpointId]. It lets an [Endpoint] connect to a peer
+// information of an [key.EndpointID]. It lets an [Endpoint] connect to a peer
 // knowing only its id, by looking up a [netaddr.EndpointAddr] (a relay URL and/or
 // direct addresses) through one or more lookup services.
 //
@@ -33,7 +33,7 @@ type AddressLookup interface {
 	// [Result] values, closed when the lookup is exhausted, or nil if the
 	// service does not perform resolution. Cancel ctx to stop pending work; the
 	// channel is then closed.
-	Resolve(ctx context.Context, id key.EndpointId) <-chan Result
+	Resolve(ctx context.Context, id key.EndpointID) <-chan Result
 }
 
 // Item is a single address-lookup result: the [dns.EndpointInfo] discovered for
@@ -61,7 +61,7 @@ func NewItem(info dns.EndpointInfo, provenance string, lastUpdated *uint64) Item
 }
 
 // EndpointID returns the id of the discovered endpoint.
-func (i Item) EndpointID() key.EndpointId { return i.info.Id }
+func (i Item) EndpointID() key.EndpointID { return i.info.ID }
 
 // EndpointInfo returns the discovered endpoint info.
 func (i Item) EndpointInfo() dns.EndpointInfo { return i.info }
@@ -240,7 +240,7 @@ func (s *AddressLookupServices) Publish(data dns.EndpointData) {
 // [ErrNoServiceConfigured].
 //
 // Cancel ctx to stop all services and close the channel.
-func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointId) <-chan Result {
+func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
 	s.mu.RLock()
 	services := slices.Clone(s.services)
 	s.mu.RUnlock()

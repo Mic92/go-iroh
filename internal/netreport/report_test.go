@@ -8,9 +8,9 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-func mustRelay(t *testing.T, s string) netaddr.RelayUrl {
+func mustRelay(t *testing.T, s string) netaddr.RelayURL {
 	t.Helper()
-	u, err := netaddr.ParseRelayUrl(s)
+	u, err := netaddr.ParseRelayURL(s)
 	if err != nil {
 		t.Fatalf("parse relay url %q: %v", s, err)
 	}

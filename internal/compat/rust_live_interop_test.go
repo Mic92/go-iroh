@@ -451,10 +451,10 @@ func rustIrohHelp(t *testing.T, bin string) (string, error) {
 }
 
 type rustListenReady struct {
-	EndpointID     key.EndpointId
+	EndpointID     key.EndpointID
 	EndpointIDText string
 	Addrs          []netip.AddrPort
-	RelayURL       netaddr.RelayUrl
+	RelayURL       netaddr.RelayURL
 	Line           string
 }
 
@@ -673,7 +673,7 @@ func parseRustListenConnectLine(line string) (rustListenReady, bool, error) {
 		}
 		addrs = append(addrs, addr)
 	}
-	relayURL, err := netaddr.ParseRelayUrl(relayText)
+	relayURL, err := netaddr.ParseRelayURL(relayText)
 	if err != nil {
 		return rustListenReady{}, true, fmt.Errorf("relay URL %q: %w", relayText, err)
 	}
@@ -686,14 +686,14 @@ func parseRustListenConnectLine(line string) (rustListenReady, bool, error) {
 	}, true, nil
 }
 
-func parseRustEndpointID(s string) (key.EndpointId, error) {
+func parseRustEndpointID(s string) (key.EndpointID, error) {
 	if id, err := key.PublicKeyFromZ32(s); err == nil {
 		return id, nil
 	}
 	if id, err := key.ParsePublicKey(s); err == nil {
 		return id, nil
 	}
-	return key.EndpointId{}, fmt.Errorf("endpoint id %q: invalid public key", s)
+	return key.EndpointID{}, fmt.Errorf("endpoint id %q: invalid public key", s)
 }
 
 func firstLine(s string) string {

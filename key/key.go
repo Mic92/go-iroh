@@ -12,14 +12,16 @@ import (
 	"filippo.io/edwards25519"
 )
 
-// PublicKeyLength is the length of an Ed25519 public key, in bytes.
-const PublicKeyLength = ed25519.PublicKeySize // 32
-
-// SecretKeyLength is the length of an Ed25519 secret key seed, in bytes.
-const SecretKeyLength = ed25519.SeedSize // 32
-
-// SignatureLength is the length of an Ed25519 signature, in bytes.
-const SignatureLength = ed25519.SignatureSize // 64
+const (
+	// PublicKeySize is the size of an Ed25519 public key, in bytes.
+	PublicKeySize = ed25519.PublicKeySize
+	// PrivateKeySize is the size of an Ed25519 private key, in bytes.
+	PrivateKeySize = ed25519.PrivateKeySize
+	// SeedSize is the size of an Ed25519 private key seed, in bytes.
+	SeedSize = ed25519.SeedSize
+	// SignatureSize is the size of an Ed25519 signature, in bytes.
+	SignatureSize = ed25519.SignatureSize
+)
 
 // zBase32 is the z-base-32 encoding used by pkarr (https://pkarr.org) for
 // endpoint-id domain names. Its alphabet differs from RFC 4648 base32.
@@ -38,45 +40,55 @@ var (
 	ErrDecodeBase32 = errors.New("failed to decode base32 string")
 )
 
-// PublicKey is an Ed25519 public key. It is stored as the compressed Edwards y
-// coordinate and is verified to decompress to a valid curve point when created.
+// PublicKey is a public endpoint identity key. It is verified to be a valid
+// Ed25519 public key when created.
 //
 // The zero value is not usable; construct a PublicKey with [NewPublicKey],
 // [ParsePublicKey], or [SecretKey.Public].
 type PublicKey struct {
-	bytes [PublicKeyLength]byte
+	bytes [PublicKeySize]byte
 }
 
-// EndpointId is the identifier for an endpoint in the iroh network.
+// EndpointID is the identifier for an endpoint in the iroh network.
 //
 // It is identical to [PublicKey]. By convention use PublicKey when performing
-// cryptographic operations and EndpointId when referencing an endpoint.
-type EndpointId = PublicKey
+// cryptographic operations and EndpointID when referencing an endpoint.
+type EndpointID = PublicKey
 
 // NewPublicKey constructs a PublicKey from a 32-byte array. It returns
 // [ErrInvalidKeyData] if the bytes do not decompress to a valid Ed25519 curve
 // point. It never fails for bytes returned from [PublicKey.Bytes].
-func NewPublicKey(b [PublicKeyLength]byte) (PublicKey, error) {
+func NewPublicKey(b [PublicKeySize]byte) (PublicKey, error) {
 	if _, err := new(edwards25519.Point).SetBytes(b[:]); err != nil {
 		return PublicKey{}, ErrInvalidKeyData
 	}
 	return PublicKey{bytes: b}, nil
 }
 
+// PublicKeyFromEd25519 constructs a PublicKey from a crypto/ed25519 public key.
+func PublicKeyFromEd25519(k ed25519.PublicKey) (PublicKey, error) {
+	return PublicKeyFromSlice(k)
+}
+
 // PublicKeyFromSlice constructs a PublicKey from a byte slice. It returns
 // [ErrInvalidKeyLength] if the slice is not 32 bytes and [ErrInvalidKeyData] if
 // the bytes are not a valid curve point.
 func PublicKeyFromSlice(b []byte) (PublicKey, error) {
-	if len(b) != PublicKeyLength {
+	if len(b) != PublicKeySize {
 		return PublicKey{}, ErrInvalidKeyLength
 	}
-	var arr [PublicKeyLength]byte
+	var arr [PublicKeySize]byte
 	copy(arr[:], b)
 	return NewPublicKey(arr)
 }
 
 // Bytes returns the public key as a 32-byte array.
-func (k PublicKey) Bytes() [PublicKeyLength]byte { return k.bytes }
+func (k PublicKey) Bytes() [PublicKeySize]byte { return k.bytes }
+
+// Ed25519 returns the key as a crypto/ed25519 public key.
+func (k PublicKey) Ed25519() ed25519.PublicKey {
+	return ed25519.PublicKey(k.bytes[:])
+}
 
 // AsSlice returns the public key as a byte slice. The slice aliases the key's
 // storage and must not be mutated.
@@ -105,11 +117,6 @@ func (k PublicKey) Equal(other PublicKey) bool { return k.bytes == other.bytes }
 // gives PublicKey a total order suitable for sorting and map-free ordered use.
 func (k PublicKey) Compare(other PublicKey) int {
 	return bytes.Compare(k.bytes[:], other.bytes[:])
-}
-
-// edwardsPoint returns the public key as a stdlib ed25519.PublicKey.
-func (k PublicKey) edwardsPoint() ed25519.PublicKey {
-	return ed25519.PublicKey(k.bytes[:])
 }
 
 // String returns the lowercase-hex encoding of the key. It is the canonical
@@ -182,7 +189,8 @@ func (k *PublicKey) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// SecretKey is an Ed25519 secret key. Its public part can always be recovered.
+// SecretKey is a secret endpoint identity key. Its public part can always be
+// recovered.
 //
 // Go has no destructors, so unlike the Rust original this type is not zeroized
 // on drop; callers handling long-lived secrets should clear the bytes returned
@@ -194,27 +202,36 @@ type SecretKey struct {
 	signing ed25519.PrivateKey // 64 bytes: seed||public
 }
 
-// GenerateSecretKey generates a new SecretKey using crypto/rand.
+// GenerateSecretKey generates a new SecretKey using crypto/ed25519.
 func GenerateSecretKey() (SecretKey, error) {
-	var seed [SecretKeyLength]byte
-	if _, err := rand.Read(seed[:]); err != nil {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
 		return SecretKey{}, fmt.Errorf("generate secret key: %w", err)
 	}
-	return NewSecretKey(seed), nil
+	return SecretKey{signing: priv}, nil
 }
 
 // NewSecretKey constructs a SecretKey from its 32-byte seed.
-func NewSecretKey(seed [SecretKeyLength]byte) SecretKey {
+func NewSecretKey(seed [SeedSize]byte) SecretKey {
 	return SecretKey{signing: ed25519.NewKeyFromSeed(seed[:])}
+}
+
+// SecretKeyFromEd25519 constructs a SecretKey from a crypto/ed25519 private key.
+// The private key is copied.
+func SecretKeyFromEd25519(k ed25519.PrivateKey) (SecretKey, error) {
+	if len(k) != PrivateKeySize {
+		return SecretKey{}, ErrInvalidKeyLength
+	}
+	return SecretKey{signing: append(ed25519.PrivateKey(nil), k...)}, nil
 }
 
 // SecretKeyFromSlice constructs a SecretKey from a 32-byte seed slice. It
 // returns [ErrInvalidKeyLength] if the slice is not 32 bytes.
 func SecretKeyFromSlice(b []byte) (SecretKey, error) {
-	if len(b) != SecretKeyLength {
+	if len(b) != SeedSize {
 		return SecretKey{}, ErrInvalidKeyLength
 	}
-	var seed [SecretKeyLength]byte
+	var seed [SeedSize]byte
 	copy(seed[:], b)
 	return NewSecretKey(seed), nil
 }
@@ -231,10 +248,8 @@ func ParseSecretKey(s string) (SecretKey, error) {
 
 // Public returns the public key of this secret key.
 func (k SecretKey) Public() PublicKey {
-	var arr [PublicKeyLength]byte
-	copy(arr[:], k.signing.Public().(ed25519.PublicKey))
-	// Safe: a key derived from a valid seed is always a valid curve point.
-	return PublicKey{bytes: arr}
+	pub, _ := PublicKeyFromEd25519(k.signing.Public().(ed25519.PublicKey))
+	return pub
 }
 
 // Sign signs msg and returns the signature.
@@ -242,10 +257,15 @@ func (k SecretKey) Sign(msg []byte) Signature {
 	return k.sign(msg)
 }
 
+// Ed25519 returns the key as a crypto/ed25519 private key.
+func (k SecretKey) Ed25519() ed25519.PrivateKey {
+	return append(ed25519.PrivateKey(nil), k.signing...)
+}
+
 // Bytes returns the 32-byte seed of the secret key. The public part can be
 // recovered from it.
-func (k SecretKey) Bytes() [SecretKeyLength]byte {
-	var seed [SecretKeyLength]byte
+func (k SecretKey) Bytes() [SeedSize]byte {
+	var seed [SeedSize]byte
 	copy(seed[:], k.signing.Seed())
 	return seed
 }
@@ -269,29 +289,39 @@ func (k *SecretKey) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// Signature is an Ed25519 signature.
+// Signature is a signature produced by a [SecretKey].
 type Signature struct {
-	bytes [SignatureLength]byte
+	bytes [SignatureSize]byte
 }
 
 // NewSignature constructs a Signature from its 64 raw bytes.
-func NewSignature(b [SignatureLength]byte) Signature {
+func NewSignature(b [SignatureSize]byte) Signature {
 	return Signature{bytes: b}
+}
+
+// SignatureFromEd25519 constructs a Signature from a crypto/ed25519 signature.
+func SignatureFromEd25519(sig []byte) (Signature, error) {
+	return SignatureFromSlice(sig)
 }
 
 // SignatureFromSlice constructs a Signature from a byte slice. It returns
 // [ErrInvalidSignatureParse] if the slice is not 64 bytes.
 func SignatureFromSlice(b []byte) (Signature, error) {
-	if len(b) != SignatureLength {
+	if len(b) != SignatureSize {
 		return Signature{}, ErrInvalidSignatureParse
 	}
-	var arr [SignatureLength]byte
+	var arr [SignatureSize]byte
 	copy(arr[:], b)
 	return Signature{bytes: arr}, nil
 }
 
 // Bytes returns the signature as a 64-byte array.
-func (s Signature) Bytes() [SignatureLength]byte { return s.bytes }
+func (s Signature) Bytes() [SignatureSize]byte { return s.bytes }
+
+// Ed25519 returns the signature bytes used by crypto/ed25519.
+func (s Signature) Ed25519() []byte {
+	return s.bytes[:]
+}
 
 // String returns the lowercase-hex encoding of the signature.
 func (s Signature) String() string { return hex.EncodeToString(s.bytes[:]) }
@@ -312,7 +342,7 @@ var (
 // strings are lowercase hex, others are RFC 4648 base32 (no padding).
 func decodeBase32OrHex(s string) ([32]byte, error) {
 	var out [32]byte
-	if len(s) == PublicKeyLength*2 {
+	if len(s) == PublicKeySize*2 {
 		b, err := hex.DecodeString(s)
 		if err != nil {
 			return out, ErrDecodeHex
@@ -324,7 +354,7 @@ func decodeBase32OrHex(s string) ([32]byte, error) {
 	if err != nil {
 		return out, ErrDecodeBase32
 	}
-	if len(b) != PublicKeyLength {
+	if len(b) != PublicKeySize {
 		return out, ErrInvalidKeyLength
 	}
 	copy(out[:], b)

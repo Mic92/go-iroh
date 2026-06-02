@@ -18,7 +18,7 @@ import (
 //
 // tlsConfig, if non-nil, overrides TLS verification (used in tests with
 // self-signed certs).
-func runHTTPSProbe(ctx context.Context, relay netaddr.RelayUrl, tlsConfig *tls.Config) (*probeReport, error) {
+func runHTTPSProbe(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.Config) (*probeReport, error) {
 	probeURL, err := joinPath(relay, relayProbePath)
 	if err != nil {
 		return nil, err
@@ -52,7 +52,7 @@ func runHTTPSProbe(ctx context.Context, relay netaddr.RelayUrl, tlsConfig *tls.C
 // 204 status and a matching X-Iroh-Response echo; otherwise a captive portal is
 // assumed. It follows no redirects. Mirrors check_captive_portal
 // (iroh/src/net_report/reportgen.rs:614).
-func checkCaptivePortal(ctx context.Context, relay netaddr.RelayUrl, tlsConfig *tls.Config) (bool, error) {
+func checkCaptivePortal(ctx context.Context, relay netaddr.RelayURL, tlsConfig *tls.Config) (bool, error) {
 	host := relay.Host()
 	if host == "" {
 		return false, fmt.Errorf("captive portal: %w", errMissingHost)
@@ -91,8 +91,8 @@ func checkCaptivePortal(ctx context.Context, relay netaddr.RelayUrl, tlsConfig *
 // errMissingHost is returned when a relay URL has no host component.
 var errMissingHost = fmt.Errorf("relay url has no host")
 
-// joinPath resolves path against the relay URL, mirroring RelayUrl::join.
-func joinPath(relay netaddr.RelayUrl, path string) (string, error) {
+// joinPath resolves path against the relay URL, mirroring RelayURL::join.
+func joinPath(relay netaddr.RelayURL, path string) (string, error) {
 	u := relay.URL()
 	if u == nil {
 		return "", fmt.Errorf("join: %w", errMissingHost)

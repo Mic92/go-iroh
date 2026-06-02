@@ -70,7 +70,7 @@ func hasMappedPrefix(addr netip.Addr, subnet [2]byte) bool {
 type EndpointIDMappedAddr struct{ a netip.Addr }
 
 // RelayMappedAddr addresses a remote endpoint via a specific relay path
-// (an (EndpointId, RelayUrl) pair).
+// (an (EndpointID, RelayURL) pair).
 type RelayMappedAddr struct{ a netip.Addr }
 
 // CustomMappedAddr addresses a remote endpoint via a custom transport path.

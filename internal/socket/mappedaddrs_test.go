@@ -176,7 +176,7 @@ func TestClassify(t *testing.T) {
 
 func TestPathAddrMappedReverseLookup(t *testing.T) {
 	s := NewSocket()
-	url, err := netaddr.ParseRelayUrl("https://relay.example.com")
+	url, err := netaddr.ParseRelayURL("https://relay.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}

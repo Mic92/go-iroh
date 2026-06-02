@@ -8,7 +8,7 @@ import (
 // verify is the regeneratable core of [PublicKey.Verify]. It performs strict
 // Ed25519 verification, matching ed25519-dalek's verify_strict.
 func (k PublicKey) verify(message []byte, sig Signature) error {
-	if !ed25519.Verify(k.edwardsPoint(), message, sig.bytes[:]) {
+	if !ed25519.Verify(k.Ed25519(), message, sig.Ed25519()) {
 		return ErrInvalidSignature
 	}
 	return nil
@@ -16,9 +16,8 @@ func (k PublicKey) verify(message []byte, sig Signature) error {
 
 // sign is the regeneratable core of [SecretKey.Sign].
 func (k SecretKey) sign(msg []byte) Signature {
-	var arr [SignatureLength]byte
-	copy(arr[:], ed25519.Sign(k.signing, msg))
-	return Signature{bytes: arr}
+	sig, _ := SignatureFromEd25519(ed25519.Sign(k.signing, msg))
+	return sig
 }
 
 // stdBase32NoPad is RFC 4648 base32 without padding, used for the alternative

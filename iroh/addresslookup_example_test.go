@@ -17,7 +17,7 @@ func ExampleMemoryLookup() {
 	id := sk.Public()
 
 	lookup := iroh.NewMemoryLookup()
-	relay, _ := netaddr.ParseRelayUrl("https://relay.example/")
+	relay, _ := netaddr.ParseRelayURL("https://relay.example/")
 	lookup.AddEndpointAddr(netaddr.NewEndpointAddr(id).WithRelayURL(relay))
 
 	for r := range lookup.Resolve(context.Background(), id) {
@@ -38,7 +38,7 @@ func ExampleMemoryLookup() {
 func ExampleAddressLookupServices() {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
-	relay, _ := netaddr.ParseRelayUrl("https://relay.example/")
+	relay, _ := netaddr.ParseRelayURL("https://relay.example/")
 
 	mem := iroh.NewMemoryLookup()
 	mem.AddEndpointInfo(dns.NewEndpointInfo(id).WithRelayURL(relay))

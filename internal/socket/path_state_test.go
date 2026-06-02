@@ -20,11 +20,11 @@ func ipPath(i int) Addr {
 // endpoint ids.
 func relayPath(t *testing.T, i int) Addr {
 	t.Helper()
-	u, err := netaddr.ParseRelayUrl(fmt.Sprintf("https://relay%d.localhost", i))
+	u, err := netaddr.ParseRelayURL(fmt.Sprintf("https://relay%d.localhost", i))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var eid key.EndpointId
+	var eid key.EndpointID
 	return RelayAddr(u, eid)
 }
 

@@ -24,7 +24,7 @@ const MemoryProvenance = "memory_lookup"
 // It is the Go analog of iroh's MemoryLookup.
 type MemoryLookup struct {
 	mu         *sync.RWMutex
-	endpoints  map[key.EndpointId]storedInfo
+	endpoints  map[key.EndpointID]storedInfo
 	provenance string
 }
 
@@ -43,7 +43,7 @@ func NewMemoryLookup() MemoryLookup {
 func NewMemoryLookupWithProvenance(provenance string) MemoryLookup {
 	return MemoryLookup{
 		mu:         &sync.RWMutex{},
-		endpoints:  make(map[key.EndpointId]storedInfo),
+		endpoints:  make(map[key.EndpointID]storedInfo),
 		provenance: provenance,
 	}
 }
@@ -57,31 +57,31 @@ func MemoryLookupFromInfo(infos ...dns.EndpointInfo) MemoryLookup {
 	return m
 }
 
-// SetEndpointInfo replaces all stored info for info.Id, returning the previous
+// SetEndpointInfo replaces all stored info for info.ID, returning the previous
 // [dns.EndpointData] and whether an entry existed.
 func (m MemoryLookup) SetEndpointInfo(info dns.EndpointInfo) (dns.EndpointData, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	prev, existed := m.endpoints[info.Id]
-	m.endpoints[info.Id] = storedInfo{data: info.Data, lastUpdated: time.Now()}
+	prev, existed := m.endpoints[info.ID]
+	m.endpoints[info.ID] = storedInfo{data: info.Data, lastUpdated: time.Now()}
 	return prev.data, existed
 }
 
-// AddEndpointInfo merges info into the stored entry for info.Id: new direct
+// AddEndpointInfo merges info into the stored entry for info.ID: new direct
 // addresses are appended and the user data is overwritten. If no entry exists,
 // one is created.
 func (m MemoryLookup) AddEndpointInfo(info dns.EndpointInfo) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	existing, ok := m.endpoints[info.Id]
+	existing, ok := m.endpoints[info.ID]
 	if !ok {
-		m.endpoints[info.Id] = storedInfo{data: info.Data, lastUpdated: time.Now()}
+		m.endpoints[info.ID] = storedInfo{data: info.Data, lastUpdated: time.Now()}
 		return
 	}
 	existing.data.AddAddrs(info.Data.Addrs()...)
 	existing.data.SetUserData(info.Data.UserData())
 	existing.lastUpdated = time.Now()
-	m.endpoints[info.Id] = existing
+	m.endpoints[info.ID] = existing
 }
 
 // AddEndpointAddr is a convenience wrapper for [MemoryLookup.AddEndpointInfo]
@@ -91,7 +91,7 @@ func (m MemoryLookup) AddEndpointAddr(addr netaddr.EndpointAddr) {
 }
 
 // GetEndpointInfo returns the stored info for id and whether it exists.
-func (m MemoryLookup) GetEndpointInfo(id key.EndpointId) (dns.EndpointInfo, bool) {
+func (m MemoryLookup) GetEndpointInfo(id key.EndpointID) (dns.EndpointInfo, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	info, ok := m.endpoints[id]
@@ -103,7 +103,7 @@ func (m MemoryLookup) GetEndpointInfo(id key.EndpointId) (dns.EndpointInfo, bool
 
 // RemoveEndpointInfo removes and returns the info for id, and whether it
 // existed.
-func (m MemoryLookup) RemoveEndpointInfo(id key.EndpointId) (dns.EndpointInfo, bool) {
+func (m MemoryLookup) RemoveEndpointInfo(id key.EndpointID) (dns.EndpointInfo, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	info, ok := m.endpoints[id]
@@ -118,7 +118,7 @@ func (m MemoryLookup) RemoveEndpointInfo(id key.EndpointId) (dns.EndpointInfo, b
 func (m MemoryLookup) Publish(dns.EndpointData) {}
 
 // Resolve returns the stored info for id, or nil if there is no entry.
-func (m MemoryLookup) Resolve(ctx context.Context, id key.EndpointId) <-chan Result {
+func (m MemoryLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
 	m.mu.RLock()
 	info, ok := m.endpoints[id]
 	m.mu.RUnlock()
@@ -160,6 +160,6 @@ func (f FilteredAddressLookup) Publish(data dns.EndpointData) {
 }
 
 // Resolve delegates to the inner service.
-func (f FilteredAddressLookup) Resolve(ctx context.Context, id key.EndpointId) <-chan Result {
+func (f FilteredAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
 	return f.inner.Resolve(ctx, id)
 }

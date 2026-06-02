@@ -25,14 +25,14 @@ func TestMemoryLookupFromInfo(t *testing.T) {
 
 	m := MemoryLookupFromInfo(infoA, infoB)
 
-	for _, id := range []key.EndpointId{idA, idB} {
+	for _, id := range []key.EndpointID{idA, idB} {
 		results := drain(m.Resolve(context.Background(), id))
 		if len(results) != 1 || results[0].Err != nil {
 			t.Fatalf("Resolve(%s) = %+v, want one success", id, results)
 		}
 		// EndpointInfo accessor returns the discovered info for the right id.
-		if !results[0].Item.EndpointInfo().Id.Equal(id) {
-			t.Errorf("EndpointInfo().Id = %s, want %s", results[0].Item.EndpointInfo().Id, id)
+		if !results[0].Item.EndpointInfo().ID.Equal(id) {
+			t.Errorf("EndpointInfo().ID = %s, want %s", results[0].Item.EndpointInfo().ID, id)
 		}
 	}
 }

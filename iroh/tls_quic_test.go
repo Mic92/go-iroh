@@ -54,7 +54,7 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 	defer cancel()
 
 	type result struct {
-		peer key.EndpointId
+		peer key.EndpointID
 		err  error
 	}
 	serverDone := make(chan result, 1)
@@ -64,7 +64,7 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 			serverDone <- result{err: err}
 			return
 		}
-		peer, err := peerEndpointId(conn.ConnectionState().TLS)
+		peer, err := peerEndpointID(conn.ConnectionState().TLS)
 		if err != nil {
 			serverDone <- result{err: err}
 			return
@@ -96,7 +96,7 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 	defer conn.CloseWithError(0, "")
 
 	// Client must observe the server's endpoint id.
-	serverPeer, err := peerEndpointId(conn.ConnectionState().TLS)
+	serverPeer, err := peerEndpointID(conn.ConnectionState().TLS)
 	if err != nil {
 		t.Fatalf("client peer id: %v", err)
 	}

@@ -94,9 +94,9 @@ func TestClientVersion(t *testing.T) {
 }
 
 func TestConnectInvalidURL(t *testing.T) {
-	// The zero RelayUrl has a nil underlying URL, so websocketURL fails before
+	// The zero RelayURL has a nil underlying URL, so websocketURL fails before
 	// any dial is attempted.
-	_, err := Connect(context.Background(), netaddr.RelayUrl{}, Options{})
+	_, err := Connect(context.Background(), netaddr.RelayURL{}, Options{})
 	if err == nil {
 		t.Fatal("expected error for empty relay url")
 	}
@@ -462,7 +462,7 @@ func TestWebsocketURLPath(t *testing.T) {
 		{"wss://relay.example.com", "wss://relay.example.com/relay"},
 	}
 	for _, c := range cases {
-		u, err := netaddr.ParseRelayUrl(c.in)
+		u, err := netaddr.ParseRelayURL(c.in)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -477,7 +477,7 @@ func TestWebsocketURLPath(t *testing.T) {
 }
 
 func TestWebsocketURLEmpty(t *testing.T) {
-	_, err := websocketURL(netaddr.RelayUrl{})
+	_, err := websocketURL(netaddr.RelayURL{})
 	if err == nil {
 		t.Fatal("expected error for empty relay url")
 	}
@@ -492,7 +492,7 @@ func ExampleClient() {
 	ts := exampleRelay()
 	defer ts.Close()
 
-	u, _ := netaddr.ParseRelayUrl(ts.URL)
+	u, _ := netaddr.ParseRelayURL(ts.URL)
 	sk, _ := key.GenerateSecretKey()
 
 	ctx := context.Background()
@@ -506,7 +506,7 @@ func ExampleClient() {
 	peer, _ := key.GenerateSecretKey()
 	if err := c.Send(ctx, relayproto.ClientToRelayMsg{
 		Type:          relayproto.FrameClientToRelayDatagram,
-		DstEndpointId: peer.Public(),
+		DstEndpointID: peer.Public(),
 		Datagrams:     relayproto.DatagramsFromBytes([]byte("ping")),
 	}); err != nil {
 		fmt.Println("send:", err)
@@ -561,7 +561,7 @@ func exampleRelay() *httptest.Server {
 			}
 			reply := relayproto.RelayToClientMsg{
 				Type:             relayproto.FrameRelayToClientDatagram,
-				RemoteEndpointId: msg.DstEndpointId,
+				RemoteEndpointID: msg.DstEndpointID,
 				Datagrams:        msg.Datagrams,
 			}
 			conn.Write(ctx, websocket.MessageBinary, reply.AppendTo(nil))

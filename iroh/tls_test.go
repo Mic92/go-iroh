@@ -23,7 +23,7 @@ func TestServerNameSnapshot(t *testing.T) {
 	}
 }
 
-// TestServerNameRoundTrip checks ServerName and endpointIdFromServerName are
+// TestServerNameRoundTrip checks ServerName and endpointIDFromServerName are
 // inverses for arbitrary keys.
 func TestServerNameRoundTrip(t *testing.T) {
 	for i := 0; i < 16; i++ {
@@ -32,9 +32,9 @@ func TestServerNameRoundTrip(t *testing.T) {
 		seed[31] = byte(i * 7)
 		id := key.NewSecretKey(seed).Public()
 		name := ServerName(id)
-		got, ok := endpointIdFromServerName(name)
+		got, ok := endpointIDFromServerName(name)
 		if !ok {
-			t.Fatalf("endpointIdFromServerName(%q) failed", name)
+			t.Fatalf("endpointIDFromServerName(%q) failed", name)
 		}
 		if !got.Equal(id) {
 			t.Errorf("round-trip mismatch for seed %d: got %s want %s", i, got, id)
@@ -42,7 +42,7 @@ func TestServerNameRoundTrip(t *testing.T) {
 	}
 }
 
-func TestEndpointIdFromServerNameRejects(t *testing.T) {
+func TestEndpointIDFromServerNameRejects(t *testing.T) {
 	bad := []string{
 		"",
 		"example.com",
@@ -52,8 +52,8 @@ func TestEndpointIdFromServerNameRejects(t *testing.T) {
 		".iroh.invalid",
 	}
 	for _, name := range bad {
-		if _, ok := endpointIdFromServerName(name); ok {
-			t.Errorf("endpointIdFromServerName(%q) = ok, want rejected", name)
+		if _, ok := endpointIDFromServerName(name); ok {
+			t.Errorf("endpointIDFromServerName(%q) = ok, want rejected", name)
 		}
 	}
 }

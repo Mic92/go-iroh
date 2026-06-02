@@ -319,7 +319,7 @@ func (c *Client) addReportHistoryAndSetPreferredRelay(r *Report) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var prevRelay netaddr.RelayUrl
+	var prevRelay netaddr.RelayURL
 	if c.last != nil {
 		prevRelay = c.last.PreferredRelay
 		// Carry forward mapping-varies info when this report lacks it.

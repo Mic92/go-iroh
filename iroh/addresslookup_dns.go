@@ -57,7 +57,7 @@ func (d DnsAddressLookup) Publish(dns.EndpointData) {}
 // Resolve looks up id in DNS, issuing staggered concurrent queries and
 // returning the first successful result. The returned channel yields a single
 // [Result] (success or error) and is then closed.
-func (d DnsAddressLookup) Resolve(ctx context.Context, id key.EndpointId) <-chan Result {
+func (d DnsAddressLookup) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
 	out := make(chan Result, 1)
 	go func() {
 		defer close(out)
@@ -80,7 +80,7 @@ func (d DnsAddressLookup) Resolve(ctx context.Context, id key.EndpointId) <-chan
 // lookupStaggered issues a first DNS lookup immediately and additional ones
 // after each delay in [dnsStaggerMs] while earlier attempts are still in
 // flight, returning the first success or the last error once all attempts fail.
-func (d DnsAddressLookup) lookupStaggered(ctx context.Context, id key.EndpointId) (dns.EndpointInfo, error) {
+func (d DnsAddressLookup) lookupStaggered(ctx context.Context, id key.EndpointID) (dns.EndpointInfo, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -93,7 +93,7 @@ func (d DnsAddressLookup) lookupStaggered(ctx context.Context, id key.EndpointId
 
 	launch := func() {
 		go func() {
-			info, err := d.resolver.LookupEndpointById(ctx, id, d.origin)
+			info, err := d.resolver.LookupEndpointByID(ctx, id, d.origin)
 			results <- attempt{info: info, err: err}
 		}()
 	}

@@ -53,7 +53,7 @@ func TestNewProbeClient(t *testing.T) {
 func TestJoinPath(t *testing.T) {
 	tests := []struct {
 		name    string
-		relay   netaddr.RelayUrl
+		relay   netaddr.RelayURL
 		path    string
 		want    string
 		wantErr bool
@@ -67,7 +67,7 @@ func TestJoinPath(t *testing.T) {
 		},
 		{
 			name:    "zero relay has no url",
-			relay:   netaddr.RelayUrl{},
+			relay:   netaddr.RelayURL{},
 			path:    relayProbePath,
 			wantErr: true,
 			errText: "host",
@@ -103,7 +103,7 @@ func TestJoinPath(t *testing.T) {
 }
 
 func TestJoinPathMissingHostIsMissingHostError(t *testing.T) {
-	_, err := joinPath(netaddr.RelayUrl{}, relayProbePath)
+	_, err := joinPath(netaddr.RelayURL{}, relayProbePath)
 	if !errors.Is(err, errMissingHost) {
 		t.Errorf("joinPath(zero) err = %v, want wrapping errMissingHost", err)
 	}
@@ -112,7 +112,7 @@ func TestJoinPathMissingHostIsMissingHostError(t *testing.T) {
 func TestRunHTTPSProbeMissingHost(t *testing.T) {
 	// A relay URL with no host component cannot be probed; the error must wrap
 	// errMissingHost (mentions "host"). reportgen.rs:817 / joinPath.
-	_, err := runHTTPSProbe(context.Background(), netaddr.RelayUrl{}, nil)
+	_, err := runHTTPSProbe(context.Background(), netaddr.RelayURL{}, nil)
 	if err == nil {
 		t.Fatal("expected error for hostless relay URL")
 	}
@@ -124,7 +124,7 @@ func TestRunHTTPSProbeMissingHost(t *testing.T) {
 func TestCheckCaptivePortalMissingHost(t *testing.T) {
 	// A "custom:" relay URL parses but has an empty host; the captive-portal
 	// check cannot build a challenge and returns errMissingHost. probes.go:55.
-	custom, err := netaddr.ParseRelayUrl("custom:relay")
+	custom, err := netaddr.ParseRelayURL("custom:relay")
 	if err != nil {
 		t.Fatalf("parse custom url: %v", err)
 	}

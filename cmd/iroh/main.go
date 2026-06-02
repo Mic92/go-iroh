@@ -68,13 +68,13 @@ func cmdKey(args []string, stdin io.Reader, stdout io.Writer) error {
 	}
 	switch args[0] {
 	case "gen":
-		var seed [key.SecretKeyLength]byte
+		var seed [key.SeedSize]byte
 		seedSet := false
 		for _, a := range args[1:] {
 			if s, ok := strings.CutPrefix(a, "--seed="); ok {
 				b, err := hex.DecodeString(s)
-				if err != nil || len(b) != key.SecretKeyLength {
-					return fmt.Errorf("key gen: --seed must be %d hex bytes", key.SecretKeyLength)
+				if err != nil || len(b) != key.SeedSize {
+					return fmt.Errorf("key gen: --seed must be %d hex bytes", key.SeedSize)
 				}
 				copy(seed[:], b)
 				seedSet = true

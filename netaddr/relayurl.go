@@ -6,40 +6,40 @@ import (
 	"strings"
 )
 
-// RelayUrl is a URL identifying a relay server.
+// RelayURL is a URL identifying a relay server.
 //
 // It wraps a parsed URL and is cheap to copy. It is encouraged to use a
 // fully-qualified DNS domain name (one ending in a ".", e.g. "relay.example.com.")
 // so that local DNS search domains do not interfere with resolution.
 //
-// The zero value is not usable; construct a RelayUrl with [ParseRelayUrl] or
-// [RelayUrlFromURL].
-type RelayUrl struct {
+// The zero value is not usable; construct a RelayURL with [ParseRelayURL] or
+// [RelayURLFromURL].
+type RelayURL struct {
 	url *url.URL
 }
 
-// ParseRelayUrl parses s into a RelayUrl. It returns an error wrapping
-// [ErrParseRelayUrl] if s is not a valid URL.
-func ParseRelayUrl(s string) (RelayUrl, error) {
+// ParseRelayURL parses s into a RelayURL. It returns an error wrapping
+// [ErrParseRelayURL] if s is not a valid URL.
+func ParseRelayURL(s string) (RelayURL, error) {
 	u, err := url.Parse(s)
 	if err != nil {
-		return RelayUrl{}, fmt.Errorf("%w: %v", ErrParseRelayUrl, err)
+		return RelayURL{}, fmt.Errorf("%w: %v", ErrParseRelayURL, err)
 	}
-	return RelayUrlFromURL(u), nil
+	return RelayURLFromURL(u), nil
 }
 
-// RelayUrlFromURL wraps an already-parsed URL as a RelayUrl, normalizing it so
-// that equivalent URLs compare equal (see [RelayUrl.String]).
-func RelayUrlFromURL(u *url.URL) RelayUrl {
+// RelayURLFromURL wraps an already-parsed URL as a RelayURL, normalizing it so
+// that equivalent URLs compare equal (see [RelayURL.String]).
+func RelayURLFromURL(u *url.URL) RelayURL {
 	c := *u
-	return RelayUrl{url: normalizeURL(&c)}
+	return RelayURL{url: normalizeURL(&c)}
 }
 
-// ErrParseRelayUrl is returned (wrapped) when a relay URL cannot be parsed.
-var ErrParseRelayUrl = fmt.Errorf("failed to parse relay URL")
+// ErrParseRelayURL is returned (wrapped) when a relay URL cannot be parsed.
+var ErrParseRelayURL = fmt.Errorf("failed to parse relay URL")
 
 // URL returns a copy of the underlying parsed URL.
-func (r RelayUrl) URL() *url.URL {
+func (r RelayURL) URL() *url.URL {
 	if r.url == nil {
 		return nil
 	}
@@ -50,7 +50,7 @@ func (r RelayUrl) URL() *url.URL {
 // String returns the normalized string form of the URL. An empty path is
 // rendered as "/", matching the WHATWG URL serialization used by the Rust
 // reference implementation (e.g. "https://example.com" -> "https://example.com/").
-func (r RelayUrl) String() string {
+func (r RelayURL) String() string {
 	if r.url == nil {
 		return ""
 	}
@@ -58,7 +58,7 @@ func (r RelayUrl) String() string {
 }
 
 // Host returns the host (without port) of the relay URL.
-func (r RelayUrl) Host() string {
+func (r RelayURL) Host() string {
 	if r.url == nil {
 		return ""
 	}
@@ -66,23 +66,23 @@ func (r RelayUrl) Host() string {
 }
 
 // IsZero reports whether r is the unusable zero value.
-func (r RelayUrl) IsZero() bool { return r.url == nil }
+func (r RelayURL) IsZero() bool { return r.url == nil }
 
 // Equal reports whether r and other are the same relay URL.
-func (r RelayUrl) Equal(other RelayUrl) bool { return r.String() == other.String() }
+func (r RelayURL) Equal(other RelayURL) bool { return r.String() == other.String() }
 
 // Compare returns -1, 0, or +1 comparing r and other by their normalized
-// string form, giving RelayUrl a total order.
-func (r RelayUrl) Compare(other RelayUrl) int {
+// string form, giving RelayURL a total order.
+func (r RelayURL) Compare(other RelayURL) int {
 	return strings.Compare(r.String(), other.String())
 }
 
 // MarshalText implements encoding.TextMarshaler.
-func (r RelayUrl) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
+func (r RelayURL) MarshalText() ([]byte, error) { return []byte(r.String()), nil }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
-func (r *RelayUrl) UnmarshalText(text []byte) error {
-	parsed, err := ParseRelayUrl(string(text))
+func (r *RelayURL) UnmarshalText(text []byte) error {
+	parsed, err := ParseRelayURL(string(text))
 	if err != nil {
 		return err
 	}

@@ -29,8 +29,8 @@ func TestCustomAddrRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ParseCustomAddr(%q): %v", c.want, err)
 		}
-		if parsed.Id() != c.id || string(parsed.Data()) != string(c.data) {
-			t.Errorf("parsed = (%d,%x), want (%d,%x)", parsed.Id(), parsed.Data(), c.id, c.data)
+		if parsed.ID() != c.id || string(parsed.Data()) != string(c.data) {
+			t.Errorf("parsed = (%d,%x), want (%d,%x)", parsed.ID(), parsed.Data(), c.id, c.data)
 		}
 	}
 }
@@ -61,7 +61,7 @@ func TestCustomAddrBinary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a2.Id() != a.Id() || string(a2.Data()) != string(a.Data()) {
+	if a2.ID() != a.ID() || string(a2.Data()) != string(a.Data()) {
 		t.Errorf("binary round-trip mismatch")
 	}
 	if _, err := CustomAddrFromBytes([]byte{1, 2, 3}); !errors.Is(err, ErrCustomAddrTooShort) {
@@ -69,9 +69,9 @@ func TestCustomAddrBinary(t *testing.T) {
 	}
 }
 
-func TestRelayUrlNormalization(t *testing.T) {
+func TestRelayURLNormalization(t *testing.T) {
 	// Rust url crate adds a trailing slash; we match that.
-	u, err := ParseRelayUrl("https://example.com")
+	u, err := ParseRelayURL("https://example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,10 +83,10 @@ func TestRelayUrlNormalization(t *testing.T) {
 	}
 }
 
-func TestRelayUrlEqualCompare(t *testing.T) {
-	a, _ := ParseRelayUrl("https://a.example.com")
-	b, _ := ParseRelayUrl("https://b.example.com")
-	a2, _ := ParseRelayUrl("https://a.example.com/")
+func TestRelayURLEqualCompare(t *testing.T) {
+	a, _ := ParseRelayURL("https://a.example.com")
+	b, _ := ParseRelayURL("https://b.example.com")
+	a2, _ := ParseRelayURL("https://a.example.com/")
 	if !a.Equal(a2) {
 		t.Error("expected a == a2 after normalization")
 	}
@@ -96,7 +96,7 @@ func TestRelayUrlEqualCompare(t *testing.T) {
 }
 
 func TestTransportAddrStringRoundTrip(t *testing.T) {
-	relay, _ := ParseRelayUrl("https://relay.example.com")
+	relay, _ := ParseRelayURL("https://relay.example.com")
 	ip := netip.MustParseAddrPort("127.0.0.1:9")
 	cases := []TransportAddr{
 		RelayAddr{URL: relay},
@@ -145,7 +145,7 @@ func TestTransportAddrOrderingMatchesRustOrd(t *testing.T) {
 	// inner value. IP addresses compare numerically (not lexically) and custom
 	// ids compare as u64 (not by hex string). This is a regression test for the
 	// string-compare ordering bug.
-	relay, _ := ParseRelayUrl("https://relay.example.com")
+	relay, _ := ParseRelayURL("https://relay.example.com")
 	ipLow := IPAddr{Addr: netip.MustParseAddrPort("2.0.0.1:9")}
 	ipHigh := IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:9")}
 	custLow := NewCustomAddr(0x2, nil)

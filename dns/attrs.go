@@ -45,27 +45,27 @@ func parseIrohAttr(s string) (irohAttr, bool) {
 // txtAttrs is the set of attributes parsed from "_iroh" TXT records: an endpoint
 // id plus a map from attribute key to its ordered values.
 type txtAttrs struct {
-	endpointId key.EndpointId
+	endpointID key.EndpointID
 	attrs      map[irohAttr][]string
 }
 
-// endpointIdFromTxtName parses an EndpointId from an iroh DNS name. The first
+// endpointIDFromTxtName parses an EndpointID from an iroh DNS name. The first
 // label must be "_iroh" and the second the z-base-32 endpoint id; later labels
 // are ignored.
-func endpointIdFromTxtName(name string) (key.EndpointId, error) {
+func endpointIDFromTxtName(name string) (key.EndpointID, error) {
 	labels := strings.Split(name, ".")
 	if len(labels) < 2 {
-		return key.EndpointId{}, fmt.Errorf("%w, received %d", ErrNumLabels, len(labels))
+		return key.EndpointID{}, fmt.Errorf("%w, received %d", ErrNumLabels, len(labels))
 	}
 	if labels[0] != IrohTxtName {
-		return key.EndpointId{}, fmt.Errorf("%w, got %q", ErrNotIrohRecord, labels[0])
+		return key.EndpointID{}, fmt.Errorf("%w, got %q", ErrNotIrohRecord, labels[0])
 	}
 	return key.PublicKeyFromZ32(labels[1])
 }
 
 // txtAttrsFromStrings builds txtAttrs from an endpoint id and "key=value"
 // strings, preserving per-key value order.
-func txtAttrsFromStrings(id key.EndpointId, values []string) (*txtAttrs, error) {
+func txtAttrsFromStrings(id key.EndpointID, values []string) (*txtAttrs, error) {
 	attrs := map[irohAttr][]string{}
 	for _, s := range values {
 		key, value, ok := splitAttr(s)
@@ -78,7 +78,7 @@ func txtAttrsFromStrings(id key.EndpointId, values []string) (*txtAttrs, error) 
 		}
 		attrs[attr] = append(attrs[attr], value)
 	}
-	return &txtAttrs{endpointId: id, attrs: attrs}, nil
+	return &txtAttrs{endpointID: id, attrs: attrs}, nil
 }
 
 func splitAttr(s string) (key, value string, ok bool) {
@@ -90,7 +90,7 @@ func splitAttr(s string) (key, value string, ok bool) {
 }
 
 func txtAttrsFromTxtLookup(name string, values []string) (*txtAttrs, error) {
-	id, err := endpointIdFromTxtName(name)
+	id, err := endpointIDFromTxtName(name)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +139,7 @@ func (e EndpointInfo) toAttrs() *txtAttrs {
 	if e.Data.userData != nil {
 		attrs[attrUserData] = append(attrs[attrUserData], e.Data.userData.String())
 	}
-	return &txtAttrs{endpointId: e.Id, attrs: attrs}
+	return &txtAttrs{endpointID: e.ID, attrs: attrs}
 }
 
 // endpointInfoFromAttrs converts parsed txtAttrs back into an EndpointInfo. It
@@ -149,7 +149,7 @@ func endpointInfoFromAttrs(attrs *txtAttrs) EndpointInfo {
 	var addrs []netaddr.TransportAddr
 	for _, s := range attrs.attrs[attrRelay] {
 		if u, err := url.Parse(s); err == nil {
-			addrs = append(addrs, netaddr.RelayAddr{URL: netaddr.RelayUrlFromURL(u)})
+			addrs = append(addrs, netaddr.RelayAddr{URL: netaddr.RelayURLFromURL(u)})
 		}
 	}
 	for _, s := range attrs.attrs[attrAddr] {
@@ -166,5 +166,5 @@ func endpointInfoFromAttrs(attrs *txtAttrs) EndpointInfo {
 		}
 	}
 	data.AddAddrs(addrs...)
-	return EndpointInfo{Id: attrs.endpointId, Data: data}
+	return EndpointInfo{ID: attrs.endpointID, Data: data}
 }

@@ -9,11 +9,11 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-func mustRelay(t *testing.T, s string) netaddr.RelayUrl {
+func mustRelay(t *testing.T, s string) netaddr.RelayURL {
 	t.Helper()
-	u, err := netaddr.ParseRelayUrl(s)
+	u, err := netaddr.ParseRelayURL(s)
 	if err != nil {
-		t.Fatalf("ParseRelayUrl(%q): %v", s, err)
+		t.Fatalf("ParseRelayURL(%q): %v", s, err)
 	}
 	return u
 }
@@ -188,7 +188,7 @@ func TestUserDataTooLong(t *testing.T) {
 	}
 }
 
-func testID(t *testing.T) key.EndpointId {
+func testID(t *testing.T) key.EndpointID {
 	t.Helper()
 	id, err := key.ParsePublicKey("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
 	if err != nil {
@@ -199,8 +199,8 @@ func testID(t *testing.T) key.EndpointId {
 
 func assertEndpointInfoEqual(t *testing.T, got, want EndpointInfo) {
 	t.Helper()
-	if !got.Id.Equal(want.Id) {
-		t.Errorf("id mismatch: %s != %s", got.Id, want.Id)
+	if !got.ID.Equal(want.ID) {
+		t.Errorf("id mismatch: %s != %s", got.ID, want.ID)
 	}
 	gotAddrs, wantAddrs := got.Data.Addrs(), want.Data.Addrs()
 	if len(gotAddrs) != len(wantAddrs) {

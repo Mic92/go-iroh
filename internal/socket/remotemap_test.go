@@ -81,7 +81,7 @@ func (c *fakeConn) NATTraversalAddresses() ([]netip.AddrPort, error) {
 }
 func (c *fakeConn) Close() { c.once.Do(func() { close(c.done) }) }
 
-func testEndpointId(t *testing.T) key.EndpointId {
+func testEndpointID(t *testing.T) key.EndpointID {
 	t.Helper()
 	sk, err := key.GenerateSecretKey()
 	if err != nil {
@@ -101,7 +101,7 @@ func TestRemoteMapSingleActorRace(t *testing.T) {
 	// A short idle timeout maximizes the spawn/teardown overlap while still
 	// letting each registration win the race often enough to make progress.
 	m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 2*time.Millisecond)
-	id := testEndpointId(t)
+	id := testEndpointID(t)
 
 	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
 
@@ -171,7 +171,7 @@ func TestRemoteMapReuseActor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	id := testEndpointId(t)
+	id := testEndpointID(t)
 
 	a1 := m.Actor(id)
 	a2 := m.Actor(id)
@@ -190,7 +190,7 @@ func TestRemoteMapIdleTeardown(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond)
-		id := testEndpointId(t)
+		id := testEndpointID(t)
 
 		m.Actor(id) // spawns an actor with no connections
 		if m.Len() != 1 {
@@ -212,7 +212,7 @@ func TestRemoteMapIdleTeardownWaitsForConnections(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond)
-		id := testEndpointId(t)
+		id := testEndpointID(t)
 
 		addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
 		c := newFakeConn(addr, time.Millisecond)
@@ -256,7 +256,7 @@ func TestActorPathEventsAndSelection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	id := testEndpointId(t)
+	id := testEndpointID(t)
 
 	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 4242))
 	c := newFakeConn(addr, 5*time.Millisecond)
@@ -299,7 +299,7 @@ func TestActorHeartbeatSyncsQNGRoutes(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-		a := m.Actor(testEndpointId(t))
+		a := m.Actor(testEndpointID(t))
 
 		addr := IPAddr(netip.MustParseAddrPort("192.0.2.1:4433"))
 		route := IPAddr(netip.MustParseAddrPort("[2001:db8::1]:4433"))
@@ -345,7 +345,7 @@ func TestActorUpgradeTickStartsQNT(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-		id := testEndpointId(t)
+		id := testEndpointID(t)
 
 		conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
 		conn.multipathNegotiated = true
@@ -382,7 +382,7 @@ func TestActorHolepunchGated(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	a := m.Actor(testEndpointId(t))
+	a := m.Actor(testEndpointID(t))
 	if err := a.TriggerHolepunch(); err != ErrExtensionNotNegotiated {
 		t.Errorf("TriggerHolepunch = %v, want ErrExtensionNotNegotiated", err)
 	}
@@ -394,7 +394,7 @@ func TestActorSendDatagramBlackhole(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
-	id := testEndpointId(t)
+	id := testEndpointID(t)
 
 	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 1))
 	c := newFakeConn(addr, time.Millisecond)
@@ -425,11 +425,11 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	resolved := []netaddr.TransportAddr{
 		netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 7)},
 	}
-	resolve := func(ctx context.Context, id key.EndpointId) ([]netaddr.TransportAddr, error) {
+	resolve := func(ctx context.Context, id key.EndpointID) ([]netaddr.TransportAddr, error) {
 		return resolved, nil
 	}
 	m := newRemoteMap(ctx, BiasedRttPathSelector{}, resolve, time.Second)
-	id := testEndpointId(t)
+	id := testEndpointID(t)
 
 	// Keep the actor alive with a connection so it does not idle out mid-test.
 	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))

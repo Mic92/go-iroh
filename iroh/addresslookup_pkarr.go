@@ -53,7 +53,7 @@ const (
 //
 // It is the Go analog of iroh's PkarrPublisher.
 type PkarrPublisher struct {
-	endpointID key.EndpointId
+	endpointID key.EndpointID
 	addrFilter AddrFilter
 	value      *watch.Value[*dns.EndpointInfo]
 	cancel     context.CancelFunc
@@ -156,7 +156,7 @@ func (p *PkarrPublisher) Publish(data dns.EndpointData) {
 }
 
 // Resolve always returns nil: a publisher does not resolve.
-func (p *PkarrPublisher) Resolve(context.Context, key.EndpointId) <-chan Result { return nil }
+func (p *PkarrPublisher) Resolve(context.Context, key.EndpointID) <-chan Result { return nil }
 
 // Close stops the background publish goroutine and waits for it to exit.
 func (p *PkarrPublisher) Close() {
@@ -283,7 +283,7 @@ func (r *PkarrResolver) Publish(dns.EndpointData) {}
 
 // Resolve fetches the signed packet for id from the pkarr relay and decodes its
 // endpoint info. The returned channel yields a single [Result] and is closed.
-func (r *PkarrResolver) Resolve(ctx context.Context, id key.EndpointId) <-chan Result {
+func (r *PkarrResolver) Resolve(ctx context.Context, id key.EndpointID) <-chan Result {
 	out := make(chan Result, 1)
 	go func() {
 		defer close(out)
@@ -360,7 +360,7 @@ func (c *pkarrRelayClient) publish(ctx context.Context, packet *pkarr.SignedPack
 
 // resolve GETs the relay payload from "<relay>/<z32>" and reconstructs (and
 // verifies) the signed packet from the public key and payload.
-func (c *pkarrRelayClient) resolve(ctx context.Context, id key.EndpointId) (*pkarr.SignedPacket, error) {
+func (c *pkarrRelayClient) resolve(ctx context.Context, id key.EndpointID) (*pkarr.SignedPacket, error) {
 	target := c.keyURL(id.Z32())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {

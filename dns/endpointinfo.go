@@ -69,7 +69,7 @@ func (d EndpointData) WithUserData(u UserData) EndpointData {
 
 // AddRelayURL adds a relay URL to the end of the address list, unless already
 // present.
-func (d *EndpointData) AddRelayURL(u netaddr.RelayUrl) {
+func (d *EndpointData) AddRelayURL(u netaddr.RelayURL) {
 	d.AddAddrs(netaddr.RelayAddr{URL: u})
 }
 
@@ -115,8 +115,8 @@ func (d *EndpointData) ClearRelayURLs() {
 func (d EndpointData) Addrs() []netaddr.TransportAddr { return d.addrs }
 
 // RelayURLs returns the relay URLs in order.
-func (d EndpointData) RelayURLs() []netaddr.RelayUrl {
-	var out []netaddr.RelayUrl
+func (d EndpointData) RelayURLs() []netaddr.RelayURL {
+	var out []netaddr.RelayURL
 	for _, a := range d.addrs {
 		if r, ok := a.(netaddr.RelayAddr); ok {
 			out = append(out, r.URL)
@@ -154,32 +154,32 @@ func EndpointDataFromAddr(addr netaddr.EndpointAddr) EndpointData {
 	return EndpointData{addrs: slices.Clone(addr.Addrs())}
 }
 
-// EndpointInfo couples an [key.EndpointId] with the [EndpointData] published
+// EndpointInfo couples an [key.EndpointID] with the [EndpointData] published
 // about it.
 type EndpointInfo struct {
-	// Id is the endpoint this information is about.
-	Id key.EndpointId
+	// ID is the endpoint this information is about.
+	ID key.EndpointID
 	// Data is the addressing and metadata.
 	Data EndpointData
 }
 
 // NewEndpointInfo returns an EndpointInfo with empty data.
-func NewEndpointInfo(id key.EndpointId) EndpointInfo {
-	return EndpointInfo{Id: id}
+func NewEndpointInfo(id key.EndpointID) EndpointInfo {
+	return EndpointInfo{ID: id}
 }
 
 // EndpointInfoFromParts returns an EndpointInfo from an id and data.
-func EndpointInfoFromParts(id key.EndpointId, data EndpointData) EndpointInfo {
-	return EndpointInfo{Id: id, Data: data}
+func EndpointInfoFromParts(id key.EndpointID, data EndpointData) EndpointInfo {
+	return EndpointInfo{ID: id, Data: data}
 }
 
 // EndpointInfoFromAddr converts an [netaddr.EndpointAddr] into an EndpointInfo.
 func EndpointInfoFromAddr(addr netaddr.EndpointAddr) EndpointInfo {
-	return EndpointInfo{Id: addr.Id, Data: EndpointDataFromAddr(addr)}
+	return EndpointInfo{ID: addr.ID, Data: EndpointDataFromAddr(addr)}
 }
 
 // WithRelayURL adds the relay URL and returns the updated info.
-func (e EndpointInfo) WithRelayURL(u netaddr.RelayUrl) EndpointInfo {
+func (e EndpointInfo) WithRelayURL(u netaddr.RelayURL) EndpointInfo {
 	e.Data.AddRelayURL(u)
 	return e
 }
@@ -198,11 +198,11 @@ func (e EndpointInfo) WithUserData(u *UserData) EndpointInfo {
 
 // Addr converts the info into an [netaddr.EndpointAddr].
 func (e EndpointInfo) Addr() netaddr.EndpointAddr {
-	return netaddr.EndpointAddrFromParts(e.Id, e.Data.addrs...)
+	return netaddr.EndpointAddrFromParts(e.ID, e.Data.addrs...)
 }
 
 // RelayURLs returns the endpoint's relay URLs.
-func (e EndpointInfo) RelayURLs() []netaddr.RelayUrl { return e.Data.RelayURLs() }
+func (e EndpointInfo) RelayURLs() []netaddr.RelayURL { return e.Data.RelayURLs() }
 
 // IPAddrs returns the endpoint's direct IP addresses.
 func (e EndpointInfo) IPAddrs() []netip.AddrPort { return e.Data.IPAddrs() }

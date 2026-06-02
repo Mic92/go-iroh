@@ -94,7 +94,7 @@ func (s RelayConnState) String() string {
 // observe it.
 type RelayStatus struct {
 	// URL is the home relay URL.
-	URL netaddr.RelayUrl
+	URL netaddr.RelayURL
 	// State is the current connection state.
 	State RelayConnState
 	// LastError is the most recent connection error while disconnected, or nil.
@@ -109,9 +109,9 @@ func (s RelayStatus) IsConnected() bool { return s.State == RelayConnected }
 // (iroh/src/socket/transports/relay/actor.rs:846).
 type RelaySendItem struct {
 	// RemoteEndpoint is the destination endpoint.
-	RemoteEndpoint key.EndpointId
+	RemoteEndpoint key.EndpointID
 	// URL is the relay through which to reach RemoteEndpoint.
-	URL netaddr.RelayUrl
+	URL netaddr.RelayURL
 	// Datagrams is the payload.
 	Datagrams relayproto.Datagrams
 }
@@ -120,9 +120,9 @@ type RelaySendItem struct {
 // the Rust RelayRecvDatagram (iroh/src/socket/transports/relay/actor.rs:1383).
 type RelayRecvDatagram struct {
 	// URL is the relay it arrived on.
-	URL netaddr.RelayUrl
+	URL netaddr.RelayURL
 	// Src is the endpoint that sent it.
-	Src key.EndpointId
+	Src key.EndpointID
 	// Datagrams is the payload.
 	Datagrams relayproto.Datagrams
 }
@@ -130,7 +130,7 @@ type RelayRecvDatagram struct {
 // relayDialer dials a relay client. It is an indirection point so tests can
 // substitute an in-process relay without a real network dial. The default is
 // [relayclient.Connect].
-type relayDialer func(ctx context.Context, url netaddr.RelayUrl, opts relayclient.Options) (relayClient, error)
+type relayDialer func(ctx context.Context, url netaddr.RelayURL, opts relayclient.Options) (relayClient, error)
 
 // relayClient is the subset of [relayclient.Client] the actor uses. It exists so
 // tests can supply a fake client implementing the same Send/Recv/Close surface.
@@ -141,7 +141,7 @@ type relayClient interface {
 }
 
 // defaultRelayDialer dials a real relay over WSS.
-func defaultRelayDialer(ctx context.Context, url netaddr.RelayUrl, opts relayclient.Options) (relayClient, error) {
+func defaultRelayDialer(ctx context.Context, url netaddr.RelayURL, opts relayclient.Options) (relayClient, error) {
 	return relayclient.Connect(ctx, url, opts)
 }
 
@@ -175,8 +175,8 @@ type RelayActor struct {
 	homeURL *watch.Value[*RelayStatus]
 
 	mu     sync.Mutex
-	active map[string]*activeRelay // key: RelayUrl.String()
-	home   netaddr.RelayUrl
+	active map[string]*activeRelay // key: RelayURL.String()
+	home   netaddr.RelayURL
 	closed bool
 
 	wg sync.WaitGroup
@@ -215,7 +215,7 @@ func (a *RelayActor) HomeRelayStatus() watch.Watcher[*RelayStatus] {
 
 // InsertRelay adds or replaces url's relay configuration, returning the
 // previous config when one existed. If there is no home relay, url becomes home.
-func (a *RelayActor) InsertRelay(url netaddr.RelayUrl, cfg relay.Config) (relay.Config, bool) {
+func (a *RelayActor) InsertRelay(url netaddr.RelayURL, cfg relay.Config) (relay.Config, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed {
@@ -234,7 +234,7 @@ func (a *RelayActor) InsertRelay(url netaddr.RelayUrl, cfg relay.Config) (relay.
 // RemoveRelay removes url's configuration, returning it when present. Any live
 // non-home connection to url is stopped. If url was the home relay, the next
 // configured relay (if any) becomes home.
-func (a *RelayActor) RemoveRelay(url netaddr.RelayUrl) (relay.Config, bool) {
+func (a *RelayActor) RemoveRelay(url netaddr.RelayURL) (relay.Config, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed {
@@ -250,7 +250,7 @@ func (a *RelayActor) RemoveRelay(url netaddr.RelayUrl) (relay.Config, bool) {
 	if !a.home.Equal(url) {
 		return prev, true
 	}
-	a.home = netaddr.RelayUrl{}
+	a.home = netaddr.RelayURL{}
 	a.homeURL.Set(nil, statusEqual)
 	for _, next := range a.cfg.Map.URLs() {
 		a.home = next
@@ -288,14 +288,14 @@ func (a *RelayActor) Send(item RelaySendItem) bool {
 // it (which then never idles out) and demoting any previous home relay. A zero
 // url clears the home relay. It mirrors the Rust on_network_change /
 // set_home_relay path (iroh/src/socket/transports/relay/actor.rs:1126).
-func (a *RelayActor) SetHomeRelay(url netaddr.RelayUrl) {
+func (a *RelayActor) SetHomeRelay(url netaddr.RelayURL) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed {
 		return
 	}
 	if url.IsZero() {
-		a.home = netaddr.RelayUrl{}
+		a.home = netaddr.RelayURL{}
 		a.homeURL.Set(nil, statusEqual)
 		for _, ar := range a.active {
 			ar.setHome(false)
@@ -355,7 +355,7 @@ func (a *RelayActor) dispatch(ctx context.Context, item RelaySendItem) {
 
 // routeForEndpointLocked returns an active relay already known to route to eid,
 // or nil. a.mu must be held.
-func (a *RelayActor) routeForEndpointLocked(eid key.EndpointId) *activeRelay {
+func (a *RelayActor) routeForEndpointLocked(eid key.EndpointID) *activeRelay {
 	for _, ar := range a.active {
 		if ar.hasRoute(eid) {
 			return ar
@@ -366,7 +366,7 @@ func (a *RelayActor) routeForEndpointLocked(eid key.EndpointId) *activeRelay {
 
 // ensureActiveLocked returns the active relay for url, starting it if needed.
 // a.mu must be held.
-func (a *RelayActor) ensureActiveLocked(url netaddr.RelayUrl, home bool) *activeRelay {
+func (a *RelayActor) ensureActiveLocked(url netaddr.RelayURL, home bool) *activeRelay {
 	key := url.String()
 	if ar, ok := a.active[key]; ok {
 		if home {
@@ -411,7 +411,7 @@ func (a *RelayActor) shutdown() {
 // publishStatus updates the home relay status if url is still the home relay.
 // This guards against a demoted relay overwriting a newer home relay's status,
 // matching the Rust HomeRelayWatch::set_status (actor.rs:985).
-func (a *RelayActor) publishStatus(url netaddr.RelayUrl, state RelayConnState, lastErr error) {
+func (a *RelayActor) publishStatus(url netaddr.RelayURL, state RelayConnState, lastErr error) {
 	a.mu.Lock()
 	isHome := a.home.Equal(url)
 	a.mu.Unlock()
@@ -422,7 +422,7 @@ func (a *RelayActor) publishStatus(url netaddr.RelayUrl, state RelayConnState, l
 }
 
 // authTokenFor returns the configured auth token for url, if any.
-func (a *RelayActor) authTokenFor(url netaddr.RelayUrl) string {
+func (a *RelayActor) authTokenFor(url netaddr.RelayURL) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.cfg.Map == nil {
@@ -450,7 +450,7 @@ func statusEqual(a, b *RelayStatus) bool {
 // ActiveRelayActor (iroh/src/socket/transports/relay/actor.rs:126).
 type activeRelay struct {
 	parent *RelayActor
-	url    netaddr.RelayUrl
+	url    netaddr.RelayURL
 
 	sendCh   chan RelaySendItem
 	stopCh   chan struct{}
@@ -458,21 +458,21 @@ type activeRelay struct {
 
 	mu      sync.Mutex
 	isHome  bool
-	routes  map[key.EndpointId]struct{}
-	lastSrc key.EndpointId
+	routes  map[key.EndpointID]struct{}
+	lastSrc key.EndpointID
 	haveSrc bool
 }
 
 // newActiveRelay returns an active relay for url. home marks it the home relay
 // (which never idles out).
-func newActiveRelay(parent *RelayActor, url netaddr.RelayUrl, home bool) *activeRelay {
+func newActiveRelay(parent *RelayActor, url netaddr.RelayURL, home bool) *activeRelay {
 	return &activeRelay{
 		parent: parent,
 		url:    url,
 		sendCh: make(chan RelaySendItem, perRelaySendDepth),
 		stopCh: make(chan struct{}),
 		isHome: home,
-		routes: make(map[key.EndpointId]struct{}),
+		routes: make(map[key.EndpointID]struct{}),
 	}
 }
 
@@ -504,7 +504,7 @@ func (r *activeRelay) home() bool {
 }
 
 // hasRoute reports whether eid has been seen on this relay.
-func (r *activeRelay) hasRoute(eid key.EndpointId) bool {
+func (r *activeRelay) hasRoute(eid key.EndpointID) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	_, ok := r.routes[eid]
@@ -512,7 +512,7 @@ func (r *activeRelay) hasRoute(eid key.EndpointId) bool {
 }
 
 // noteRoute records that eid is reachable on this relay.
-func (r *activeRelay) noteRoute(eid key.EndpointId) {
+func (r *activeRelay) noteRoute(eid key.EndpointID) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.haveSrc && r.lastSrc.Equal(eid) {
@@ -524,7 +524,7 @@ func (r *activeRelay) noteRoute(eid key.EndpointId) {
 }
 
 // dropRoute removes eid (an EndpointGone frame).
-func (r *activeRelay) dropRoute(eid key.EndpointId) {
+func (r *activeRelay) dropRoute(eid key.EndpointID) {
 	r.mu.Lock()
 	delete(r.routes, eid)
 	r.mu.Unlock()
@@ -773,7 +773,7 @@ func (r *activeRelay) sendDatagrams(client relayClient, items []RelaySendItem) e
 	for _, it := range items {
 		err := r.send(client, relayproto.ClientToRelayMsg{
 			Type:          relayproto.FrameClientToRelayDatagram,
-			DstEndpointId: it.RemoteEndpoint,
+			DstEndpointID: it.RemoteEndpoint,
 			Datagrams:     it.Datagrams,
 		})
 		if err != nil {
@@ -788,10 +788,10 @@ func (r *activeRelay) sendDatagrams(client relayClient, items []RelaySendItem) e
 func (r *activeRelay) handleFrame(msg relayproto.RelayToClientMsg, st *connectedState) {
 	switch msg.Type {
 	case relayproto.FrameRelayToClientDatagram, relayproto.FrameRelayToClientDatagramBat:
-		r.noteRoute(msg.RemoteEndpointId)
+		r.noteRoute(msg.RemoteEndpointID)
 		select {
 		case r.parent.recvCh <- RelayRecvDatagram{
-			URL: r.url, Src: msg.RemoteEndpointId, Datagrams: msg.Datagrams,
+			URL: r.url, Src: msg.RemoteEndpointID, Datagrams: msg.Datagrams,
 		}:
 		default:
 			// Recv queue full: drop (loss; QUIC retransmits).

@@ -501,10 +501,10 @@ func rustTransferExampleBin() (bin string, checked []string, ok bool) {
 }
 
 type rustTransferReady struct {
-	EndpointID     key.EndpointId
+	EndpointID     key.EndpointID
 	EndpointIDText string
 	DirectAddrs    []netip.AddrPort
-	RelayURL       netaddr.RelayUrl
+	RelayURL       netaddr.RelayURL
 	HasRelayURL    bool
 	Line           string
 }
@@ -559,7 +559,7 @@ func parseRustTransferEndpointBound(line string) (rustTransferReady, bool, error
 		if *event.RelayURL == "" {
 			return rustTransferReady{}, true, fmt.Errorf("empty relay_url")
 		}
-		relayURL, err := netaddr.ParseRelayUrl(*event.RelayURL)
+		relayURL, err := netaddr.ParseRelayURL(*event.RelayURL)
 		if err != nil {
 			return rustTransferReady{}, true, fmt.Errorf("relay URL %q: %w", *event.RelayURL, err)
 		}
@@ -572,7 +572,7 @@ func parseRustTransferEndpointBound(line string) (rustTransferReady, bool, error
 type rustTransferCompletion struct {
 	Kind         string
 	Size         uint64
-	RemoteID     key.EndpointId
+	RemoteID     key.EndpointID
 	RemoteIDText string
 	HasRemoteID  bool
 	Line         string

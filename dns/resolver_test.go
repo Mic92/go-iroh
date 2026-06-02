@@ -22,7 +22,7 @@ func (f fakeLookuper) LookupTXT(_ context.Context, name string) ([]string, error
 	return f.values, nil
 }
 
-func TestLookupEndpointById(t *testing.T) {
+func TestLookupEndpointByID(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public()
 	wantName := IrohTxtName + "." + id.Z32() + "." + N0DNSEndpointOriginProd
@@ -31,12 +31,12 @@ func TestLookupEndpointById(t *testing.T) {
 		values:   []string{"relay=https://r.example.com/", "addr=127.0.0.1:1234"},
 		t:        t,
 	}}
-	info, err := r.LookupEndpointById(context.Background(), id, N0DNSEndpointOriginProd)
+	info, err := r.LookupEndpointByID(context.Background(), id, N0DNSEndpointOriginProd)
 	if err != nil {
-		t.Fatalf("LookupEndpointById: %v", err)
+		t.Fatalf("LookupEndpointByID: %v", err)
 	}
-	if !info.Id.Equal(id) {
-		t.Errorf("id = %s, want %s", info.Id, id)
+	if !info.ID.Equal(id) {
+		t.Errorf("id = %s, want %s", info.ID, id)
 	}
 	if got := info.IPAddrs(); len(got) != 1 || got[0] != netip.MustParseAddrPort("127.0.0.1:1234") {
 		t.Errorf("IPAddrs = %v", got)
@@ -46,7 +46,7 @@ func TestLookupEndpointById(t *testing.T) {
 	}
 }
 
-func TestLookupEndpointByIdUsesZBase32Name(t *testing.T) {
+func TestLookupEndpointByIDUsesZBase32Name(t *testing.T) {
 	id := testID(t)
 	const wantZ32 = "dgjpkxyn3zyrk3zfads5duwdgbqpkwbjxfj4yt7rezidr3fijccy"
 	if got := id.Z32(); got != wantZ32 {
@@ -58,7 +58,7 @@ func TestLookupEndpointByIdUsesZBase32Name(t *testing.T) {
 		values:   []string{"relay=https://r.example.com/"},
 		t:        t,
 	}}
-	if _, err := r.LookupEndpointById(context.Background(), id, N0DNSEndpointOriginProd); err != nil {
-		t.Fatalf("LookupEndpointById: %v", err)
+	if _, err := r.LookupEndpointByID(context.Background(), id, N0DNSEndpointOriginProd); err != nil {
+		t.Fatalf("LookupEndpointByID: %v", err)
 	}
 }
