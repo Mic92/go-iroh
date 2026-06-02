@@ -28,6 +28,18 @@ func TestConfigString(t *testing.T) {
 	}
 }
 
+func TestConfigMarshalText(t *testing.T) {
+	u, _ := netaddr.ParseRelayURL("https://a.example.com")
+	c := NewConfig(u, &QUICConfig{Port: DefaultQUICPort}).WithAuthToken("secret")
+	text, err := c.MarshalText()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(text) != c.String() {
+		t.Errorf("MarshalText() = %q, want %q", text, c.String())
+	}
+}
+
 func TestMapInsertZeroValue(t *testing.T) {
 	u, _ := netaddr.ParseRelayURL("https://a.example.com")
 	var m Map // zero Map, nil relays

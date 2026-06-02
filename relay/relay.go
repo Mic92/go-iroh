@@ -58,6 +58,11 @@ func (c Config) WithAuthToken(token string) Config {
 
 func (c Config) String() string { return c.URL.String() }
 
+// MarshalText implements encoding.TextMarshaler using the relay URL string.
+func (c Config) MarshalText() ([]byte, error) {
+	return []byte(c.String()), nil
+}
+
 // Map is a set of relay servers keyed by URL.
 //
 // The zero Map is empty and ready to use, but is not safe for concurrent
