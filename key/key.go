@@ -188,9 +188,9 @@ func (k *PublicKey) UnmarshalBinary(data []byte) error {
 // SecretKey is a secret endpoint identity key. Its public part can always be
 // recovered.
 //
-// Go has no destructors, so unlike the Rust original this type is not zeroized
-// on drop; callers handling long-lived secrets should clear the bytes returned
-// by [SecretKey.Bytes] themselves.
+// Go has no destructors, so unlike the Rust original this type is not cleared
+// automatically. Call [SecretKey.Clear] to overwrite the key material when a
+// long-lived secret is no longer needed.
 //
 // The zero value is not usable; construct with [GenerateSecretKey],
 // [NewSecretKey], or [ParseSecretKey].
@@ -264,6 +264,17 @@ func (k SecretKey) Bytes() [SeedSize]byte {
 	var seed [SeedSize]byte
 	copy(seed[:], k.signing.Seed())
 	return seed
+}
+
+// Clear overwrites k's key material and resets k to the zero value. It does not
+// clear copies already made by value or by [SecretKey.Bytes], [SecretKey.Ed25519],
+// or [SecretKey.MarshalBinary].
+func (k *SecretKey) Clear() {
+	if k == nil {
+		return
+	}
+	clear(k.signing)
+	k.signing = nil
 }
 
 // IsZero reports whether k is the unusable zero value.

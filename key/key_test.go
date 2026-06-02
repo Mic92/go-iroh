@@ -129,6 +129,26 @@ func TestSecretKeyStringRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSecretKeyClear(t *testing.T) {
+	sk, err := GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	priv := sk.signing
+	if len(priv) != PrivateKeySize {
+		t.Fatalf("private key len = %d, want %d", len(priv), PrivateKeySize)
+	}
+	sk.Clear()
+	if !sk.IsZero() {
+		t.Fatal("SecretKey.Clear did not reset key to zero value")
+	}
+	for i, b := range priv {
+		if b != 0 {
+			t.Fatalf("private key byte %d = %d, want 0", i, b)
+		}
+	}
+}
+
 func TestPublicKeyJSON(t *testing.T) {
 	var zero [PublicKeySize]byte
 	k, _ := NewPublicKey(zero)
