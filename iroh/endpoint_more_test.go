@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -979,7 +980,11 @@ func TestEndpointQADCandidatesOpenSelectedQNTRouteDataPath(t *testing.T) {
 	clientActor := client.remotes.Actor(server.ID())
 	waitForSelectedPath(t, ctx, clientActor, socket.RelayAddr(relayURL, server.ID()))
 	waitForConnNATAddress(t, ctx, conn.qc, serverQAD)
-	waitForConnNATAddress(t, ctx, serverConn.qc, clientQAD)
+	if addrs, err := serverConn.qc.NATTraversalAddresses(); err != nil {
+		t.Fatalf("server NATTraversalAddresses: %v", err)
+	} else if slices.Contains(addrs, clientQAD) {
+		t.Fatalf("server learned client QAD from ADD_ADDRESS: %v", addrs)
+	}
 
 	if err := clientActor.TriggerHolepunch(); err != nil {
 		t.Fatalf("TriggerHolepunch: %v", err)
