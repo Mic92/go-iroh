@@ -151,7 +151,7 @@ func (d EndpointData) contains(a netaddr.TransportAddr) bool {
 // EndpointDataFromAddr builds EndpointData from an [netaddr.EndpointAddr], taking
 // its (already de-duplicated, sorted) addresses.
 func EndpointDataFromAddr(addr netaddr.EndpointAddr) EndpointData {
-	return EndpointData{addrs: slices.Clone(addr.Addrs())}
+	return EndpointData{addrs: addr.Addrs()}
 }
 
 // EndpointInfo couples an [key.EndpointID] with the [EndpointData] published

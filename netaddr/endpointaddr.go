@@ -130,11 +130,20 @@ var (
 // ParseCustomAddr parses a CustomAddr from its "<id>_<data>" string form.
 // It also accepts the "custom:" prefix used by [ParseTransportAddr].
 func ParseCustomAddr(s string) (CustomAddr, error) {
-	var a CustomAddr
-	if err := a.UnmarshalText([]byte(s)); err != nil {
-		return CustomAddr{}, err
+	s = strings.TrimPrefix(s, "custom:")
+	idStr, dataStr, ok := strings.Cut(s, "_")
+	if !ok {
+		return CustomAddr{}, ErrCustomAddrMissingSeparator
 	}
-	return a, nil
+	id, err := strconv.ParseUint(idStr, 16, 64)
+	if err != nil {
+		return CustomAddr{}, ErrCustomAddrInvalidID
+	}
+	data, err := hex.DecodeString(dataStr)
+	if err != nil {
+		return CustomAddr{}, ErrCustomAddrInvalidData
+	}
+	return NewCustomAddr(id, data), nil
 }
 
 // MarshalText implements encoding.TextMarshaler using the string encoding
@@ -146,21 +155,11 @@ func (a CustomAddr) MarshalText() ([]byte, error) {
 // UnmarshalText implements encoding.TextUnmarshaler using the string encoding
 // described on [CustomAddr].
 func (a *CustomAddr) UnmarshalText(text []byte) error {
-	s := strings.TrimPrefix(string(text), "custom:")
-	idStr, dataStr, ok := strings.Cut(s, "_")
-	if !ok {
-		return ErrCustomAddrMissingSeparator
-	}
-	id, err := strconv.ParseUint(idStr, 16, 64)
+	parsed, err := ParseCustomAddr(string(text))
 	if err != nil {
-		return ErrCustomAddrInvalidID
+		return err
 	}
-	data, err := hex.DecodeString(dataStr)
-	if err != nil {
-		return ErrCustomAddrInvalidData
-	}
-	a.id = id
-	a.data = data
+	*a = parsed
 	return nil
 }
 
