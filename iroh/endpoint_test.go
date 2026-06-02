@@ -183,9 +183,9 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 			done <- fmt.Errorf("accepting ALPN = %q, %v", got, err)
 			return
 		}
-		early := accepting.Into0RTT()
+		early := accepting.EarlyConnection()
 		if early.StableID() == 0 {
-			done <- errors.New("accepting Into0RTT StableID = 0")
+			done <- errors.New("accepting EarlyConnection StableID = 0")
 			return
 		}
 		conn, err := accepting.Connection(ctx)

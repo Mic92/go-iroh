@@ -81,8 +81,8 @@ func (c *Connecting) RemoteID() key.EndpointID {
 	return c.conn.RemoteID()
 }
 
-// Into0RTT returns the connection and whether 0-RTT was accepted.
-func (c *Connecting) Into0RTT() (*Conn, bool) {
+// EarlyConnection returns the connection and whether 0-RTT was accepted.
+func (c *Connecting) EarlyConnection() (*Conn, bool) {
 	return c.conn, c.conn.Used0RTT()
 }
 
@@ -266,9 +266,9 @@ func (a *Accepting) RemoteAddr() IncomingAddr {
 	return newIncomingAddr(a.qc.RemoteAddr())
 }
 
-// Into0RTT returns a connection handle before handshake completion. The peer id
-// is not authenticated until [Conn.HandshakeComplete] closes.
-func (a *Accepting) Into0RTT() *Conn {
+// EarlyConnection returns a connection handle before handshake completion. The
+// peer id is not authenticated until [Conn.HandshakeComplete] closes.
+func (a *Accepting) EarlyConnection() *Conn {
 	if a == nil || a.qc == nil {
 		return nil
 	}

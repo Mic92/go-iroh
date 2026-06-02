@@ -284,7 +284,7 @@ func TestEndpointConnectWith(t *testing.T) {
 	if gotALPN != alpn {
 		t.Fatalf("ALPN = %q, want %q", gotALPN, alpn)
 	}
-	conn, used0RTT := connecting.Into0RTT()
+	conn, used0RTT := connecting.EarlyConnection()
 	if used0RTT {
 		t.Fatal("first ConnectWith unexpectedly used 0-RTT")
 	}
