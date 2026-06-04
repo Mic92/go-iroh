@@ -57,6 +57,7 @@ type Endpoint struct {
 	addrWatch   *watch.Value[netaddr.EndpointAddr]
 	externalNAT []netip.AddrPort
 	netReport   netReportRunner
+	lastReport  *NetReport
 	nextStable  uint64
 	stableIDs   map[*quic.Conn]uint64
 	metrics     endpointMetrics
@@ -585,6 +586,11 @@ func (e *Endpoint) AddExternalAddr(addr netip.AddrPort) {
 }
 
 func (e *Endpoint) applyNetReport(report netreport.Report) bool {
+	publicReport := netReportFromInternal(report)
+	e.mu.Lock()
+	e.lastReport = &publicReport
+	e.mu.Unlock()
+
 	changed := e.setExternalNATTraversalCandidates(report.GlobalV4, report.GlobalV6)
 	if e.relay != nil && !report.PreferredRelay.IsZero() {
 		current := e.relay.HomeRelayStatus().Current()
@@ -597,6 +603,17 @@ func (e *Endpoint) applyNetReport(report netreport.Report) bool {
 		}
 	}
 	return changed
+}
+
+// NetReport returns the most recent network report applied to the endpoint.
+// The boolean result is false when no report has completed yet.
+func (e *Endpoint) NetReport() (NetReport, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.lastReport == nil {
+		return NetReport{}, false
+	}
+	return e.lastReport.clone(), true
 }
 
 func (e *Endpoint) refreshNetReport(ctx context.Context) error {
