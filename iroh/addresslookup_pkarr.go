@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/dns"
-	"github.com/tmc/go-iroh/internal/pkarr"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/watch"
 )
@@ -308,7 +307,7 @@ func (c *pkarrRelayClient) keyURL(z32 string) string {
 
 // publish PUTs the signed packet's relay payload (signature + timestamp + DNS
 // wire bytes, i.e. everything after the public key) to "<relay>/<z32>".
-func (c *pkarrRelayClient) publish(ctx context.Context, packet *pkarr.SignedPacket) error {
+func (c *pkarrRelayClient) publish(ctx context.Context, packet *dns.SignedPacket) error {
 	body := packet.RelayPayload()
 	target := c.keyURL(packet.PublicKey().EndpointID().Z32())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, bytes.NewReader(body))
@@ -329,7 +328,7 @@ func (c *pkarrRelayClient) publish(ctx context.Context, packet *pkarr.SignedPack
 
 // resolve GETs the relay payload from "<relay>/<z32>" and reconstructs (and
 // verifies) the signed packet from the public key and payload.
-func (c *pkarrRelayClient) resolve(ctx context.Context, id key.EndpointID) (*pkarr.SignedPacket, error) {
+func (c *pkarrRelayClient) resolve(ctx context.Context, id key.EndpointID) (*dns.SignedPacket, error) {
 	target := c.keyURL(id.Z32())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -348,7 +347,11 @@ func (c *pkarrRelayClient) resolve(ctx context.Context, id key.EndpointID) (*pka
 	if err != nil {
 		return nil, fmt.Errorf("read payload: %w", err)
 	}
-	packet, err := pkarr.FromRelayPayload(id.PublicKey(), payload)
+	pubBytes := id.PublicKey().Bytes()
+	wire := make([]byte, 0, len(pubBytes)+len(payload))
+	wire = append(wire, pubBytes[:]...)
+	wire = append(wire, payload...)
+	packet, err := dns.SignedPacketFromBytes(wire)
 	if err != nil {
 		return nil, fmt.Errorf("decode signed packet: %w", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/tmc/go-iroh/internal/pkarr"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
@@ -260,10 +259,22 @@ func (e EndpointInfo) ToTXTStrings() []string {
 	return e.toAttrs().toTxtStrings()
 }
 
+// ToSignedPacket builds a signed packet for this endpoint info, signed with
+// secretKey and using the given record TTL in seconds.
+func (e EndpointInfo) ToSignedPacket(secretKey key.SecretKey, ttl uint32) (*SignedPacket, error) {
+	packet, err := e.toAttrs().toPkarrSignedPacket(secretKey, ttl)
+	if err != nil {
+		return nil, err
+	}
+	return signedPacketFromInternal(packet), nil
+}
+
 // ToPkarrSignedPacket builds a pkarr signed packet for this endpoint info,
 // signed with secretKey and using the given record TTL in seconds.
-func (e EndpointInfo) ToPkarrSignedPacket(secretKey key.SecretKey, ttl uint32) (*pkarr.SignedPacket, error) {
-	return e.toAttrs().toPkarrSignedPacket(secretKey, ttl)
+//
+// Deprecated: use [EndpointInfo.ToSignedPacket].
+func (e EndpointInfo) ToPkarrSignedPacket(secretKey key.SecretKey, ttl uint32) (*SignedPacket, error) {
+	return e.ToSignedPacket(secretKey, ttl)
 }
 
 // EndpointInfoFromTXTLookup parses an EndpointInfo from DNS TXT lookup results.
@@ -277,12 +288,19 @@ func EndpointInfoFromTXTLookup(domainName string, values []string) (EndpointInfo
 	return endpointInfoFromAttrs(attrs), nil
 }
 
-// EndpointInfoFromPkarrSignedPacket parses an EndpointInfo from a pkarr signed
-// packet.
-func EndpointInfoFromPkarrSignedPacket(packet *pkarr.SignedPacket) (EndpointInfo, error) {
+// EndpointInfoFromSignedPacket parses an EndpointInfo from a signed packet.
+func EndpointInfoFromSignedPacket(packet *SignedPacket) (EndpointInfo, error) {
 	attrs, err := txtAttrsFromPkarrSignedPacket(packet)
 	if err != nil {
 		return EndpointInfo{}, err
 	}
 	return endpointInfoFromAttrs(attrs), nil
+}
+
+// EndpointInfoFromPkarrSignedPacket parses an EndpointInfo from a pkarr signed
+// packet.
+//
+// Deprecated: use [EndpointInfoFromSignedPacket].
+func EndpointInfoFromPkarrSignedPacket(packet *SignedPacket) (EndpointInfo, error) {
+	return EndpointInfoFromSignedPacket(packet)
 }

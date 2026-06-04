@@ -97,9 +97,9 @@ func txtAttrsFromTXTLookup(name string, values []string) (*txtAttrs, error) {
 	return txtAttrsFromStrings(id, values)
 }
 
-func txtAttrsFromPkarrSignedPacket(packet *pkarr.SignedPacket) (*txtAttrs, error) {
+func txtAttrsFromPkarrSignedPacket(packet *SignedPacket) (*txtAttrs, error) {
 	id := packet.PublicKey().EndpointID()
-	return txtAttrsFromStrings(id, packet.TxtRecords(IrohTXTName))
+	return txtAttrsFromStrings(id, packet.TXTRecords(IrohTXTName))
 }
 
 // attrOrder is the key emission order. It matches the Rust BTreeMap<IrohAttr>
