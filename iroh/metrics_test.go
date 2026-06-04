@@ -1,10 +1,12 @@
 package iroh
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"expvar"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +23,24 @@ func TestMetricsStringExpvar(t *testing.T) {
 	}
 	if got["ConnectsStarted"] != 2 || got["ConnectsAccepted"] != 1 || got["ConnectsFailed"] != 1 {
 		t.Fatalf("Metrics.String = %s", m.String())
+	}
+}
+
+func TestMetricsWriteOpenMetrics(t *testing.T) {
+	m := Metrics{ConnectsStarted: 2, AcceptsFailed: 1}
+	var buf bytes.Buffer
+	if err := m.WriteOpenMetrics(&buf); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	for _, want := range []string{
+		"# TYPE endpoint_connects_started counter\nendpoint_connects_started_total 2\n",
+		"# TYPE endpoint_accepts_failed counter\nendpoint_accepts_failed_total 1\n",
+		"# EOF\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("OpenMetrics missing %q in %q", want, got)
+		}
 	}
 }
 
