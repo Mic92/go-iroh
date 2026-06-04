@@ -67,6 +67,15 @@ func (h blockingShutdown) Shutdown(ctx context.Context) {
 	}
 }
 
+type panicHandler struct {
+	started chan struct{}
+}
+
+func (h panicHandler) Accept(context.Context, *Conn) error {
+	close(h.started)
+	panic("router panic test")
+}
+
 type acceptingEcho struct {
 	echoHandler
 	called chan string
@@ -262,6 +271,75 @@ func TestRouterUnsupportedALPN(t *testing.T) {
 		t.Fatalf("good connect after bad: %v", err)
 	}
 	conn.CloseWithError(0, "")
+}
+
+func TestRouterHandlerPanicDoesNotStopAcceptLoop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const (
+		panicALPN = "iroh-router-panic/0"
+		echoALPN  = "iroh-router-after-panic/0"
+	)
+
+	srvKey, _ := key.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	panicStarted := make(chan struct{})
+	router, err := NewRouter(server, map[string]ProtocolHandler{
+		panicALPN: panicHandler{started: panicStarted},
+		echoALPN:  echoHandler{},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	panicConn, err := client.Connect(ctx, addr, panicALPN)
+	if err != nil {
+		t.Fatalf("panic connect: %v", err)
+	}
+	panicConn.CloseWithError(0, "")
+	select {
+	case <-panicStarted:
+	case <-ctx.Done():
+		t.Fatal("panic handler was not called")
+	}
+
+	conn, err := client.Connect(ctx, addr, echoALPN)
+	if err != nil {
+		t.Fatalf("connect after panic: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+	s, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		t.Fatalf("open stream after panic: %v", err)
+	}
+	const msg = "after panic"
+	if _, err := s.Write([]byte(msg)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := io.ReadAll(s)
+	if err != nil {
+		t.Fatalf("read echo after panic: %v", err)
+	}
+	if string(got) != msg {
+		t.Fatalf("echo after panic = %q, want %q", got, msg)
+	}
 }
 
 func TestRouterShutdownHandlersRunConcurrently(t *testing.T) {

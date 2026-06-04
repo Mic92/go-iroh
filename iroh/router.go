@@ -16,9 +16,9 @@ import (
 //
 // Accept is called in its own goroutine for every accepted connection; it should
 // run for the lifetime of the connection and return when done. A returned error
-// is logged. A handler must not panic; a panic is recovered and logged and stops
-// the router's accept loop. It is the Go analog of the Rust ProtocolHandler
-// trait (iroh/src/protocol.rs:228).
+// is logged. A handler must not panic; a panic is recovered and logged, closing
+// only that connection while the router continues accepting. It is the Go
+// analog of the Rust ProtocolHandler trait (iroh/src/protocol.rs:228).
 type ProtocolHandler interface {
 	// Accept handles an accepted connection. ctx is cancelled when the router
 	// shuts down.
@@ -171,21 +171,14 @@ func (r *Router) IsShutdown() bool {
 	return r.shutdown
 }
 
-// acceptLoop accepts connections until ctx is cancelled, the endpoint closes, or
-// a handler goroutine panics. Each connection is dispatched in a child
-// goroutine.
+// acceptLoop accepts connections until ctx is cancelled or the endpoint closes.
+// Each connection is dispatched in a child goroutine.
 func (r *Router) acceptLoop(ctx context.Context) {
 	defer r.wg.Done()
-	// panicked fires when a handler goroutine recovers a panic; the loop breaks
-	// so a misbehaving handler cannot keep accepting traffic.
-	panicked := make(chan struct{})
-	var panicOnce sync.Once
 
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-panicked:
 			return
 		default:
 		}
@@ -227,15 +220,16 @@ func (r *Router) acceptLoop(ctx context.Context) {
 		r.wg.Add(1)
 		go func(accepting *Accepting) {
 			defer r.wg.Done()
+			var alpn string
 			defer func() {
 				if v := recover(); v != nil {
 					accepting.qc.CloseWithError(0, "handler panic")
-					r.logger.Error("router: handler panicked", "panic", v)
-					panicOnce.Do(func() { close(panicked) })
+					r.logger.Error("router: handler panicked", "alpn", alpn, "panic", v)
 				}
 			}()
 
-			alpn, err := accepting.ALPN(ctx)
+			var err error
+			alpn, err = accepting.ALPN(ctx)
 			if err != nil {
 				r.logger.Warn("router: accepting ALPN failed", "err", err)
 				return
