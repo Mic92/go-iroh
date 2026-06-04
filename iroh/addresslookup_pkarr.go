@@ -151,7 +151,7 @@ func (p *PkarrPublisher) Close() error {
 type publisherService struct {
 	secretKey         key.SecretKey
 	client            *pkarrRelayClient
-	watcher           watch.Watcher[*dns.EndpointInfo]
+	watcher           watch.Observer[*dns.EndpointInfo]
 	ttl               uint32
 	republishInterval time.Duration
 }

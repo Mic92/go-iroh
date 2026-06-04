@@ -697,7 +697,7 @@ func (e *Endpoint) Addr() netaddr.EndpointAddr {
 
 // WatchAddr returns a watcher over the endpoint's current advertised address.
 // It updates when local external NAT candidates are added or replaced.
-func (e *Endpoint) WatchAddr() watch.Watcher[netaddr.EndpointAddr] {
+func (e *Endpoint) WatchAddr() watch.Observer[netaddr.EndpointAddr] {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.addrWatch == nil {
@@ -758,7 +758,7 @@ type RelayConfig = relay.Config
 //
 // It is the Go analog of the Rust Endpoint::home_relay_status
 // (iroh/src/endpoint.rs:1324).
-func (e *Endpoint) HomeRelayStatus() watch.Watcher[*RelayStatus] {
+func (e *Endpoint) HomeRelayStatus() watch.Observer[*RelayStatus] {
 	if e.relay == nil {
 		return watch.NewValue[*RelayStatus](nil).Watch()
 	}

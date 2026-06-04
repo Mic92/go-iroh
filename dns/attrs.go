@@ -14,8 +14,8 @@ import (
 
 // Errors returned when parsing iroh DNS records.
 var (
-	// ErrUnexpectedFormat is returned for a TXT value not of the form key=value.
-	ErrUnexpectedFormat = errors.New("expected format `key=value`")
+	// ErrInvalidTXTAttr is returned for a TXT value not of the form key=value.
+	ErrInvalidTXTAttr = errors.New("invalid TXT attribute")
 	// ErrUnknownAttr is returned for an unrecognized attribute key.
 	ErrUnknownAttr = errors.New("could not convert key to attr")
 	// ErrNumLabels is returned when a DNS name has too few labels.
@@ -70,7 +70,7 @@ func txtAttrsFromStrings(id key.EndpointID, values []string) (*txtAttrs, error) 
 	for _, s := range values {
 		key, value, ok := splitAttr(s)
 		if !ok {
-			return nil, fmt.Errorf("%w, received %q", ErrUnexpectedFormat, s)
+			return nil, fmt.Errorf("%w: expected key=value, received %q", ErrInvalidTXTAttr, s)
 		}
 		attr, ok := parseIrohAttr(key)
 		if !ok {

@@ -127,6 +127,6 @@ func (t *RelayTransport) RemoveRelay(url netaddr.RelayURL) (relay.Config, bool) 
 
 // HomeRelayStatus returns a watcher over the home relay's connection status. See
 // [RelayActor.HomeRelayStatus].
-func (t *RelayTransport) HomeRelayStatus() watch.Watcher[*RelayStatus] {
+func (t *RelayTransport) HomeRelayStatus() watch.Observer[*RelayStatus] {
 	return t.actor.HomeRelayStatus()
 }

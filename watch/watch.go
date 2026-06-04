@@ -1,9 +1,9 @@
 // Package watch provides an observable value: a [Value] that can be updated and
-// one or more [Watcher] handles that observe its changes.
+// one or more [Observer] handles that observe its changes.
 //
-// It is the Go analog of iroh's n0_watcher (Watchable + Watcher). A [Watcher]
+// It is the Go analog of iroh's n0_watcher (Watchable + Watcher). An [Observer]
 // exposes the current value, a one-shot wait for the next change, and an
-// iterator stream of values. The root package re-exports Watcher for APIs such as
+// iterator stream of values. The root package uses Observer for APIs such as
 // Endpoint.WatchAddr.
 package watch
 
@@ -14,7 +14,7 @@ import (
 )
 
 // Value is an observable container holding a T. It is safe for concurrent use.
-// Updates are published to all [Watcher] handles created from it.
+// Updates are published to all [Observer] handles created from it.
 //
 // The zero Value holds the zero T and is ready to use.
 type Value[T any] struct {
@@ -60,8 +60,8 @@ func (s *Value[T]) Current() T {
 	return s.val
 }
 
-// Watch returns a [Watcher] observing this value.
-func (s *Value[T]) Watch() Watcher[T] {
+// Watch returns an [Observer] observing this value.
+func (s *Value[T]) Watch() Observer[T] {
 	return &watcher[T]{src: s}
 }
 
@@ -85,9 +85,9 @@ var closedChan = func() chan struct{} {
 	return c
 }()
 
-// Watcher observes a [Value]. Multiple watchers may observe the same value
+// Observer observes a [Value]. Multiple observers may observe the same value
 // independently. It is the Go analog of iroh's n0_watcher::Watcher.
-type Watcher[T any] interface {
+type Observer[T any] interface {
 	// Current returns the current value.
 	Current() T
 	// Updated blocks until the value changes after the watcher's last observed

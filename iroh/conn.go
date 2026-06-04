@@ -33,14 +33,71 @@ func (s Side) String() string {
 	}
 }
 
-// Stream is a bidirectional QUIC stream.
-type Stream = quic.Stream
+// Stream is a bidirectional stream.
+type Stream struct {
+	s *quic.Stream
+}
 
-// SendStream is the send half of a unidirectional QUIC stream.
-type SendStream = quic.SendStream
+// SendStream is the send half of a unidirectional stream.
+type SendStream struct {
+	s *quic.SendStream
+}
 
-// ReceiveStream is the receive half of a unidirectional QUIC stream.
-type ReceiveStream = quic.ReceiveStream
+// ReceiveStream is the receive half of a unidirectional stream.
+type ReceiveStream struct {
+	s *quic.ReceiveStream
+}
+
+// Read reads data from s.
+func (s *Stream) Read(p []byte) (int, error) { return s.s.Read(p) }
+
+// Write writes data to s.
+func (s *Stream) Write(p []byte) (int, error) { return s.s.Write(p) }
+
+// Close closes the send side of s.
+func (s *Stream) Close() error { return s.s.Close() }
+
+// SetDeadline sets the read and write deadlines for s.
+func (s *Stream) SetDeadline(t time.Time) error { return s.s.SetDeadline(t) }
+
+// SetReadDeadline sets the read deadline for s.
+func (s *Stream) SetReadDeadline(t time.Time) error { return s.s.SetReadDeadline(t) }
+
+// SetWriteDeadline sets the write deadline for s.
+func (s *Stream) SetWriteDeadline(t time.Time) error { return s.s.SetWriteDeadline(t) }
+
+// CancelRead aborts receiving on s with code.
+func (s *Stream) CancelRead(code uint64) { s.s.CancelRead(quic.StreamErrorCode(code)) }
+
+// CancelWrite aborts sending on s with code.
+func (s *Stream) CancelWrite(code uint64) { s.s.CancelWrite(quic.StreamErrorCode(code)) }
+
+// Context is cancelled when s is closed.
+func (s *Stream) Context() context.Context { return s.s.Context() }
+
+// Write writes data to s.
+func (s *SendStream) Write(p []byte) (int, error) { return s.s.Write(p) }
+
+// Close closes s.
+func (s *SendStream) Close() error { return s.s.Close() }
+
+// SetWriteDeadline sets the write deadline for s.
+func (s *SendStream) SetWriteDeadline(t time.Time) error { return s.s.SetWriteDeadline(t) }
+
+// CancelWrite aborts sending on s with code.
+func (s *SendStream) CancelWrite(code uint64) { s.s.CancelWrite(quic.StreamErrorCode(code)) }
+
+// Context is cancelled when s is closed.
+func (s *SendStream) Context() context.Context { return s.s.Context() }
+
+// Read reads data from s.
+func (s *ReceiveStream) Read(p []byte) (int, error) { return s.s.Read(p) }
+
+// SetReadDeadline sets the read deadline for s.
+func (s *ReceiveStream) SetReadDeadline(t time.Time) error { return s.s.SetReadDeadline(t) }
+
+// CancelRead aborts receiving on s with code.
+func (s *ReceiveStream) CancelRead(code uint64) { s.s.CancelRead(quic.StreamErrorCode(code)) }
 
 // Conn is an established connection to a remote iroh endpoint. The peer's
 // identity is authenticated by the RFC 7250 handshake and available via
@@ -175,7 +232,11 @@ func (c *Conn) StableID() uint64 { return c.stableID }
 // OpenStreamSync opens a new bidirectional stream, blocking until the peer's
 // flow control permits it or ctx is done.
 func (c *Conn) OpenStreamSync(ctx context.Context) (*Stream, error) {
-	return c.qc.OpenStreamSync(ctx)
+	s, err := c.qc.OpenStreamSync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Stream{s: s}, nil
 }
 
 // OpenStreamConn opens a bidirectional stream and returns it as a [net.Conn].
@@ -189,7 +250,11 @@ func (c *Conn) OpenStreamConn(ctx context.Context) (net.Conn, error) {
 
 // AcceptStream accepts the next bidirectional stream opened by the peer.
 func (c *Conn) AcceptStream(ctx context.Context) (*Stream, error) {
-	return c.qc.AcceptStream(ctx)
+	s, err := c.qc.AcceptStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Stream{s: s}, nil
 }
 
 // AcceptStreamConn accepts the next bidirectional stream and returns it as a
@@ -204,12 +269,20 @@ func (c *Conn) AcceptStreamConn(ctx context.Context) (net.Conn, error) {
 
 // OpenUniStreamSync opens a new unidirectional (send) stream.
 func (c *Conn) OpenUniStreamSync(ctx context.Context) (*SendStream, error) {
-	return c.qc.OpenUniStreamSync(ctx)
+	s, err := c.qc.OpenUniStreamSync(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &SendStream{s: s}, nil
 }
 
 // AcceptUniStream accepts the next unidirectional stream opened by the peer.
 func (c *Conn) AcceptUniStream(ctx context.Context) (*ReceiveStream, error) {
-	return c.qc.AcceptUniStream(ctx)
+	s, err := c.qc.AcceptUniStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &ReceiveStream{s: s}, nil
 }
 
 // SendDatagram sends an unreliable datagram.

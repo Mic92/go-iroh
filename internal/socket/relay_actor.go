@@ -209,7 +209,7 @@ func (a *RelayActor) Recv() <-chan RelayRecvDatagram { return a.recvCh }
 
 // HomeRelayStatus returns a watcher over the home relay's connection status. The
 // value is nil until a home relay is set with [RelayActor.SetHomeRelay].
-func (a *RelayActor) HomeRelayStatus() watch.Watcher[*RelayStatus] {
+func (a *RelayActor) HomeRelayStatus() watch.Observer[*RelayStatus] {
 	return a.homeURL.Watch()
 }
 

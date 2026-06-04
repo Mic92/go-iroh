@@ -40,8 +40,8 @@ var (
 	ErrDecodeBase32 = errors.New("failed to decode base32 string")
 )
 
-// PublicKey is a public endpoint identity key. It is verified to be a valid
-// Ed25519 public key when created.
+// PublicKey is a public Ed25519 key. It is verified to be a valid curve point
+// when created.
 //
 // The zero value is not usable; construct a PublicKey with [NewPublicKey],
 // [ParsePublicKey], or [SecretKey.Public].
@@ -49,7 +49,7 @@ type PublicKey struct {
 	bytes [PublicKeySize]byte
 }
 
-// EndpointID is the identifier for an endpoint in the iroh network.
+// EndpointID is a network-facing identifier for an endpoint.
 //
 // Use EndpointID in network-facing APIs and [PublicKey] when performing
 // cryptographic operations.
