@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/internal/relayserver"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
+	"github.com/tmc/go-iroh/relayserver"
 )
 
 type echoRelayServer struct{ ts *httptest.Server }

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/tmc/go-iroh/internal/relayserver"
+	"github.com/tmc/go-iroh/relayserver"
 )
 
 func main() {

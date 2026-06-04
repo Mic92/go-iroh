@@ -12,10 +12,12 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"sync/atomic"
 
 	"github.com/coder/websocket"
 	"github.com/tmc/go-iroh/internal/relayproto"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/metrics"
 )
 
 const (
@@ -27,11 +29,27 @@ const (
 type Server struct {
 	mu      sync.Mutex
 	clients map[key.EndpointID]*session
+	metrics relayMetrics
+}
+
+type relayMetrics struct {
+	clientsAccepted    atomic.Uint64
+	pings              atomic.Uint64
+	datagramsForwarded atomic.Uint64
 }
 
 // New returns a relay server.
 func New() *Server {
 	return &Server{clients: make(map[key.EndpointID]*session)}
+}
+
+// Snapshot returns the server's counter snapshot for [metrics.Registry].
+func (s *Server) Snapshot() metrics.Snapshot {
+	return metrics.Snapshot{
+		"clients_accepted":    s.metrics.clientsAccepted.Load(),
+		"pings":               s.metrics.pings.Load(),
+		"datagrams_forwarded": s.metrics.datagramsForwarded.Load(),
+	}
 }
 
 // ServeHTTP handles relay WebSocket requests at /relay.
@@ -70,6 +88,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	s.metrics.clientsAccepted.Add(1)
 
 	sess := &session{
 		id:      id,
@@ -157,12 +176,14 @@ func (s *Server) handleClientMsg(src *session, msg relayproto.ClientToRelayMsg) 
 		if dst == nil {
 			return
 		}
+		s.metrics.datagramsForwarded.Add(1)
 		dst.enqueue(relayproto.RelayToClientMsg{
 			Type:             relayproto.FrameRelayToClientDatagram,
 			RemoteEndpointID: src.id,
 			Datagrams:        msg.Datagrams,
 		})
 	case relayproto.FramePing:
+		s.metrics.pings.Add(1)
 		src.enqueue(relayproto.RelayToClientMsg{Type: relayproto.FramePong, Ping: msg.Ping})
 	}
 }

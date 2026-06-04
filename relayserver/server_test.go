@@ -13,7 +13,8 @@ import (
 )
 
 func TestRelayServerForwardsDatagramAndPong(t *testing.T) {
-	ts := httptest.NewServer(New())
+	srv := New()
+	ts := httptest.NewServer(srv)
 	defer ts.Close()
 
 	u, err := netaddr.ParseRelayURL(ts.URL)
@@ -70,5 +71,10 @@ func TestRelayServerForwardsDatagramAndPong(t *testing.T) {
 	}
 	if string(got.Datagrams.Contents) != string(payload) {
 		t.Fatalf("datagram = %q, want %q", got.Datagrams.Contents, payload)
+	}
+
+	snapshot := srv.Snapshot()
+	if snapshot["clients_accepted"] != 2 || snapshot["pings"] != 1 || snapshot["datagrams_forwarded"] != 1 {
+		t.Fatalf("Snapshot = %+v, want clients=2 pings=1 datagrams=1", snapshot)
 	}
 }
