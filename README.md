@@ -128,4 +128,7 @@ QUIC, direct paths, and NAT traversal are not available in browser WebAssembly.
 
 ## License
 
-Licensed under either Apache-2.0 or MIT, at your option. See [LICENSE](./LICENSE).
+go-iroh is licensed under the MIT License. See [LICENSE](./LICENSE).
+
+The forked quic-go code under `internal/qng` retains its upstream license notice
+in `internal/qng/LICENSE`.
