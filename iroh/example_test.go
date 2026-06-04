@@ -46,7 +46,7 @@ func ExampleEndpoint_HomeRelayStatus() {
 	}
 	defer ep.Shutdown(ctx)
 
-	status := ep.HomeRelayStatus().Get()
+	status := ep.HomeRelayStatus().Current()
 	if status != nil && status.IsConnected() {
 		fmt.Println("connected to", status.URL)
 	}

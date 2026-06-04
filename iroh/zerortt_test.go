@@ -32,13 +32,13 @@ func TestEndpoint0RTTResumption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	// Server echo loop: accept connections and echo one bidi stream each. It
 	// keeps each connection open until the client closes it so the post-handshake
@@ -176,7 +176,7 @@ func TestIroh0RTTRejectedFallsBackToFullHandshake(t *testing.T) {
 		t.Fatal("priming connection should not have used 0-RTT")
 	}
 	if !waitFor(ctx, func() bool {
-		_, ok := cache.Get(ServerName(serverKey.Public()))
+		_, ok := cache.Get(ServerName(serverKey.Public().EndpointID()))
 		return ok
 	}) {
 		t.Fatalf("no ticket cached after priming: %v", ctx.Err())
@@ -202,7 +202,7 @@ func dialOnceForTicket(t *testing.T, ctx context.Context, serverKey, clientKey k
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public(), []string{alpn}, cache)
+	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public().EndpointID(), []string{alpn}, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +286,7 @@ func dialOnceForTicket(t *testing.T, ctx context.Context, serverKey, clientKey k
 	used := conn.ConnectionState().Used0RTT
 	// Give the server a moment to deliver the NewSessionTicket before teardown.
 	waitFor(ctx, func() bool {
-		_, ok := cache.Get(ServerName(serverKey.Public()))
+		_, ok := cache.Get(ServerName(serverKey.Public().EndpointID()))
 		return ok
 	})
 	conn.CloseWithError(0, "")

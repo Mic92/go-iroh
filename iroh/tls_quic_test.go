@@ -34,7 +34,7 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public(), []string{alpn}, nil)
+	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public().EndpointID(), []string{alpn}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +100,8 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("client peer id: %v", err)
 	}
-	if !serverPeer.Equal(serverKey.Public()) {
-		t.Errorf("client saw server id %s, want %s", serverPeer, serverKey.Public())
+	if !serverPeer.Equal(serverKey.Public().EndpointID()) {
+		t.Errorf("client saw server id %s, want %s", serverPeer, serverKey.Public().EndpointID())
 	}
 
 	str, err := conn.OpenStreamSync(ctx)
@@ -118,8 +118,8 @@ func TestIrohTLSOverQUIC(t *testing.T) {
 	if res.err != nil {
 		t.Fatalf("server: %v", res.err)
 	}
-	if !res.peer.Equal(clientKey.Public()) {
-		t.Errorf("server saw client id %s, want %s", res.peer, clientKey.Public())
+	if !res.peer.Equal(clientKey.Public().EndpointID()) {
+		t.Errorf("server saw client id %s, want %s", res.peer, clientKey.Public().EndpointID())
 	}
 }
 
@@ -140,7 +140,7 @@ func TestIrohTLSOverQUICSelectsServerPreferredBinaryALPN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public(), []string{string(primary), string(additional)}, nil)
+	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public().EndpointID(), []string{string(primary), string(additional)}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +236,7 @@ func TestIrohTLSRejectsWrongServer(t *testing.T) {
 
 	const alpn = "iroh-test/0"
 	serverTLS, _ := serverTLSConfig(serverKey, []string{alpn})
-	clientTLS, _ := clientTLSConfig(clientKey, wrong.Public(), []string{alpn}, nil)
+	clientTLS, _ := clientTLSConfig(clientKey, wrong.Public().EndpointID(), []string{alpn}, nil)
 
 	serverUDP, _ := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
 	defer serverUDP.Close()

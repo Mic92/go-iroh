@@ -14,7 +14,7 @@ import (
 // as from an endpoint ticket.
 func ExampleMemoryLookup() {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 
 	lookup := iroh.NewMemoryLookup()
 	relay, _ := netaddr.ParseRelayURL("https://relay.example/")
@@ -37,7 +37,7 @@ func ExampleMemoryLookup() {
 // endpoint id across all of them, acting on the first usable result.
 func ExampleAddressLookupServices() {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	relay, _ := netaddr.ParseRelayURL("https://relay.example/")
 
 	mem := iroh.NewMemoryLookup()

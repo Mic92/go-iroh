@@ -217,7 +217,7 @@ func TestAddrRelayAndCustom(t *testing.T) {
 		t.Fatal(err)
 	}
 	sk, _ := key.GenerateSecretKey()
-	eid := sk.Public()
+	eid := sk.Public().EndpointID()
 
 	relay := RelayAddr(u, eid)
 	if gotURL, gotEID, ok := relay.Relay(); !ok {
@@ -297,7 +297,7 @@ func TestActiveRelaySetHomeHome(t *testing.T) {
 func TestActiveRelayRoutes(t *testing.T) {
 	r := newActiveRelay(&RelayActor{}, netaddr.RelayURL{}, false)
 	sk, _ := key.GenerateSecretKey()
-	eid := sk.Public()
+	eid := sk.Public().EndpointID()
 
 	if r.hasRoute(eid) {
 		t.Error("fresh activeRelay hasRoute = true, want false")
@@ -324,7 +324,7 @@ func TestRouteForEndpointLocked(t *testing.T) {
 	a.active[u2.String()] = r2
 
 	sk, _ := key.GenerateSecretKey()
-	eid := sk.Public()
+	eid := sk.Public().EndpointID()
 
 	a.mu.Lock()
 	if got := a.routeForEndpointLocked(eid); got != nil {
@@ -943,7 +943,7 @@ func TestSocketPathAddr(t *testing.T) {
 	s := NewSocket()
 	u, _ := netaddr.ParseRelayURL("https://relay.example.")
 	sk, _ := key.GenerateSecretKey()
-	eid := sk.Public()
+	eid := sk.Public().EndpointID()
 
 	// Real IP -> IP path, port preserved.
 	realIP := net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.AddrFrom4([4]byte{192, 0, 2, 9}), 443))
@@ -1043,13 +1043,13 @@ func TestRelayTransportServeForwardsRecv(t *testing.T) {
 
 	// Kick the active relay alive so it begins draining recv frames.
 	dst, _ := key.GenerateSecretKey()
-	a.Send(RelaySendItem{RemoteEndpoint: dst.Public(), URL: url, Datagrams: relayproto.DatagramsFromBytes([]byte("x"))})
+	a.Send(RelaySendItem{RemoteEndpoint: dst.Public().EndpointID(), URL: url, Datagrams: relayproto.DatagramsFromBytes([]byte("x"))})
 	waitDatagramSend(t, client)
 
 	// A GRO batch with segment size 2 over 6 bytes -> three recvBatches.
 	client.recv <- relayproto.RelayToClientMsg{
 		Type:             relayproto.FrameRelayToClientDatagramBat,
-		RemoteEndpointID: src.Public(),
+		RemoteEndpointID: src.Public().EndpointID(),
 		Datagrams:        relayproto.Datagrams{SegmentSize: 2, Contents: []byte("aabbcc")},
 	}
 
@@ -1065,8 +1065,8 @@ func TestRelayTransportServeForwardsRecv(t *testing.T) {
 			gu, ge, ok := b.info.Remote.Relay()
 			if !ok {
 				t.Errorf("segment %d Remote kind = %v, want relay", i, b.info.Remote.Kind())
-			} else if !gu.Equal(url) || !ge.Equal(src.Public()) {
-				t.Errorf("segment %d Remote = (%s, %s), want (%s, %s)", i, gu, ge, url, src.Public())
+			} else if !gu.Equal(url) || !ge.Equal(src.Public().EndpointID()) {
+				t.Errorf("segment %d Remote = (%s, %s), want (%s, %s)", i, gu, ge, url, src.Public().EndpointID())
 			}
 		case <-deadline:
 			t.Fatalf("timed out waiting for segment %d", i)
@@ -1086,7 +1086,7 @@ func TestRelayTransportDeliverSegments(t *testing.T) {
 	src, _ := key.GenerateSecretKey()
 	dm := RelayRecvDatagram{
 		URL:       url,
-		Src:       src.Public(),
+		Src:       src.Public().EndpointID(),
 		Datagrams: relayproto.Datagrams{SegmentSize: 3, Contents: []byte("aaabbbcc")},
 	}
 

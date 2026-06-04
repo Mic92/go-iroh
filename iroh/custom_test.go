@@ -32,5 +32,5 @@ func TestWithCustomTransportExternalAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(context.Background())
+	defer ep.Shutdown(context.Background())
 }

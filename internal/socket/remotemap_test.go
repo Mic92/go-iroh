@@ -87,7 +87,7 @@ func testEndpointID(t *testing.T) key.EndpointID {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sk.Public()
+	return sk.Public().EndpointID()
 }
 
 // TestRemoteMapSingleActorRace uses a tiny idle timeout so actors are constantly

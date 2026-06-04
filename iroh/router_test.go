@@ -128,7 +128,7 @@ func TestRouterEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, alpn)
@@ -201,7 +201,7 @@ func TestRouterFilterRetryUsesQUICRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, alpn)
@@ -256,7 +256,7 @@ func TestRouterUnsupportedALPN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	// The server only advertises goodALPN, so a client offering only an unknown
 	// ALPN fails the handshake at the QUIC/TLS layer.
@@ -407,7 +407,7 @@ func TestRouterOnAccepting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
 	conn, err := client.Connect(ctx, addr, alpn)

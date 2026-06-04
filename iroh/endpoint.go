@@ -25,7 +25,7 @@ import (
 // Endpoint is a bound iroh node: it owns a secret key, a UDP socket, and the
 // QUIC transport used to dial and accept connections. Create one with [Bind].
 //
-// An Endpoint is safe for concurrent use. Close it with [Endpoint.Close].
+// An Endpoint is safe for concurrent use. Close it with [Endpoint.Shutdown].
 type Endpoint struct {
 	secretKey key.SecretKey
 	alpns     []string
@@ -513,8 +513,8 @@ func (e *Endpoint) SetALPNs(alpns []string) error {
 	return nil
 }
 
-// ID returns the endpoint's identifier (its ed25519 public key).
-func (e *Endpoint) ID() key.EndpointID { return e.secretKey.Public() }
+// ID returns the endpoint's network identifier.
+func (e *Endpoint) ID() key.EndpointID { return e.secretKey.Public().EndpointID() }
 
 // SecretKey returns the endpoint's secret key.
 func (e *Endpoint) SecretKey() key.SecretKey { return e.secretKey }
@@ -587,7 +587,7 @@ func (e *Endpoint) AddExternalAddr(addr netip.AddrPort) {
 func (e *Endpoint) applyNetReport(report netreport.Report) bool {
 	changed := e.setExternalNATTraversalCandidates(report.GlobalV4, report.GlobalV6)
 	if e.relay != nil && !report.PreferredRelay.IsZero() {
-		current := e.relay.HomeRelayStatus().Get()
+		current := e.relay.HomeRelayStatus().Current()
 		if current == nil || !current.URL.Equal(report.PreferredRelay) {
 			e.relay.SetHomeRelay(report.PreferredRelay)
 			e.mu.Lock()
@@ -688,7 +688,7 @@ func (e *Endpoint) Addr() netaddr.EndpointAddr {
 		}
 	}
 	if e.relay != nil {
-		if st := e.relay.HomeRelayStatus().Get(); st != nil {
+		if st := e.relay.HomeRelayStatus().Current(); st != nil {
 			a = a.WithRelayURL(st.URL)
 		}
 	}
@@ -725,7 +725,7 @@ func (e *Endpoint) addrLocked() netaddr.EndpointAddr {
 		}
 	}
 	if e.relay != nil {
-		if st := e.relay.HomeRelayStatus().Get(); st != nil {
+		if st := e.relay.HomeRelayStatus().Current(); st != nil {
 			a = a.WithRelayURL(st.URL)
 		}
 	}
@@ -776,7 +776,7 @@ func (e *Endpoint) Online(ctx context.Context) error {
 	}
 	w := e.relay.HomeRelayStatus()
 	for {
-		if st := w.Get(); st != nil && st.IsConnected() {
+		if st := w.Current(); st != nil && st.IsConnected() {
 			return nil
 		}
 		if _, err := w.Updated(ctx); err != nil {
@@ -1155,14 +1155,6 @@ func (e *Endpoint) Shutdown(ctx context.Context) error {
 		firstErr = err
 	}
 	return firstErr
-}
-
-// Close calls [Endpoint.Shutdown].
-//
-// Deprecated: use [Endpoint.Shutdown], matching the standard library's
-// context-aware graceful shutdown naming.
-func (e *Endpoint) Close(ctx context.Context) error {
-	return e.Shutdown(ctx)
 }
 
 // Closed returns a channel closed when the endpoint is closed.

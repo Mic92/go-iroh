@@ -16,7 +16,7 @@ import (
 // with the wrong SNI and fail RFC 7250 server verification.
 func TestServerNameSnapshot(t *testing.T) {
 	sk := key.NewSecretKey([32]byte{})
-	got := ServerName(sk.Public())
+	got := ServerName(sk.Public().EndpointID())
 	const want = "7dl2ff6emqi2qol3l382krodedij45bn3nh479hqo14a32qpr8kg.iroh.invalid"
 	if got != want {
 		t.Errorf("ServerName(zero) = %q, want %q", got, want)
@@ -30,7 +30,7 @@ func TestServerNameRoundTrip(t *testing.T) {
 		var seed [32]byte
 		seed[0] = byte(i)
 		seed[31] = byte(i * 7)
-		id := key.NewSecretKey(seed).Public()
+		id := key.NewSecretKey(seed).Public().EndpointID()
 		name := ServerName(id)
 		got, ok := endpointIDFromServerName(name)
 		if !ok {
@@ -68,7 +68,7 @@ func TestTLSConfigsMatchIrohRawKeyContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public(), alpns, cache)
+	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public().EndpointID(), alpns, cache)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,8 +86,8 @@ func TestTLSConfigsMatchIrohRawKeyContract(t *testing.T) {
 		t.Fatal("server VerifyConnection is nil")
 	}
 
-	if clientTLS.ServerName != ServerName(serverKey.Public()) {
-		t.Errorf("client ServerName = %q, want %q", clientTLS.ServerName, ServerName(serverKey.Public()))
+	if clientTLS.ServerName != ServerName(serverKey.Public().EndpointID()) {
+		t.Errorf("client ServerName = %q, want %q", clientTLS.ServerName, ServerName(serverKey.Public().EndpointID()))
 	}
 	if !clientTLS.InsecureSkipVerify {
 		t.Error("client did not replace X.509 verification")
@@ -105,7 +105,7 @@ func TestTLSConfigsMatchIrohRawKeyContract(t *testing.T) {
 		t.Errorf("maxTLSTickets = %d, want %d", maxTLSTickets, 8*32)
 	}
 
-	noCache, err := clientTLSConfig(clientKey, serverKey.Public(), alpns, nil)
+	noCache, err := clientTLSConfig(clientKey, serverKey.Public().EndpointID(), alpns, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestTLSVerifyConnectionIdentityPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public(), []string{"iroh-test/0"}, nil)
+	clientTLS, err := clientTLSConfig(clientKey, serverKey.Public().EndpointID(), []string{"iroh-test/0"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

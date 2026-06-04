@@ -304,7 +304,7 @@ func TestMagicConnEndpointIDSend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	mapped := sock.EndpointIDMappedAddrFor(id)
 
 	got := make(chan []byte, 1)
@@ -387,7 +387,7 @@ func TestAddrCanonical(t *testing.T) {
 func TestSocketRelayRoundTrip(t *testing.T) {
 	s := socket.NewSocket()
 	url := netaddr.RelayURL{}
-	eid := key.PublicKey{}
+	eid := key.EndpointID{}
 
 	m1 := s.RelayMappedAddrFor(url, eid)
 	m2 := s.RelayMappedAddrFor(url, eid)

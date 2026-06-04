@@ -18,7 +18,7 @@ import (
 func TestMemoryLookupFromInfo(t *testing.T) {
 	skA, _ := key.GenerateSecretKey()
 	skB, _ := key.GenerateSecretKey()
-	idA, idB := skA.Public(), skB.Public()
+	idA, idB := skA.Public().EndpointID(), skB.Public().EndpointID()
 	relay := relayURL(t, "https://relay.example/")
 
 	infoA := dns.EndpointInfo{ID: idA, Data: dns.NewEndpointData(netaddr.RelayAddr{URL: relay})}
@@ -42,7 +42,7 @@ func TestMemoryLookupFromInfo(t *testing.T) {
 // info and reports the previous entry.
 func TestMemoryLookupSetEndpointInfo(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	m := NewMemoryLookup()
 
 	first := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("1.2.3.4:1")})}
@@ -150,7 +150,7 @@ func TestPkarrPublisherOptions(t *testing.T) {
 	defer srv.Close()
 
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	relay := relayURL(t, "https://relay.example/")
 	ip := netip.MustParseAddrPort("1.2.3.4:9999")
 
@@ -257,11 +257,11 @@ func TestN0DNSAddressLookup(t *testing.T) {
 	// With an explicit resolver, resolution uses the configured origin. A canned
 	// TXT lookuper makes this deterministic.
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	info := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(
 		netaddr.RelayAddr{URL: relayURL(t, "https://relay.example/")},
 	)}
-	resolver := &dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}
+	resolver := &dns.Resolver{Lookuper: &fakeTXTLookuper{values: info.ToTXTStrings()}}
 
 	lookup := N0DNSAddressLookup(resolver)
 	results := drain(lookup.Resolve(context.Background(), id))

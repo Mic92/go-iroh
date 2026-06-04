@@ -94,7 +94,7 @@ func TestSignedPacketWireLayout(t *testing.T) {
 	if h.TTL != 30 {
 		t.Fatalf("answer TTL = %d, want 30", h.TTL)
 	}
-	if got, want := h.Name.String(), "_iroh."+sk.Public().Z32()+"."; got != want {
+	if got, want := h.Name.String(), "_iroh."+sk.Public().EndpointID().Z32()+"."; got != want {
 		t.Fatalf("answer name = %q, want %q", got, want)
 	}
 	txt, err := p.TXTResource()

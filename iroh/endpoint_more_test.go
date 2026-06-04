@@ -87,12 +87,12 @@ func TestEndpointSecretKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	if !ep.SecretKey().Public().Equal(sk.Public()) {
 		t.Errorf("SecretKey().Public() = %s, want %s", ep.SecretKey().Public(), sk.Public())
 	}
-	if !ep.SecretKey().Public().Equal(ep.ID()) {
+	if !ep.SecretKey().Public().EndpointID().Equal(ep.ID()) {
 		t.Errorf("SecretKey().Public() = %s, but ID() = %s", ep.SecretKey().Public(), ep.ID())
 	}
 }
@@ -114,7 +114,7 @@ func TestEndpointLifecycleAddressSurface(t *testing.T) {
 	}
 
 	w := ep.WatchAddr()
-	if got := w.Get(); len(got.IPAddrs()) != 1 || got.IPAddrs()[0] != ep.LocalAddr() {
+	if got := w.Current(); len(got.IPAddrs()) != 1 || got.IPAddrs()[0] != ep.LocalAddr() {
 		t.Fatalf("WatchAddr initial = %v, want local %v", got.IPAddrs(), ep.LocalAddr())
 	}
 	if got, err := w.Updated(ctx); err != nil || len(got.IPAddrs()) != 1 || got.IPAddrs()[0] != ep.LocalAddr() {
@@ -134,7 +134,7 @@ func TestEndpointLifecycleAddressSurface(t *testing.T) {
 		t.Fatalf("Addr IPs = %v, want external %v", ep.Addr().IPAddrs(), external)
 	}
 
-	if err := ep.Close(ctx); err != nil {
+	if err := ep.Shutdown(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	select {
@@ -158,7 +158,7 @@ func TestEndpointWithKeyLogWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	accepted := make(chan error, 1)
 	go func() {
@@ -177,7 +177,7 @@ func TestEndpointWithKeyLogWriter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
 	if err != nil {
@@ -207,7 +207,7 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	if got := ep.Addr().IPAddrs(); len(got) != 0 {
 		t.Fatalf("WithoutIPTransports Addr IPs = %v, want none", got)
@@ -220,7 +220,7 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 		t.Fatalf("WithoutIPTransports external Addr IPs = %v, want none", got)
 	}
 	remoteKey, _ := key.GenerateSecretKey()
-	addr := netaddr.NewEndpointAddr(remoteKey.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1")).WithRelayURL(rurl)
+	addr := netaddr.NewEndpointAddr(remoteKey.Public().EndpointID()).WithIP(netip.MustParseAddrPort("127.0.0.1:1")).WithRelayURL(rurl)
 	targets := ep.dialTargets(addr)
 	if len(targets) != 1 {
 		t.Fatalf("WithoutIPTransports dialTargets = %v, want relay-only target", targets)
@@ -233,7 +233,7 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer noRelay.Close(ctx)
+	defer noRelay.Shutdown(ctx)
 	if err := noRelay.Online(ctx); !errors.Is(err, ErrNoRelay) {
 		t.Fatalf("WithoutRelayTransports Online = %v, want ErrNoRelay", err)
 	}
@@ -248,7 +248,7 @@ func TestEndpointInsertRemoveRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	cfg := RelayConfig{AuthToken: "token"}
 	prev, err := ep.InsertRelay(relayURL, &cfg)
@@ -282,7 +282,7 @@ func TestEndpointInsertRelayNoRelayTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	relayURL := relay.StagingMap().URLs()[0]
 	if _, err := ep.InsertRelay(relayURL, nil); !errors.Is(err, ErrNoRelay) {
@@ -304,7 +304,7 @@ func TestEndpointWithBindAddrOpts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	if got := ep.LocalAddr(); !got.IsValid() {
 		t.Fatalf("LocalAddr = %v, want valid address", got)
@@ -344,14 +344,14 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer plain.Close(ctx)
+	defer plain.Shutdown(ctx)
 	if plain.resolveFunc() != nil {
 		t.Error("resolveFunc() != nil without WithAddressLookup, want nil")
 	}
 
 	// With WithAddressLookup, the hook resolves through the registered services.
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	ip := netip.MustParseAddrPort("1.2.3.4:1234")
 
 	mem := NewMemoryLookup()
@@ -363,7 +363,7 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	resolve := ep.resolveFunc()
 	if resolve == nil {
@@ -387,14 +387,14 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 func TestEndpointWithDNSResolver(t *testing.T) {
 	ctx := context.Background()
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	info := endpointInfoWithIP(id, netip.MustParseAddrPort("127.0.0.1:1234"))
 
-	ep, err := Bind(ctx, WithDNSResolver(&dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}))
+	ep, err := Bind(ctx, WithDNSResolver(&dns.Resolver{Lookuper: &fakeTXTLookuper{values: info.ToTXTStrings()}}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	resolve := ep.resolveFunc()
 	if resolve == nil {
@@ -420,7 +420,7 @@ func TestEndpointWithTransportConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 	if ep.quicConf.KeepAlivePeriod != keepAlive {
 		t.Fatalf("KeepAlivePeriod = %v, want %v", ep.quicConf.KeepAlivePeriod, keepAlive)
 	}
@@ -436,7 +436,7 @@ func TestEndpointWithCustomTransport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	remote := netaddr.NewCustomAddr(42, []byte("endpoint-custom"))
 	mapped := ep.sock.CustomMappedAddrFor(remote)
@@ -477,7 +477,7 @@ func TestEndpointIDMappedSendFansOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	dst, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
@@ -493,14 +493,14 @@ func TestEndpointIDMappedSendFansOut(t *testing.T) {
 		addr: socket.IPAddr(dst.LocalAddr().(*net.UDPAddr).AddrPort()),
 		done: make(chan struct{}),
 	}
-	events := ep.remotes.AddConnection(remote.Public(), fake)
+	events := ep.remotes.AddConnection(remote.Public().EndpointID(), fake)
 	select {
 	case <-events:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
 
-	mapped := ep.sock.EndpointIDMappedAddrFor(remote.Public())
+	mapped := ep.sock.EndpointIDMappedAddrFor(remote.Public().EndpointID())
 	const payload = "endpoint-id-fanout"
 	n, err := ep.magic.WriteTo([]byte(payload), net.UDPAddrFromAddrPort(mapped.AddrPort()))
 	if err != nil {
@@ -530,7 +530,7 @@ func TestEndpointLocalNATTraversalCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer unspecified.Close(ctx)
+	defer unspecified.Shutdown(ctx)
 	if got := unspecified.localNATTraversalCandidates(); len(got) != 0 {
 		t.Fatalf("default localNATTraversalCandidates = %v, want none for unspecified bind", got)
 	}
@@ -539,7 +539,7 @@ func TestEndpointLocalNATTraversalCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer loopback.Close(ctx)
+	defer loopback.Shutdown(ctx)
 	got := loopback.localNATTraversalCandidates()
 	if len(got) != 1 {
 		t.Fatalf("loopback localNATTraversalCandidates len = %d, want 1; got %v", len(got), got)
@@ -569,7 +569,7 @@ func TestEndpointExternalNATTraversalCandidatesCanonicalize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	bound := ep.LocalAddr()
 	mapped := netip.AddrPortFrom(netip.AddrFrom16(bound.Addr().As16()), bound.Port())
@@ -600,7 +600,7 @@ func TestEndpointExternalNATTraversalCandidatesReadvertiseActiveRemotes(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	remote, err := key.GenerateSecretKey()
 	if err != nil {
@@ -610,7 +610,7 @@ func TestEndpointExternalNATTraversalCandidatesReadvertiseActiveRemotes(t *testi
 		addr: socket.IPAddr(netip.MustParseAddrPort("192.0.2.20:5678")),
 		done: make(chan struct{}),
 	}
-	events := ep.remotes.AddConnection(remote.Public(), conn)
+	events := ep.remotes.AddConnection(remote.Public().EndpointID(), conn)
 	select {
 	case <-events:
 	case <-time.After(2 * time.Second):
@@ -633,7 +633,7 @@ func TestEndpointExternalNATTraversalCandidatesRemoveStaleRemoteCandidate(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	remote, err := key.GenerateSecretKey()
 	if err != nil {
@@ -643,7 +643,7 @@ func TestEndpointExternalNATTraversalCandidatesRemoveStaleRemoteCandidate(t *tes
 		addr: socket.IPAddr(netip.MustParseAddrPort("192.0.2.20:5678")),
 		done: make(chan struct{}),
 	}
-	events := ep.remotes.AddConnection(remote.Public(), conn)
+	events := ep.remotes.AddConnection(remote.Public().EndpointID(), conn)
 	select {
 	case <-events:
 	case <-time.After(2 * time.Second):
@@ -674,7 +674,7 @@ func TestEndpointApplyNetReportNATTraversalCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	global4 := netip.MustParseAddrPort("[::ffff:198.51.100.10]:4444")
 	global4Canon := netip.MustParseAddrPort("198.51.100.10:4444")
@@ -699,15 +699,15 @@ func TestEndpointApplyNetReportPreferredRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
-	if st := ep.HomeRelayStatus().Get(); st == nil || !st.URL.Equal(fallback) {
+	if st := ep.HomeRelayStatus().Current(); st == nil || !st.URL.Equal(fallback) {
 		t.Fatalf("initial home relay = %v, want %v", st, fallback)
 	}
 	if !ep.applyNetReport(netreport.Report{PreferredRelay: preferred}) {
 		t.Fatal("applyNetReport preferred relay = false, want true")
 	}
-	if st := ep.HomeRelayStatus().Get(); st == nil || !st.URL.Equal(preferred) {
+	if st := ep.HomeRelayStatus().Current(); st == nil || !st.URL.Equal(preferred) {
 		t.Fatalf("home relay after net_report = %v, want %v", st, preferred)
 	}
 	if ep.applyNetReport(netreport.Report{PreferredRelay: preferred}) {
@@ -721,7 +721,7 @@ func TestEndpointApplyEmptyNetReportClearsExternalNATTraversalCandidates(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	remote, err := key.GenerateSecretKey()
 	if err != nil {
@@ -731,7 +731,7 @@ func TestEndpointApplyEmptyNetReportClearsExternalNATTraversalCandidates(t *test
 		addr: socket.IPAddr(netip.MustParseAddrPort("192.0.2.20:5678")),
 		done: make(chan struct{}),
 	}
-	events := ep.remotes.AddConnection(remote.Public(), conn)
+	events := ep.remotes.AddConnection(remote.Public().EndpointID(), conn)
 	select {
 	case <-events:
 	case <-time.After(2 * time.Second):
@@ -776,7 +776,7 @@ func TestEndpointWithNetReportAdvertisesCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	select {
 	case <-started:
@@ -792,7 +792,7 @@ func TestEndpointWithNetReportAdvertisesCandidates(t *testing.T) {
 		addr: socket.IPAddr(netip.MustParseAddrPort("192.0.2.20:5678")),
 		done: make(chan struct{}),
 	}
-	events := ep.remotes.AddConnection(remote.Public(), conn)
+	events := ep.remotes.AddConnection(remote.Public().EndpointID(), conn)
 	select {
 	case <-events:
 	case <-time.After(2 * time.Second):
@@ -834,7 +834,7 @@ func TestEndpointWithNetReportRefreshes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	want := []netip.AddrPort{ep.LocalAddr(), second}
 	deadline := time.After(2 * time.Second)
@@ -857,12 +857,12 @@ func TestEndpointSetALPNsReplacesRunningListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	firstAccepted := make(chan error, 1)
 	go func() {
@@ -922,12 +922,12 @@ func TestEndpointQADCandidatesOpenSelectedQNTRouteDataPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 	client, err := Bind(ctx, WithRelayMode(mode))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	if err := server.Online(ctx); err != nil {
 		t.Fatalf("server online: %v", err)
@@ -1118,13 +1118,13 @@ func TestEndpointRegisterConnSeedsQNTCandidatesOpportunistically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	candidates := client.localNATTraversalCandidates()
 	if len(candidates) == 0 {
@@ -1172,11 +1172,11 @@ func TestEndpointHomeRelayStatusNoRelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 
 	w := ep.HomeRelayStatus()
-	if st := w.Get(); st != nil {
-		t.Errorf("HomeRelayStatus().Get() = %v with relays disabled, want nil", st)
+	if st := w.Current(); st != nil {
+		t.Errorf("HomeRelayStatus().Current() = %v with relays disabled, want nil", st)
 	}
 
 	// Online returns ErrNoRelay immediately when relays are disabled.

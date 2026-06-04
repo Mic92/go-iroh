@@ -24,8 +24,8 @@ func (f fakeLookuper) LookupTXT(_ context.Context, name string) ([]string, error
 
 func TestLookupEndpointByID(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
-	wantName := IrohTxtName + "." + id.Z32() + "." + N0DNSEndpointOriginProd
+	id := sk.Public().EndpointID()
+	wantName := IrohTXTName + "." + id.Z32() + "." + N0DNSEndpointOriginProd
 	r := &Resolver{Lookuper: fakeLookuper{
 		wantName: wantName,
 		values:   []string{"relay=https://r.example.com/", "addr=127.0.0.1:1234"},
@@ -46,12 +46,12 @@ func TestLookupEndpointByID(t *testing.T) {
 	}
 }
 
-func TestTxtLookuperFunc(t *testing.T) {
-	var _ TxtLookuper = TxtLookuperFunc(nil)
+func TestTXTLookuperFunc(t *testing.T) {
+	var _ TXTLookuper = TXTLookuperFunc(nil)
 
 	id := testID(t)
-	wantName := IrohTxtName + "." + id.Z32() + "." + N0DNSEndpointOriginProd
-	r := &Resolver{Lookuper: TxtLookuperFunc(func(_ context.Context, name string) ([]string, error) {
+	wantName := IrohTXTName + "." + id.Z32() + "." + N0DNSEndpointOriginProd
+	r := &Resolver{Lookuper: TXTLookuperFunc(func(_ context.Context, name string) ([]string, error) {
 		if name != wantName {
 			t.Errorf("LookupTXT(%q), want %q", name, wantName)
 		}
@@ -72,7 +72,7 @@ func TestLookupEndpointByIDUsesZBase32Name(t *testing.T) {
 	if got := id.Z32(); got != wantZ32 {
 		t.Fatalf("Z32 = %q, want %q", got, wantZ32)
 	}
-	wantName := IrohTxtName + "." + wantZ32 + "." + N0DNSEndpointOriginProd
+	wantName := IrohTXTName + "." + wantZ32 + "." + N0DNSEndpointOriginProd
 	r := &Resolver{Lookuper: fakeLookuper{
 		wantName: wantName,
 		values:   []string{"relay=https://r.example.com/"},

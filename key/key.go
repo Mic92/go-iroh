@@ -51,9 +51,9 @@ type PublicKey struct {
 
 // EndpointID is the identifier for an endpoint in the iroh network.
 //
-// It is identical to [PublicKey]. By convention use PublicKey when performing
-// cryptographic operations and EndpointID when referencing an endpoint.
-type EndpointID = PublicKey
+// Use EndpointID in network-facing APIs and [PublicKey] when performing
+// cryptographic operations.
+type EndpointID PublicKey
 
 // NewPublicKey constructs a PublicKey from a 32-byte array. It returns
 // [ErrInvalidKeyData] if the bytes do not decompress to a valid Ed25519 curve
@@ -63,6 +63,15 @@ func NewPublicKey(b [PublicKeySize]byte) (PublicKey, error) {
 		return PublicKey{}, ErrInvalidKeyData
 	}
 	return PublicKey{bytes: b}, nil
+}
+
+// NewEndpointID constructs an EndpointID from a 32-byte array.
+func NewEndpointID(b [PublicKeySize]byte) (EndpointID, error) {
+	k, err := NewPublicKey(b)
+	if err != nil {
+		return EndpointID{}, err
+	}
+	return k.EndpointID(), nil
 }
 
 // PublicKeyFromEd25519 constructs a PublicKey from a crypto/ed25519 public key.
@@ -81,6 +90,18 @@ func PublicKeyFromSlice(b []byte) (PublicKey, error) {
 	copy(arr[:], b)
 	return NewPublicKey(arr)
 }
+
+// EndpointIDFromSlice constructs an EndpointID from a byte slice.
+func EndpointIDFromSlice(b []byte) (EndpointID, error) {
+	k, err := PublicKeyFromSlice(b)
+	if err != nil {
+		return EndpointID{}, err
+	}
+	return k.EndpointID(), nil
+}
+
+// EndpointID returns the endpoint identifier for k.
+func (k PublicKey) EndpointID() EndpointID { return EndpointID(k) }
 
 // Bytes returns the public key as a 32-byte array.
 func (k PublicKey) Bytes() [PublicKeySize]byte { return k.bytes }
@@ -130,18 +151,48 @@ func (k PublicKey) Short() string {
 	return hex.EncodeToString(k.bytes[:5])
 }
 
-// Z32 encodes the key in z-base-32, the encoding used by pkarr domain names.
-func (k PublicKey) Z32() string {
+// PublicKey returns id as a public key for cryptographic operations.
+func (id EndpointID) PublicKey() PublicKey { return PublicKey(id) }
+
+// Bytes returns the endpoint id as a 32-byte array.
+func (id EndpointID) Bytes() [PublicKeySize]byte { return id.PublicKey().Bytes() }
+
+// IsZero reports whether id is the unusable zero value.
+func (id EndpointID) IsZero() bool { return id == EndpointID{} }
+
+// Equal reports whether id and other are the same endpoint id.
+func (id EndpointID) Equal(other EndpointID) bool {
+	return id.PublicKey().Equal(other.PublicKey())
+}
+
+// Compare returns -1, 0, or +1 comparing id and other by their raw bytes. It
+// gives EndpointID a total order suitable for sorting and map-free ordered use.
+func (id EndpointID) Compare(other EndpointID) int {
+	return id.PublicKey().Compare(other.PublicKey())
+}
+
+// String returns the lowercase-hex encoding of the endpoint id. It is the
+// canonical human-readable form and round-trips through [ParseEndpointID].
+func (id EndpointID) String() string { return id.PublicKey().String() }
+
+// Short returns a short, friendly hex string of the first 5 bytes of the
+// endpoint id, for logging. It is not a complete or parseable representation.
+func (id EndpointID) Short() string { return id.PublicKey().Short() }
+
+// Z32 encodes the endpoint id in z-base-32, the encoding used by pkarr domain
+// names.
+func (id EndpointID) Z32() string {
+	k := id.PublicKey()
 	return encodeZBase32(k.bytes[:])
 }
 
-// ParsePublicKeyZ32 parses a key from its z-base-32 encoding.
-func ParsePublicKeyZ32(s string) (PublicKey, error) {
+// ParseEndpointIDZ32 parses an endpoint id from its z-base-32 encoding.
+func ParseEndpointIDZ32(s string) (EndpointID, error) {
 	b, err := decodeZBase32(s)
 	if err != nil {
-		return PublicKey{}, ErrDecodeBase32
+		return EndpointID{}, ErrDecodeBase32
 	}
-	return PublicKeyFromSlice(b)
+	return EndpointIDFromSlice(b)
 }
 
 // ParsePublicKey parses a PublicKey from its hex or base32 string form. A string
@@ -154,6 +205,15 @@ func ParsePublicKey(s string) (PublicKey, error) {
 		return PublicKey{}, err
 	}
 	return NewPublicKey(b)
+}
+
+// ParseEndpointID parses an EndpointID from its hex or base32 string form.
+func ParseEndpointID(s string) (EndpointID, error) {
+	k, err := ParsePublicKey(s)
+	if err != nil {
+		return EndpointID{}, err
+	}
+	return k.EndpointID(), nil
 }
 
 // MarshalText implements encoding.TextMarshaler, producing the hex form.
@@ -172,6 +232,22 @@ func (k *PublicKey) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// MarshalText implements encoding.TextMarshaler, producing the hex form.
+func (id EndpointID) MarshalText() ([]byte, error) {
+	return []byte(id.String()), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler, parsing the hex or base32
+// form.
+func (id *EndpointID) UnmarshalText(text []byte) error {
+	parsed, err := ParseEndpointID(string(text))
+	if err != nil {
+		return err
+	}
+	*id = parsed
+	return nil
+}
+
 // MarshalBinary implements encoding.BinaryMarshaler, producing the 32 raw bytes.
 func (k PublicKey) MarshalBinary() ([]byte, error) {
 	b := k.bytes
@@ -185,6 +261,21 @@ func (k *PublicKey) UnmarshalBinary(data []byte) error {
 		return err
 	}
 	*k = parsed
+	return nil
+}
+
+// MarshalBinary implements encoding.BinaryMarshaler, producing the 32 raw bytes.
+func (id EndpointID) MarshalBinary() ([]byte, error) {
+	return id.PublicKey().MarshalBinary()
+}
+
+// UnmarshalBinary implements encoding.BinaryUnmarshaler from 32 raw bytes.
+func (id *EndpointID) UnmarshalBinary(data []byte) error {
+	parsed, err := EndpointIDFromSlice(data)
+	if err != nil {
+		return err
+	}
+	*id = parsed
 	return nil
 }
 

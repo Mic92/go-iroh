@@ -53,8 +53,8 @@ func (s *Value[T]) Set(v T) {
 	}
 }
 
-// Get returns the current value.
-func (s *Value[T]) Get() T {
+// Current returns the current value.
+func (s *Value[T]) Current() T {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.val
@@ -88,8 +88,8 @@ var closedChan = func() chan struct{} {
 // Watcher observes a [Value]. Multiple watchers may observe the same value
 // independently. It is the Go analog of iroh's n0_watcher::Watcher.
 type Watcher[T any] interface {
-	// Get returns the current value.
-	Get() T
+	// Current returns the current value.
+	Current() T
 	// Updated blocks until the value changes after the watcher's last observed
 	// version, returning the new value, or ctx.Err() if the context is done.
 	// The first call returns the current value immediately.
@@ -105,7 +105,7 @@ type watcher[T any] struct {
 	once bool
 }
 
-func (w *watcher[T]) Get() T { return w.src.Get() }
+func (w *watcher[T]) Current() T { return w.src.Current() }
 
 func (w *watcher[T]) Updated(ctx context.Context) (T, error) {
 	if !w.once {

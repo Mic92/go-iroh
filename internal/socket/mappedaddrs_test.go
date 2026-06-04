@@ -184,7 +184,7 @@ func TestPathAddrMappedReverseLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eid := sk.Public()
+	eid := sk.Public().EndpointID()
 
 	relayMapped := s.RelayMappedAddrFor(url, eid)
 	gotRelay := s.PathAddr(eid, net.UDPAddrFromAddrPort(relayMapped.AddrPort()))

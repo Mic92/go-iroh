@@ -11,8 +11,8 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-// IrohTxtName is the DNS record name under which iroh TXT records are published.
-const IrohTxtName = "_iroh"
+// IrohTXTName is the DNS record name under which iroh TXT records are published.
+const IrohTXTName = "_iroh"
 
 // UserDataMaxLength is the maximum byte length of [UserData]. A DNS TXT
 // character-string holds at most 255 bytes; subtracting the "user-data=" prefix
@@ -255,8 +255,8 @@ func (e EndpointInfo) Addr() netaddr.EndpointAddr {
 	return netaddr.NewEndpointAddr(e.ID, e.Data.addrs...)
 }
 
-// ToTxtStrings renders the endpoint info as "key=value" TXT record strings.
-func (e EndpointInfo) ToTxtStrings() []string {
+// ToTXTStrings renders the endpoint info as "key=value" TXT record strings.
+func (e EndpointInfo) ToTXTStrings() []string {
 	return e.toAttrs().toTxtStrings()
 }
 
@@ -266,11 +266,11 @@ func (e EndpointInfo) ToPkarrSignedPacket(secretKey key.SecretKey, ttl uint32) (
 	return e.toAttrs().toPkarrSignedPacket(secretKey, ttl)
 }
 
-// EndpointInfoFromTxtLookup parses an EndpointInfo from DNS TXT lookup results.
+// EndpointInfoFromTXTLookup parses an EndpointInfo from DNS TXT lookup results.
 // domainName is the queried name ("_iroh.<z32>.<origin>") and values are the
 // TXT record string values.
-func EndpointInfoFromTxtLookup(domainName string, values []string) (EndpointInfo, error) {
-	attrs, err := txtAttrsFromTxtLookup(domainName, values)
+func EndpointInfoFromTXTLookup(domainName string, values []string) (EndpointInfo, error) {
+	attrs, err := txtAttrsFromTXTLookup(domainName, values)
 	if err != nil {
 		return EndpointInfo{}, err
 	}

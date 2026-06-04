@@ -185,7 +185,7 @@ func TestParseRustListenConnectLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 
 	line := fmt.Sprintf(
 		"\tcargo run --example connect -- --endpoint-id %s --addrs \"127.0.0.1:1234 [::1]:5678\" --relay-url https://relay.example.com/\n",
@@ -232,7 +232,7 @@ func TestStartRustListenPeerReadsConnectLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	line := fmt.Sprintf(
 		"cargo run --example connect -- --endpoint-id %s --addrs \"127.0.0.1:1234\" --relay-url https://relay.example.com/",
 		id.Z32(),
@@ -315,7 +315,7 @@ func TestLiveRustGoToRustEcho(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind Go endpoint: %v", err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	if len(peer.Ready.Addrs) == 0 {
 		if err := client.Online(ctx); err != nil {
@@ -687,10 +687,10 @@ func parseRustListenConnectLine(line string) (rustListenReady, bool, error) {
 }
 
 func parseRustEndpointID(s string) (key.EndpointID, error) {
-	if id, err := key.ParsePublicKeyZ32(s); err == nil {
+	if id, err := key.ParseEndpointIDZ32(s); err == nil {
 		return id, nil
 	}
-	if id, err := key.ParsePublicKey(s); err == nil {
+	if id, err := key.ParseEndpointID(s); err == nil {
 		return id, nil
 	}
 	return key.EndpointID{}, fmt.Errorf("endpoint id %q: invalid public key", s)

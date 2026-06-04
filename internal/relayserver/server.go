@@ -130,7 +130,7 @@ func authenticate(ctx context.Context, conn *websocket.Conn) (key.EndpointID, er
 	if err := conn.Write(ctx, websocket.MessageBinary, relayproto.ServerConfirmsAuth{}.AppendTo(nil)); err != nil {
 		return key.EndpointID{}, err
 	}
-	return auth.PublicKey, nil
+	return auth.PublicKey.EndpointID(), nil
 }
 
 func deny(ctx context.Context, conn *websocket.Conn, reason string) {

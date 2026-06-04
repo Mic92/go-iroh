@@ -57,10 +57,10 @@ func endpointIDFromTxtName(name string) (key.EndpointID, error) {
 	if len(labels) < 2 {
 		return key.EndpointID{}, fmt.Errorf("%w, received %d", ErrNumLabels, len(labels))
 	}
-	if labels[0] != IrohTxtName {
+	if labels[0] != IrohTXTName {
 		return key.EndpointID{}, fmt.Errorf("%w, got %q", ErrNotIrohRecord, labels[0])
 	}
-	return key.ParsePublicKeyZ32(labels[1])
+	return key.ParseEndpointIDZ32(labels[1])
 }
 
 // txtAttrsFromStrings builds txtAttrs from an endpoint id and "key=value"
@@ -89,7 +89,7 @@ func splitAttr(s string) (key, value string, ok bool) {
 	return parts[0], parts[1], true
 }
 
-func txtAttrsFromTxtLookup(name string, values []string) (*txtAttrs, error) {
+func txtAttrsFromTXTLookup(name string, values []string) (*txtAttrs, error) {
 	id, err := endpointIDFromTxtName(name)
 	if err != nil {
 		return nil, err
@@ -98,8 +98,8 @@ func txtAttrsFromTxtLookup(name string, values []string) (*txtAttrs, error) {
 }
 
 func txtAttrsFromPkarrSignedPacket(packet *pkarr.SignedPacket) (*txtAttrs, error) {
-	id := packet.PublicKey()
-	return txtAttrsFromStrings(id, packet.TxtRecords(IrohTxtName))
+	id := packet.PublicKey().EndpointID()
+	return txtAttrsFromStrings(id, packet.TxtRecords(IrohTXTName))
 }
 
 // attrOrder is the key emission order. It matches the Rust BTreeMap<IrohAttr>
@@ -120,7 +120,7 @@ func (a *txtAttrs) toTxtStrings() []string {
 }
 
 func (a *txtAttrs) toPkarrSignedPacket(secretKey key.SecretKey, ttl uint32) (*pkarr.SignedPacket, error) {
-	return pkarr.FromTxtStrings(secretKey, IrohTxtName, a.toTxtStrings(), ttl)
+	return pkarr.FromTxtStrings(secretKey, IrohTXTName, a.toTxtStrings(), ttl)
 }
 
 // toAttrs converts an EndpointInfo into txtAttrs, preserving address order.

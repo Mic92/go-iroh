@@ -40,10 +40,10 @@ func TestEndpointHooksRejectBeforeConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	sk, _ := key.GenerateSecretKey()
-	addr := netaddr.NewEndpointAddr(sk.Public()).WithIP(netip.MustParseAddrPort("127.0.0.1:1"))
+	addr := netaddr.NewEndpointAddr(sk.Public().EndpointID()).WithIP(netip.MustParseAddrPort("127.0.0.1:1"))
 	if _, err := client.Connect(ctx, addr, "iroh-hooks/0"); !errors.Is(err, ErrConnectRejected) {
 		t.Fatalf("Connect err = %v, want ErrConnectRejected", err)
 	}
@@ -68,7 +68,7 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	accepted := make(chan error, 1)
 	go func() {
@@ -80,7 +80,7 @@ func TestEndpointHooksRejectAfterHandshake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr()), alpn)
 	if err != nil {

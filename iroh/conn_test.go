@@ -30,13 +30,13 @@ func connPair(t *testing.T, alpn string) (client, server *Conn) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { srvEP.Close(context.Background()) })
+	t.Cleanup(func() { srvEP.Shutdown(context.Background()) })
 
 	clientEP, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { clientEP.Close(context.Background()) })
+	t.Cleanup(func() { clientEP.Shutdown(context.Background()) })
 
 	type accepted struct {
 		conn *Conn
@@ -301,9 +301,9 @@ func ExampleConn_CloseWithError() {
 	srvKey, _ := key.GenerateSecretKey()
 	server, _ := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
 		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 	client, _ := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	go server.Accept(ctx)
 

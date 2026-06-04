@@ -32,13 +32,13 @@ func TestEndpointDirectEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	type srvResult struct {
 		peer key.EndpointID
@@ -151,13 +151,13 @@ func TestEndpointDialNetConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	done := make(chan error, 1)
 	go func() {
@@ -215,13 +215,13 @@ func TestEndpointAcceptIncoming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	done := make(chan error, 1)
 	go func() {
@@ -292,13 +292,13 @@ func TestEndpointSourceAddressValidationRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	done := make(chan error, 1)
 	go func() {
@@ -351,13 +351,13 @@ func TestEndpointBinaryALPN(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	type srvResult struct {
 		alpn string
@@ -399,7 +399,7 @@ func TestEndpointSelfConnect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 	_, err = ep.Connect(ctx, ep.Addr(), "x")
 	if err != ErrSelfConnect {
 		t.Errorf("Connect(self) err = %v, want ErrSelfConnect", err)
@@ -414,9 +414,9 @@ func TestEndpointNoAddress(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ep.Close(ctx)
+	defer ep.Shutdown(ctx)
 	other, _ := key.GenerateSecretKey()
-	_, err = ep.Connect(ctx, netaddr.NewEndpointAddr(other.Public()), "x")
+	_, err = ep.Connect(ctx, netaddr.NewEndpointAddr(other.Public().EndpointID()), "x")
 	if err != ErrNoAddress {
 		t.Errorf("Connect(no addr) err = %v, want ErrNoAddress", err)
 	}

@@ -23,7 +23,7 @@ func clientKey(t *testing.T) key.EndpointID {
 	if pub.String() != want {
 		t.Fatalf("client public key = %s, want %s", pub.String(), want)
 	}
-	return pub
+	return pub.EndpointID()
 }
 
 func hexClean(s string) []byte {

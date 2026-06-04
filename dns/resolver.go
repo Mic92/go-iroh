@@ -20,22 +20,22 @@ const (
 	N0DNSEndpointOriginStaging = "staging-dns.iroh.link."
 )
 
-// TxtLookuper looks up the TXT records for a DNS name. It is the minimal
+// TXTLookuper looks up the TXT records for a DNS name. It is the minimal
 // resolver seam: any implementation (the stdlib-backed [Resolver], a DoH/DoT
 // client, or a test fake) satisfies it.
 //
 // It is the Go analog of iroh's Resolver trait, narrowed to the TXT lookup that
 // endpoint discovery needs.
-type TxtLookuper interface {
+type TXTLookuper interface {
 	// LookupTXT returns the TXT record string values for name.
 	LookupTXT(ctx context.Context, name string) ([]string, error)
 }
 
-// TxtLookuperFunc adapts a function to [TxtLookuper].
-type TxtLookuperFunc func(ctx context.Context, name string) ([]string, error)
+// TXTLookuperFunc adapts a function to [TXTLookuper].
+type TXTLookuperFunc func(ctx context.Context, name string) ([]string, error)
 
 // LookupTXT calls f(ctx, name).
-func (f TxtLookuperFunc) LookupTXT(ctx context.Context, name string) ([]string, error) {
+func (f TXTLookuperFunc) LookupTXT(ctx context.Context, name string) ([]string, error) {
 	return f(ctx, name)
 }
 
@@ -44,10 +44,10 @@ func (f TxtLookuperFunc) LookupTXT(ctx context.Context, name string) ([]string, 
 type Resolver struct {
 	// Lookuper performs the underlying TXT lookups. If nil, a [net.Resolver]
 	// with the default configuration is used.
-	Lookuper TxtLookuper
+	Lookuper TXTLookuper
 }
 
-func (r *Resolver) lookuper() TxtLookuper {
+func (r *Resolver) lookuper() TXTLookuper {
 	if r.Lookuper != nil {
 		return r.Lookuper
 	}
@@ -58,7 +58,7 @@ func (r *Resolver) lookuper() TxtLookuper {
 // "_iroh.<z32-id>.<origin>". Pass [N0DNSEndpointOriginProd] for the number0
 // production service.
 func (r *Resolver) LookupEndpointByID(ctx context.Context, id key.EndpointID, origin string) (EndpointInfo, error) {
-	name := IrohTxtName + "." + id.Z32() + "." + ensureTrailingDot(origin)
+	name := IrohTXTName + "." + id.Z32() + "." + ensureTrailingDot(origin)
 	return r.LookupEndpointByDomainName(ctx, name)
 }
 
@@ -71,10 +71,10 @@ func (r *Resolver) LookupEndpointByDomainName(ctx context.Context, name string) 
 	if err != nil {
 		return EndpointInfo{}, fmt.Errorf("lookup %q: %w", name, err)
 	}
-	return EndpointInfoFromTxtLookup(name, values)
+	return EndpointInfoFromTXTLookup(name, values)
 }
 
-// netLookuper is the default TxtLookuper, backed by the stdlib net.Resolver.
+// netLookuper is the default TXTLookuper, backed by the stdlib net.Resolver.
 type netLookuper struct{}
 
 func (netLookuper) LookupTXT(ctx context.Context, name string) ([]string, error) {

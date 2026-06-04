@@ -9,12 +9,12 @@ import (
 
 func TestValueGetSet(t *testing.T) {
 	v := NewValue(1)
-	if v.Get() != 1 {
-		t.Fatalf("Get = %d, want 1", v.Get())
+	if v.Current() != 1 {
+		t.Fatalf("Current = %d, want 1", v.Current())
 	}
 	v.Set(2)
-	if v.Get() != 2 {
-		t.Fatalf("Get = %d, want 2", v.Get())
+	if v.Current() != 2 {
+		t.Fatalf("Current = %d, want 2", v.Current())
 	}
 }
 

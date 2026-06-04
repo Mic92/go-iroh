@@ -103,11 +103,11 @@ func cmdKey(args []string, stdin io.Reader, stdout io.Writer) error {
 		if len(args) < 2 {
 			return fmt.Errorf("key z32: missing key")
 		}
-		pk, err := key.ParsePublicKey(args[1])
+		id, err := key.ParseEndpointID(args[1])
 		if err != nil {
 			return fmt.Errorf("key z32: %w", err)
 		}
-		fmt.Fprintln(stdout, pk.Z32())
+		fmt.Fprintln(stdout, id.Z32())
 		return nil
 	default:
 		return fmt.Errorf("key: unknown subcommand %q", args[0])

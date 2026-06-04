@@ -29,7 +29,7 @@ func TestEndpointPathKeepAliveConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := ep.Close(context.Background()); err != nil {
+		if err := ep.Shutdown(context.Background()); err != nil {
 			t.Errorf("Close: %v", err)
 		}
 	})

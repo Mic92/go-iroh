@@ -201,7 +201,7 @@ func TestTransportAddrTextRoundTrip(t *testing.T) {
 
 func TestEndpointAddrSortDedup(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	ip1 := netip.MustParseAddrPort("127.0.0.1:1")
 	ip2 := netip.MustParseAddrPort("127.0.0.1:2")
 	a := NewEndpointAddr(id).
@@ -267,7 +267,7 @@ func TestTransportAddrOrderingMatchesRustOrd(t *testing.T) {
 
 func TestEndpointAddrEmpty(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	a := NewEndpointAddr(sk.Public())
+	a := NewEndpointAddr(sk.Public().EndpointID())
 	if !a.IsEmpty() {
 		t.Error("expected empty")
 	}
@@ -278,7 +278,7 @@ func TestEndpointAddrEmpty(t *testing.T) {
 
 func TestEndpointAddrString(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	empty := NewEndpointAddr(id)
 	if got, want := empty.String(), "EndpointAddr{id:"+id.String()+", addrs:[]}"; got != want {
 		t.Fatalf("empty String = %q, want %q", got, want)
@@ -299,7 +299,7 @@ func TestEndpointAddrAddrsReturnsCopy(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	ip1 := IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1")}
 	ip2 := IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:2")}
-	a := NewEndpointAddr(sk.Public()).WithAddrs(ip1)
+	a := NewEndpointAddr(sk.Public().EndpointID()).WithAddrs(ip1)
 	addrs := a.Addrs()
 	addrs[0] = ip2
 	got := a.Addrs()

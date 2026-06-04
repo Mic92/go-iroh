@@ -70,7 +70,7 @@ func endpointInfoWithRelayAndIP(id key.EndpointID, relay netaddr.RelayURL, ip ne
 
 func TestMemoryLookup(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	m := NewMemoryLookup()
 
 	if _, ok := m.GetEndpointInfo(id); ok {
@@ -113,7 +113,7 @@ func TestMemoryLookup(t *testing.T) {
 
 func TestItemLastUpdatedTime(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	info := endpointInfoWithIP(sk.Public(), netip.MustParseAddrPort("127.0.0.1:1"))
+	info := endpointInfoWithIP(sk.Public().EndpointID(), netip.MustParseAddrPort("127.0.0.1:1"))
 	micros := uint64(1_700_000_000_123_456)
 	item := NewItem(info, "test", &micros)
 
@@ -137,7 +137,7 @@ func TestItemLastUpdatedTime(t *testing.T) {
 
 func TestMemoryLookupAddMerges(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	m := NewMemoryLookupWithProvenance("custom")
 
 	m.AddEndpointAddr(netaddr.NewEndpointAddr(id).WithIP(netip.MustParseAddrPort("1.2.3.4:1")))
@@ -155,19 +155,19 @@ func TestMemoryLookupAddMerges(t *testing.T) {
 
 func TestDNSTxtRoundTrip(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	relay := relayURL(t, "https://relay.example/")
 
 	info := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(
 		netaddr.RelayAddr{URL: relay},
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("9.9.9.9:1234")},
 	)}
-	values := info.ToTxtStrings()
+	values := info.ToTXTStrings()
 
-	name := dns.IrohTxtName + "." + id.Z32() + "." + dns.N0DNSEndpointOriginProd
-	back, err := dns.EndpointInfoFromTxtLookup(name, values)
+	name := dns.IrohTXTName + "." + id.Z32() + "." + dns.N0DNSEndpointOriginProd
+	back, err := dns.EndpointInfoFromTXTLookup(name, values)
 	if err != nil {
-		t.Fatalf("EndpointInfoFromTxtLookup: %v", err)
+		t.Fatalf("EndpointInfoFromTXTLookup: %v", err)
 	}
 	if !back.ID.Equal(id) {
 		t.Errorf("id = %s, want %s", back.ID, id)
@@ -180,24 +180,24 @@ func TestDNSTxtRoundTrip(t *testing.T) {
 	}
 }
 
-// fakeTxtLookuper serves canned TXT values for any name, recording the queried
+// fakeTXTLookuper serves canned TXT values for any name, recording the queried
 // name.
-type fakeTxtLookuper struct {
+type fakeTXTLookuper struct {
 	values []string
 }
 
-func (f *fakeTxtLookuper) LookupTXT(_ context.Context, _ string) ([]string, error) {
+func (f *fakeTXTLookuper) LookupTXT(_ context.Context, _ string) ([]string, error) {
 	return f.values, nil
 }
 
 func TestDNSAddressLookupResolve(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	info := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(
 		netaddr.RelayAddr{URL: relayURL(t, "https://relay.example/")},
 	)}
 
-	resolver := &dns.Resolver{Lookuper: &fakeTxtLookuper{values: info.ToTxtStrings()}}
+	resolver := &dns.Resolver{Lookuper: &fakeTXTLookuper{values: info.ToTXTStrings()}}
 	lookup := NewDNSAddressLookup(dns.N0DNSEndpointOriginProd, resolver)
 
 	results := drain(lookup.Resolve(context.Background(), id))
@@ -250,7 +250,7 @@ func TestPkarrPublishResolveRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	relay := relayURL(t, "https://relay.example/")
 
 	pub, err := NewPkarrPublisher(sk, srv.URL, &PkarrPublisherConfig{HTTPClient: srv.Client()})
@@ -299,7 +299,7 @@ func TestPkarrPublisherRelayOnlyFilter(t *testing.T) {
 	defer srv.Close()
 
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	relay := relayURL(t, "https://relay.example/")
 
 	pub, err := NewPkarrPublisher(sk, srv.URL, &PkarrPublisherConfig{HTTPClient: srv.Client()})
@@ -363,7 +363,7 @@ func (s staticLookup) Resolve(ctx context.Context, _ key.EndpointID) iter.Seq2[I
 func TestServicesNoServiceConfigured(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	var svcs AddressLookupServices
-	results := drain(svcs.Resolve(context.Background(), sk.Public()))
+	results := drain(svcs.Resolve(context.Background(), sk.Public().EndpointID()))
 	if len(results) != 1 || !errors.Is(results[0].err, ErrNoServiceConfigured) {
 		t.Fatalf("Resolve = %+v, want ErrNoServiceConfigured", results)
 	}
@@ -371,7 +371,7 @@ func TestServicesNoServiceConfigured(t *testing.T) {
 
 func TestServicesSucceedsAfterOtherErrors(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	info := dns.EndpointInfo{ID: id, Data: dns.NewEndpointData(
 		netaddr.RelayAddr{URL: relayURL(t, "https://relay.example/")},
 	)}
@@ -402,7 +402,7 @@ func TestServicesNoResults(t *testing.T) {
 	var svcs AddressLookupServices
 	svcs.AddResolver(staticLookup{provenance: "fail", err: errors.New("boom"), delay: time.Millisecond})
 
-	results := drain(svcs.Resolve(context.Background(), sk.Public()))
+	results := drain(svcs.Resolve(context.Background(), sk.Public().EndpointID()))
 	last := results[len(results)-1]
 	if !errors.Is(last.err, ErrNoResults) {
 		t.Fatalf("final result = %+v, want ErrNoResults", last)
@@ -448,7 +448,7 @@ func TestAddressLookupFunctionAdapters(t *testing.T) {
 	}
 
 	sk, _ := key.GenerateSecretKey()
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	resolver := AddressResolverFunc(func(ctx context.Context, got key.EndpointID) iter.Seq2[Item, error] {
 		return func(yield func(Item, error) bool) {
 			if !got.Equal(id) {

@@ -506,7 +506,7 @@ func ExampleClient() {
 	peer, _ := key.GenerateSecretKey()
 	if err := c.Send(ctx, relayproto.ClientToRelayMsg{
 		Type:          relayproto.FrameClientToRelayDatagram,
-		DstEndpointID: peer.Public(),
+		DstEndpointID: peer.Public().EndpointID(),
 		Datagrams:     relayproto.DatagramsFromBytes([]byte("ping")),
 	}); err != nil {
 		fmt.Println("send:", err)

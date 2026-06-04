@@ -53,7 +53,7 @@ type SignedPacket struct {
 // (the common case, e.g. name "_iroh"). ttl is the record TTL in seconds.
 func FromTxtStrings(sk key.SecretKey, name string, values []string, ttl uint32) (*SignedPacket, error) {
 	pub := sk.Public()
-	origin := pub.Z32()
+	origin := pub.EndpointID().Z32()
 	normalized := normalizeName(origin, name)
 
 	encoded, err := buildTxtPacket(normalized, values, ttl)
@@ -166,7 +166,7 @@ func (p *SignedPacket) MoreRecentThan(other *SignedPacket) bool {
 // TxtRecords returns the TXT string values under the given DNS name (normalized
 // relative to the signer's z-base-32 public key).
 func (p *SignedPacket) TxtRecords(name string) []string {
-	origin := p.PublicKey().Z32()
+	origin := p.PublicKey().EndpointID().Z32()
 	normalized := normalizeName(origin, name)
 	records, err := parsePacket(p.EncodedPacket())
 	if err != nil {
@@ -186,7 +186,7 @@ func (p *SignedPacket) TxtRecords(name string) []string {
 
 // AllTxtRecords returns all TXT records as (name-relative-to-origin, value) pairs.
 func (p *SignedPacket) AllTxtRecords() [][2]string {
-	origin := p.PublicKey().Z32()
+	origin := p.PublicKey().EndpointID().Z32()
 	records, err := parsePacket(p.EncodedPacket())
 	if err != nil {
 		return nil

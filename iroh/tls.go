@@ -49,7 +49,7 @@ func endpointIDFromServerName(name string) (key.EndpointID, bool) {
 	if err != nil || len(raw) != key.PublicKeySize {
 		return key.EndpointID{}, false
 	}
-	id, err := key.PublicKeyFromSlice(raw)
+	id, err := key.EndpointIDFromSlice(raw)
 	if err != nil {
 		return key.EndpointID{}, false
 	}
@@ -75,7 +75,7 @@ func peerEndpointID(cs tls.ConnectionState) (key.EndpointID, error) {
 	if !ok {
 		return key.EndpointID{}, errors.New("iroh: peer key is not ed25519")
 	}
-	id, err := key.PublicKeyFromSlice(pub)
+	id, err := key.EndpointIDFromSlice(pub)
 	if err != nil {
 		return key.EndpointID{}, fmt.Errorf("iroh: peer key: %w", err)
 	}

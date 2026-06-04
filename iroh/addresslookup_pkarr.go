@@ -103,7 +103,7 @@ func NewPkarrPublisher(secretKey key.SecretKey, relayURL string, cfg *PkarrPubli
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &PkarrPublisher{
-		endpointID: secretKey.Public(),
+		endpointID: secretKey.Public().EndpointID(),
 		addrFilter: filter,
 		value:      watch.NewValue[*dns.EndpointInfo](nil),
 		cancel:     cancel,
@@ -176,7 +176,7 @@ func (s *publisherService) run(ctx context.Context) {
 	republish := time.NewTimer(time.Duration(1 << 62))
 	defer republish.Stop()
 	for {
-		if info := s.watcher.Get(); info != nil {
+		if info := s.watcher.Current(); info != nil {
 			if err := s.publishCurrent(ctx, *info); err != nil {
 				if ctx.Err() != nil {
 					return
@@ -310,7 +310,7 @@ func (c *pkarrRelayClient) keyURL(z32 string) string {
 // wire bytes, i.e. everything after the public key) to "<relay>/<z32>".
 func (c *pkarrRelayClient) publish(ctx context.Context, packet *pkarr.SignedPacket) error {
 	body := packet.RelayPayload()
-	target := c.keyURL(packet.PublicKey().Z32())
+	target := c.keyURL(packet.PublicKey().EndpointID().Z32())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, target, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
@@ -348,7 +348,7 @@ func (c *pkarrRelayClient) resolve(ctx context.Context, id key.EndpointID) (*pka
 	if err != nil {
 		return nil, fmt.Errorf("read payload: %w", err)
 	}
-	packet, err := pkarr.FromRelayPayload(id, payload)
+	packet, err := pkarr.FromRelayPayload(id.PublicKey(), payload)
 	if err != nil {
 		return nil, fmt.Errorf("decode signed packet: %w", err)
 	}

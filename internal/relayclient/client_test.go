@@ -120,7 +120,7 @@ func TestClientConnectAndEcho(t *testing.T) {
 	payload := []byte("hello relay")
 	err = c.Send(ctx, relayproto.ClientToRelayMsg{
 		Type:          relayproto.FrameClientToRelayDatagram,
-		DstEndpointID: dst.Public(),
+		DstEndpointID: dst.Public().EndpointID(),
 		Datagrams:     relayproto.DatagramsFromBytes(payload),
 	})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestClientConnectAndEcho(t *testing.T) {
 	if string(msg.Datagrams.Contents) != string(payload) {
 		t.Errorf("echo = %q, want %q", msg.Datagrams.Contents, payload)
 	}
-	if !msg.RemoteEndpointID.Equal(dst.Public()) {
+	if !msg.RemoteEndpointID.Equal(dst.Public().EndpointID()) {
 		t.Error("remote endpoint id mismatch")
 	}
 }

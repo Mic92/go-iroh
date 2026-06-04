@@ -53,7 +53,7 @@ func TestRelayServerForwardsDatagramAndPong(t *testing.T) {
 	payload := []byte("hello relay")
 	if err := c1.Send(ctx, relayproto.ClientToRelayMsg{
 		Type:          relayproto.FrameClientToRelayDatagram,
-		DstEndpointID: sk2.Public(),
+		DstEndpointID: sk2.Public().EndpointID(),
 		Datagrams:     relayproto.DatagramsFromBytes(payload),
 	}); err != nil {
 		t.Fatalf("send datagram: %v", err)
@@ -65,8 +65,8 @@ func TestRelayServerForwardsDatagramAndPong(t *testing.T) {
 	if got.Type != relayproto.FrameRelayToClientDatagram {
 		t.Fatalf("type = %v, want datagram", got.Type)
 	}
-	if !got.RemoteEndpointID.Equal(sk1.Public()) {
-		t.Fatalf("remote id = %s, want %s", got.RemoteEndpointID, sk1.Public())
+	if !got.RemoteEndpointID.Equal(sk1.Public().EndpointID()) {
+		t.Fatalf("remote id = %s, want %s", got.RemoteEndpointID, sk1.Public().EndpointID())
 	}
 	if string(got.Datagrams.Contents) != string(payload) {
 		t.Fatalf("datagram = %q, want %q", got.Datagrams.Contents, payload)

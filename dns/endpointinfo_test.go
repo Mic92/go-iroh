@@ -29,7 +29,7 @@ func TestTxtAttrRoundTrip(t *testing.T) {
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 	)
 	data.SetUserData(&ud)
-	id, err := key.ParsePublicKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
+	id, err := key.ParseEndpointID("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,7 @@ func TestTxtAttrRoundTripCustomAddr(t *testing.T) {
 		bt,
 		tor,
 	)
-	id, err := key.ParsePublicKey("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
+	id, err := key.ParseEndpointID("vpnk377obfvzlipnsfbqba7ywkkenc4xlpmovt5tsfujoa75zqia")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestSignedPacketRoundTrip(t *testing.T) {
 		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
 	)
 	data.SetUserData(&ud)
-	want := EndpointInfo{ID: sk.Public(), Data: data}
+	want := EndpointInfo{ID: sk.Public().EndpointID(), Data: data}
 	packet, err := want.ToPkarrSignedPacket(sk, 30)
 	if err != nil {
 		t.Fatalf("ToPkarrSignedPacket: %v", err)
@@ -97,7 +97,7 @@ func TestSignedPacketRoundTripCustomAddr(t *testing.T) {
 		bt, tor,
 	)
 	data.SetUserData(&ud)
-	want := EndpointInfo{ID: sk.Public(), Data: data}
+	want := EndpointInfo{ID: sk.Public().EndpointID(), Data: data}
 	packet, err := want.ToPkarrSignedPacket(sk, 30)
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestSignedPacketRoundTripCustomAddr(t *testing.T) {
 // TestFromTxtLookupMultiAddr mirrors test_from_hickory_lookup: more than one
 // addr record must be parsed, and records with the wrong name are excluded.
 func TestFromTxtLookupMultiAddr(t *testing.T) {
-	id, err := key.ParsePublicKey("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
+	id, err := key.ParseEndpointID("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,9 +122,9 @@ func TestFromTxtLookupMultiAddr(t *testing.T) {
 		"addr=213.208.157.87:60165",
 		"relay=https://euw1-1.relay.iroh.network./",
 	}
-	got, err := EndpointInfoFromTxtLookup(name, values)
+	got, err := EndpointInfoFromTXTLookup(name, values)
 	if err != nil {
-		t.Fatalf("EndpointInfoFromTxtLookup: %v", err)
+		t.Fatalf("EndpointInfoFromTXTLookup: %v", err)
 	}
 	want := EndpointInfo{ID: id, Data: NewEndpointData(
 		netaddr.RelayAddr{URL: mustRelay(t, "https://euw1-1.relay.iroh.network./")},
@@ -143,10 +143,10 @@ func TestTxtStringsOrder(t *testing.T) {
 	)
 	data.SetUserData(&ud)
 	info := EndpointInfo{ID: testID(t), Data: data}
-	got := info.ToTxtStrings()
+	got := info.ToTXTStrings()
 	// relay first, then addr, then user-data.
 	if len(got) != 3 || got[0][:6] != "relay=" || got[1][:5] != "addr=" || got[2][:10] != "user-data=" {
-		t.Errorf("ToTxtStrings order wrong: %v", got)
+		t.Errorf("ToTXTStrings order wrong: %v", got)
 	}
 }
 
@@ -159,7 +159,7 @@ func TestTxtStringsGolden(t *testing.T) {
 	)
 	data.SetUserData(&ud)
 	info := EndpointInfo{ID: testID(t), Data: data}
-	got := info.ToTxtStrings()
+	got := info.ToTXTStrings()
 	want := []string{
 		"relay=https://example.com/",
 		"addr=127.0.0.1:1234",
@@ -167,7 +167,7 @@ func TestTxtStringsGolden(t *testing.T) {
 		"user-data=foobar",
 	}
 	if !slices.Equal(got, want) {
-		t.Errorf("ToTxtStrings = %v, want %v", got, want)
+		t.Errorf("ToTXTStrings = %v, want %v", got, want)
 	}
 }
 
@@ -262,9 +262,9 @@ func TestEndpointInfoString(t *testing.T) {
 func TestTxtAttrsSplitLikeRust(t *testing.T) {
 	id := testID(t)
 	name := "_iroh." + id.Z32() + ".dns.iroh.link."
-	got, err := EndpointInfoFromTxtLookup(name, []string{"user-data=a=b"})
+	got, err := EndpointInfoFromTXTLookup(name, []string{"user-data=a=b"})
 	if err != nil {
-		t.Fatalf("EndpointInfoFromTxtLookup: %v", err)
+		t.Fatalf("EndpointInfoFromTXTLookup: %v", err)
 	}
 	if got.Data.UserData() == nil || got.Data.UserData().String() != "a" {
 		t.Fatalf("UserData = %v, want a", got.Data.UserData())
@@ -310,7 +310,7 @@ func TestUserDataText(t *testing.T) {
 
 func testID(t *testing.T) key.EndpointID {
 	t.Helper()
-	id, err := key.ParsePublicKey("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
+	id, err := key.ParseEndpointID("1992d53c02cdc04566e5c0edb1ce83305cd550297953a047a445ea3264b54b18")
 	if err != nil {
 		t.Fatal(err)
 	}

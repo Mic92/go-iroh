@@ -268,20 +268,43 @@ func TestPublicKeyBinary(t *testing.T) {
 	}
 }
 
-func TestZ32RoundTrip(t *testing.T) {
+func TestEndpointIDEncoding(t *testing.T) {
 	sk, _ := GenerateSecretKey()
-	k := sk.Public()
-	z := k.Z32()
-	k2, err := ParsePublicKeyZ32(z)
+	id := sk.Public().EndpointID()
+
+	text, err := id.MarshalText()
 	if err != nil {
-		t.Fatalf("ParsePublicKeyZ32: %v", err)
+		t.Fatal(err)
 	}
-	if !k2.Equal(k) {
-		t.Error("z32 round-trip mismatch")
+	parsed, err := ParseEndpointID(string(text))
+	if err != nil {
+		t.Fatalf("ParseEndpointID: %v", err)
 	}
-	// z-base-32 of a 32-byte value is 52 chars.
-	if len(z) != 52 {
-		t.Errorf("z32 length = %d, want 52", len(z))
+	if !parsed.Equal(id) {
+		t.Fatal("text round-trip mismatch")
+	}
+
+	zid, err := ParseEndpointIDZ32(id.Z32())
+	if err != nil {
+		t.Fatalf("ParseEndpointIDZ32: %v", err)
+	}
+	if !zid.Equal(id) {
+		t.Fatal("z32 round-trip mismatch")
+	}
+
+	data, err := id.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bin EndpointID
+	if err := bin.UnmarshalBinary(data); err != nil {
+		t.Fatal(err)
+	}
+	if !bin.Equal(id) {
+		t.Fatal("binary round-trip mismatch")
+	}
+	if !id.PublicKey().Equal(sk.Public()) {
+		t.Fatal("public key conversion mismatch")
 	}
 }
 

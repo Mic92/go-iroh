@@ -25,13 +25,13 @@ func benchmarkConnPair(b *testing.B, alpn string) (client, server *Conn) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { srvEP.Close(context.Background()) })
+	b.Cleanup(func() { srvEP.Shutdown(context.Background()) })
 
 	clientEP, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { clientEP.Close(context.Background()) })
+	b.Cleanup(func() { clientEP.Shutdown(context.Background()) })
 
 	type accepted struct {
 		conn *Conn
@@ -110,7 +110,7 @@ func benchmarkQUICConnPairWithConfig(b *testing.B, alpn string, conf *quic.Confi
 	if err != nil {
 		b.Fatal(err)
 	}
-	clientTLS, err := clientTLSConfig(clientKey, srvKey.Public(), []string{alpn}, nil)
+	clientTLS, err := clientTLSConfig(clientKey, srvKey.Public().EndpointID(), []string{alpn}, nil)
 	if err != nil {
 		b.Fatal(err)
 	}

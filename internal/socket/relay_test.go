@@ -151,7 +151,7 @@ func TestActorSendRoutesToRelay(t *testing.T) {
 
 	payload := []byte("relay payload")
 	if !a.Send(RelaySendItem{
-		RemoteEndpoint: dst.Public(),
+		RemoteEndpoint: dst.Public().EndpointID(),
 		URL:            url,
 		Datagrams:      relayproto.DatagramsFromBytes(payload),
 	}) {
@@ -162,7 +162,7 @@ func TestActorSendRoutesToRelay(t *testing.T) {
 	if msg.Type != relayproto.FrameClientToRelayDatagram {
 		t.Fatalf("frame = %s, want ClientToRelayDatagram", msg.Type)
 	}
-	if !msg.DstEndpointID.Equal(dst.Public()) {
+	if !msg.DstEndpointID.Equal(dst.Public().EndpointID()) {
 		t.Error("destination endpoint id mismatch")
 	}
 	if string(msg.Datagrams.Contents) != string(payload) {
@@ -181,19 +181,19 @@ func TestActorRecvForwarding(t *testing.T) {
 
 	// Kick the connection alive by queuing a send so the active relay dials.
 	dst, _ := key.GenerateSecretKey()
-	a.Send(RelaySendItem{RemoteEndpoint: dst.Public(), URL: url, Datagrams: relayproto.DatagramsFromBytes([]byte("x"))})
+	a.Send(RelaySendItem{RemoteEndpoint: dst.Public().EndpointID(), URL: url, Datagrams: relayproto.DatagramsFromBytes([]byte("x"))})
 	waitDatagramSend(t, client)
 
 	want := []byte("incoming")
 	client.recv <- relayproto.RelayToClientMsg{
 		Type:             relayproto.FrameRelayToClientDatagram,
-		RemoteEndpointID: src.Public(),
+		RemoteEndpointID: src.Public().EndpointID(),
 		Datagrams:        relayproto.DatagramsFromBytes(want),
 	}
 
 	select {
 	case dm := <-a.Recv():
-		if !dm.Src.Equal(src.Public()) {
+		if !dm.Src.Equal(src.Public().EndpointID()) {
 			t.Error("recv src mismatch")
 		}
 		if string(dm.Datagrams.Contents) != string(want) {
@@ -218,7 +218,7 @@ func TestActorBatching(t *testing.T) {
 	got := map[string]bool{}
 	for i := 0; i < n; i++ {
 		p := []byte{byte(i)}
-		a.Send(RelaySendItem{RemoteEndpoint: dst.Public(), URL: url, Datagrams: relayproto.DatagramsFromBytes(p)})
+		a.Send(RelaySendItem{RemoteEndpoint: dst.Public().EndpointID(), URL: url, Datagrams: relayproto.DatagramsFromBytes(p)})
 	}
 
 	deadline := time.After(5 * time.Second)
@@ -271,13 +271,13 @@ func TestRelayTransportSendRouting(t *testing.T) {
 	url := testURL(t)
 	peer, _ := key.GenerateSecretKey()
 	a.SetHomeRelay(url)
-	m := sock.RelayMappedAddrFor(url, peer.Public())
+	m := sock.RelayMappedAddrFor(url, peer.Public().EndpointID())
 
 	if !rt.Send(m, []byte("payload")) {
 		t.Fatal("Send to known relay addr returned false")
 	}
 	msg := waitDatagramSend(t, client)
-	if !msg.DstEndpointID.Equal(peer.Public()) {
+	if !msg.DstEndpointID.Equal(peer.Public().EndpointID()) {
 		t.Error("routed to wrong endpoint")
 	}
 
@@ -311,7 +311,7 @@ func TestRelayDatagramFrameRoundTrip(t *testing.T) {
 	key, _ := key.GenerateSecretKey()
 	in := relayproto.RelayToClientMsg{
 		Type:             relayproto.FrameRelayToClientDatagramBat,
-		RemoteEndpointID: key.Public(),
+		RemoteEndpointID: key.Public().EndpointID(),
 		Datagrams:        relayproto.Datagrams{Ecn: relayproto.EcnCe, SegmentSize: 4, Contents: []byte("aaaabbbb")},
 	}
 	wire := in.AppendTo(nil)

@@ -42,7 +42,7 @@ ep, err := iroh.Bind(ctx, iroh.WithALPNs("example/1"))
 if err != nil {
 	return err
 }
-defer ep.Close(ctx)
+defer ep.Shutdown(ctx)
 
 conn, err := ep.Connect(ctx, peerAddr, "example/1")
 if err != nil {

@@ -109,7 +109,7 @@ func TestParseRustTransferEndpointBoundJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 
 	line := fmt.Sprintf(`{"timestamp":"2026-05-31T00:00:00Z","kind":"EndpointBound","endpoint_id":%q,"direct_addresses":["127.0.0.1:1234","[::1]:5678"],"relay_url":"https://relay.example.com/"}`, id.String())
 	ready, ok, err := parseRustTransferEndpointBound(line)
@@ -164,7 +164,7 @@ func TestParseRustTransferCompletionJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 
 	line := fmt.Sprintf(`{"timestamp":"2026-05-31T00:00:00Z","kind":"DownloadComplete","size":7,"duration":42,"num_chunks":1,"remote_id":%q}`, id.String())
 	got, ok, err := parseRustTransferCompletion(line)
@@ -251,7 +251,7 @@ func TestStartRustTransferProviderReadsEndpointBound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id := sk.Public()
+	id := sk.Public().EndpointID()
 	line := fmt.Sprintf(`{"timestamp":"2026-05-31T00:00:00Z","kind":"EndpointBound","endpoint_id":%q,"direct_addresses":["127.0.0.1:1234"],"relay_url":"https://relay.example.com/"}`, id.String())
 
 	dir := t.TempDir()
@@ -375,7 +375,7 @@ func runLiveRustTransferGoToRustUpload(t *testing.T, ctx context.Context, bin, g
 		t.Fatalf("bind Go endpoint: %v", err)
 	}
 	defer func() {
-		if err := client.Close(ctx); err != nil {
+		if err := client.Shutdown(ctx); err != nil {
 			t.Errorf("close Go endpoint: %v", err)
 		}
 	}()

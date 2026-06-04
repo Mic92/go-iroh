@@ -156,7 +156,7 @@ func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClie
 		if len(rest) < key.PublicKeySize {
 			return RelayToClientMsg{}, ErrInvalidFrame
 		}
-		id, err := key.PublicKeyFromSlice(rest[:key.PublicKeySize])
+		id, err := key.EndpointIDFromSlice(rest[:key.PublicKeySize])
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
@@ -169,7 +169,7 @@ func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClie
 		if len(rest) != key.PublicKeySize {
 			return RelayToClientMsg{}, ErrInvalidFrame
 		}
-		id, err := key.PublicKeyFromSlice(rest)
+		id, err := key.EndpointIDFromSlice(rest)
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
@@ -267,7 +267,7 @@ func ParseClientToRelayMsg(content []byte) (ClientToRelayMsg, error) {
 		if len(rest) < key.PublicKeySize {
 			return ClientToRelayMsg{}, ErrInvalidFrame
 		}
-		id, err := key.PublicKeyFromSlice(rest[:key.PublicKeySize])
+		id, err := key.EndpointIDFromSlice(rest[:key.PublicKeySize])
 		if err != nil {
 			return ClientToRelayMsg{}, err
 		}

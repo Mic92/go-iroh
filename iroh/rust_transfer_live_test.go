@@ -46,7 +46,7 @@ func TestLiveRustTransferFetchPingDirectPath(t *testing.T) {
 		t.Fatalf("bind Go endpoint: %v", err)
 	}
 	defer func() {
-		if err := server.Close(context.Background()); err != nil {
+		if err := server.Shutdown(context.Background()); err != nil {
 			t.Errorf("close Go endpoint: %v", err)
 		}
 	}()

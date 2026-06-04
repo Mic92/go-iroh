@@ -57,13 +57,13 @@ func TestRelayOnlyEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithRelayMode(mode))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
 	// Wait for both endpoints to connect to the relay so the relay can route
 	// the QUIC handshake between them.
