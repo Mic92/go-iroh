@@ -3,6 +3,7 @@ package iroh
 import (
 	"context"
 	"errors"
+	"iter"
 	"net/netip"
 	"testing"
 	"time"
@@ -108,6 +109,35 @@ func TestAddressLookupServicesLenIsEmptyClear(t *testing.T) {
 	svcs.Clear()
 	if svcs.Len() != 0 || !svcs.IsEmpty() {
 		t.Errorf("after Clear: Len()=%d IsEmpty()=%v, want 0/true", svcs.Len(), svcs.IsEmpty())
+	}
+}
+
+func TestAddressLookupServicesResolveCancelOnEarlyBreak(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	id := sk.Public().EndpointID()
+	info := endpointInfoWithIP(id, netip.MustParseAddrPort("127.0.0.1:1"))
+	cancelled := make(chan struct{})
+
+	resolver := AddressResolverFunc(func(ctx context.Context, id key.EndpointID) iter.Seq2[Item, error] {
+		return func(yield func(Item, error) bool) {
+			if !yield(NewItem(info, "blocking", nil), nil) {
+				return
+			}
+			<-ctx.Done()
+			close(cancelled)
+		}
+	})
+
+	var svcs AddressLookupServices
+	svcs.AddResolver(resolver)
+	for range svcs.Resolve(context.Background(), id) {
+		break
+	}
+
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("resolver did not observe cancellation after early break")
 	}
 }
 

@@ -275,8 +275,11 @@ func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) 
 	s.mu.RUnlock()
 
 	return func(yield func(Item, error) bool) {
+		iterCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
 		if len(resolvers) == 0 {
-			if ctx.Err() == nil {
+			if iterCtx.Err() == nil {
 				yield(Item{}, ErrNoServiceConfigured)
 			}
 			return
@@ -284,14 +287,14 @@ func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) 
 		var wg sync.WaitGroup
 		merged := make(chan lookupResult)
 		for _, resolver := range resolvers {
-			seq := resolver.Resolve(ctx, id)
+			seq := resolver.Resolve(iterCtx, id)
 			wg.Add(1)
 			go func(seq iter.Seq2[Item, error]) {
 				defer wg.Done()
 				for item, err := range seq {
 					select {
 					case merged <- lookupResult{item: item, err: err}:
-					case <-ctx.Done():
+					case <-iterCtx.Done():
 						return
 					}
 				}
@@ -309,7 +312,7 @@ func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) 
 			case r, ok := <-merged:
 				if !ok {
 					if !didEmit {
-						if ctx.Err() == nil {
+						if iterCtx.Err() == nil {
 							yield(Item{}, fmt.Errorf("%w: %w", ErrNoResults, errors.Join(errs...)))
 						}
 					}
@@ -323,7 +326,7 @@ func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) 
 				if !yield(r.item, r.err) {
 					return
 				}
-			case <-ctx.Done():
+			case <-iterCtx.Done():
 				return
 			}
 		}
