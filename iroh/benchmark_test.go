@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -632,6 +633,82 @@ func BenchmarkRawTCPConnThroughput(b *testing.B) {
 	if err := <-done; err != nil {
 		b.Fatalf("copy tcp: %v", err)
 	}
+}
+
+func BenchmarkTCPStreamTransportThroughput(b *testing.B) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	tr, err := ListenTCPStreamTransport(101, "[::1]:0", TransportLinkLoopback)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer tr.Close()
+	addrs, err := tr.LocalAddrs(ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	accepted := make(chan StreamAccept, 1)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- tr.ListenStreams(ctx, func(a StreamAccept) error {
+			accepted <- a
+			return nil
+		})
+	}()
+
+	tok := StreamOpenToken{
+		LocalID:     "client",
+		RemoteID:    "server",
+		ALPN:        "bench/0",
+		StableID:    1,
+		TransportID: tr.ID(),
+		Purpose:     "throughput",
+		Nonce:       "bench",
+		Expiry:      time.Now().Add(time.Minute),
+	}
+	client, err := tr.DialStream(ctx, addrs[0], StreamOptions{Token: tok})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer client.Close()
+
+	var server net.Conn
+	select {
+	case a := <-accepted:
+		server = a.Conn
+	case err := <-errc:
+		b.Fatal(err)
+	case <-ctx.Done():
+		b.Fatal(ctx.Err())
+	}
+	defer server.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, server)
+		done <- err
+	}()
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		client.Close()
+		server.Close()
+		<-done
+	}
+	b.Cleanup(func() { cleanupOnce.Do(cleanup) })
+
+	buf := make([]byte, 64*1024)
+	b.SetBytes(int64(len(buf)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := client.Write(buf); err != nil {
+			b.Fatalf("write tcp stream: %v", err)
+		}
+	}
+	b.StopTimer()
+	cleanupOnce.Do(cleanup)
 }
 
 func benchmarkUDPConnPair(b *testing.B) (client, server *net.UDPConn) {
