@@ -23,6 +23,10 @@ type peerIDConn interface {
 	RemoteID() key.EndpointID
 }
 
+type earlyDataConn interface {
+	Used0RTT() bool
+}
+
 var (
 	_ io.ReadWriteCloser = (*Stream)(nil)
 	_ io.WriteCloser     = (*SendStream)(nil)
@@ -33,6 +37,7 @@ var (
 	_ connAddrs          = (*Conn)(nil)
 	_ net.Conn           = streamConn{}
 	_ peerIDConn         = streamConn{}
+	_ earlyDataConn      = streamConn{}
 	_ net.Listener       = (*StreamListener)(nil)
 	_ ProtocolHandler    = ProtocolHandlerFunc(nil)
 	_ AddressPublisher   = AddressPublisherFunc(nil)

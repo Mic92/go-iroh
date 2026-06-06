@@ -215,15 +215,18 @@ func TestEndpointListenNetListener(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
-	ln := server.ListenStreams()
+	ln, err := server.ListenStreams()
+	if err != nil {
+		t.Fatalf("ListenStreams: %v", err)
+	}
 	defer ln.Close()
 	var _ net.Listener = ln
 	if ln.Addr() == nil {
@@ -245,6 +248,15 @@ func TestEndpointListenNetListener(t *testing.T) {
 		}
 		if !pc.RemoteID().Equal(client.ID()) {
 			done <- fmt.Errorf("accepted conn remote id = %s, want %s", pc.RemoteID(), client.ID())
+			return
+		}
+		ec, ok := c.(interface{ Used0RTT() bool })
+		if !ok {
+			done <- errors.New("accepted conn does not expose Used0RTT")
+			return
+		}
+		if ec.Used0RTT() {
+			done <- errors.New("accepted conn Used0RTT = true, want false")
 			return
 		}
 		_, err = io.Copy(c, c)
@@ -284,9 +296,12 @@ func TestStreamListenerClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
-	ln := server.ListenStreams()
+	ln, err := server.ListenStreams()
+	if err != nil {
+		t.Fatalf("ListenStreams: %v", err)
+	}
 	if err := ln.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -304,9 +319,12 @@ func TestStreamListenerCloseUnblocksAccept(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
-	ln := server.ListenStreams()
+	ln, err := server.ListenStreams()
+	if err != nil {
+		t.Fatalf("ListenStreams: %v", err)
+	}
 	done := make(chan error, 1)
 	go func() {
 		_, err := ln.Accept()
@@ -337,15 +355,18 @@ func TestStreamListenerAcceptsMultipleStreams(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer server.Close(ctx)
+	defer server.Shutdown(ctx)
 
 	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer client.Close(ctx)
+	defer client.Shutdown(ctx)
 
-	ln := server.ListenStreams()
+	ln, err := server.ListenStreams()
+	if err != nil {
+		t.Fatalf("ListenStreams: %v", err)
+	}
 	defer ln.Close()
 
 	errc := make(chan error, 1)
@@ -404,6 +425,121 @@ func TestStreamListenerAcceptsMultipleStreams(t *testing.T) {
 
 	if err := <-errc; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStreamListenerConcurrentAccept(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-listener-concurrent-accept/0"
+
+	server, err := Bind(ctx, WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	ln, err := server.ListenStreams()
+	if err != nil {
+		t.Fatalf("ListenStreams: %v", err)
+	}
+	defer ln.Close()
+
+	accepted := make(chan net.Conn, 2)
+	errc := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			c, err := ln.Accept()
+			if err != nil {
+				errc <- err
+				return
+			}
+			accepted <- c
+		}()
+	}
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("Connect: %v", err)
+	}
+	defer conn.Close()
+
+	for i := 0; i < 2; i++ {
+		c, err := conn.OpenStreamConn(ctx)
+		if err != nil {
+			t.Fatalf("OpenStreamConn: %v", err)
+		}
+		if _, err := c.Write([]byte{byte(i)}); err != nil {
+			t.Fatalf("Write: %v", err)
+		}
+		defer c.Close()
+	}
+
+	seen := map[net.Conn]bool{}
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errc:
+			t.Fatal(err)
+		case c := <-accepted:
+			defer c.Close()
+			if seen[c] {
+				t.Fatal("same stream returned to multiple Accept callers")
+			}
+			seen[c] = true
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for concurrent Accept")
+		}
+	}
+}
+
+func TestStreamListenerOwnsEndpointAcceptLoop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	server, err := Bind(ctx, WithALPNs("iroh-listener-owner/0"),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+
+	ln, err := server.ListenStreams()
+	if err != nil {
+		t.Fatalf("ListenStreams: %v", err)
+	}
+
+	if _, err := server.ListenStreams(); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("second ListenStreams = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
+	if _, err := server.Accept(ctx); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("Accept while ListenStreams active = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
+	if _, err := server.AcceptIncoming(ctx); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("AcceptIncoming while ListenStreams active = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
+	if err := server.SetALPNs([]string{"iroh-listener-owner/1"}); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("SetALPNs while ListenStreams active = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
+	if _, err := NewRouter(server, map[string]ProtocolHandler{
+		"iroh-listener-owner/0": echoHandler{},
+	}, nil); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("NewRouter while ListenStreams active = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
+
+	if err := ln.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := server.SetALPNs([]string{"iroh-listener-owner/1"}); err != nil {
+		t.Fatalf("SetALPNs after listener close: %v", err)
 	}
 }
 

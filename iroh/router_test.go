@@ -1,8 +1,12 @@
 package iroh
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"io"
+	"log/slog"
+	"net"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -30,6 +34,161 @@ func (echoHandler) Accept(ctx context.Context, conn *Conn) error {
 		return err
 	}
 	return s.Close()
+}
+
+func TestRouterStreamListener(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-router-listener/0"
+
+	server, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ln := NewStreamListener()
+	router, err := NewRouter(server, map[string]ProtocolHandler{alpn: ln.Handler()}, nil)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer router.Shutdown(ctx)
+
+	var _ net.Listener = ln
+	if ln.Addr() == nil {
+		t.Fatal("stream listener Addr() = nil")
+	}
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	done := make(chan error, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer c.Close()
+		pc, ok := c.(interface{ RemoteID() key.EndpointID })
+		if !ok {
+			done <- errors.New("accepted conn does not expose RemoteID")
+			return
+		}
+		if !pc.RemoteID().Equal(client.ID()) {
+			done <- errors.New("accepted conn has wrong RemoteID")
+			return
+		}
+		ec, ok := c.(interface{ Used0RTT() bool })
+		if !ok {
+			done <- errors.New("accepted conn does not expose Used0RTT")
+			return
+		}
+		if ec.Used0RTT() {
+			done <- errors.New("accepted conn Used0RTT = true, want false")
+			return
+		}
+		_, err = io.Copy(c, c)
+		done <- err
+	}()
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	c, err := client.Dial(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("ping")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	var buf [4]byte
+	if _, err := io.ReadFull(c, buf[:]); err != nil {
+		t.Fatalf("ReadFull: %v", err)
+	}
+	if string(buf[:]) != "ping" {
+		t.Fatalf("echo = %q, want ping", string(buf[:]))
+	}
+	if err := c.Close(); err != nil {
+		t.Fatalf("client close: %v", err)
+	}
+	if err := <-done; err != nil && !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterStreamListenerShutdownIsQuiet(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-router-listener-quiet/0"
+
+	server, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var logs bytes.Buffer
+	ln := NewStreamListener()
+	router, err := NewRouter(server, map[string]ProtocolHandler{alpn: ln.Handler()}, &RouterConfig{
+		Logger: slog.New(slog.NewTextHandler(&logs, nil)),
+	})
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	c, err := client.Dial(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	c.Close()
+
+	if err := router.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if got := logs.String(); got != "" {
+		t.Fatalf("router logged during normal stream listener shutdown:\n%s", got)
+	}
+}
+
+func TestRouterOwnsEndpointAcceptLoop(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-router-owner/0"
+
+	server, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	router, err := NewRouter(server, map[string]ProtocolHandler{alpn: echoHandler{}}, nil)
+	if err != nil {
+		t.Fatalf("NewRouter: %v", err)
+	}
+	defer router.Shutdown(ctx)
+
+	if _, err := server.ListenStreams(); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("ListenStreams while Router active = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
+	if _, err := server.Accept(ctx); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("Accept while Router active = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
+	if _, err := server.AcceptIncoming(ctx); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("AcceptIncoming while Router active = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
+	if err := server.SetALPNs([]string{"iroh-router-owner/1"}); !errors.Is(err, ErrEndpointAcceptLoopInUse) {
+		t.Fatalf("SetALPNs while Router active = %v, want ErrEndpointAcceptLoopInUse", err)
+	}
 }
 
 // shutdownEcho records whether Shutdown was called, exercising the optional

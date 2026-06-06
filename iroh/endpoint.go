@@ -54,6 +54,7 @@ type Endpoint struct {
 	mu          sync.Mutex
 	closed      bool
 	closedCh    chan struct{}
+	acceptOwner acceptOwner
 	addrWatch   *watch.Value[netaddr.EndpointAddr]
 	externalNAT []netip.AddrPort
 	netReport   netReportRunner
@@ -62,6 +63,15 @@ type Endpoint struct {
 	stableIDs   map[*quic.Conn]uint64
 	metrics     endpointMetrics
 }
+
+type acceptOwner int
+
+const (
+	acceptOwnerNone acceptOwner = iota
+	acceptOwnerAccept
+	acceptOwnerListenStreams
+	acceptOwnerRouter
+)
 
 // config holds the options assembled by [Option] values before [Bind].
 type config struct {
@@ -489,14 +499,22 @@ func (e *Endpoint) startListener() error {
 // every protocol's ALPN at once.
 //
 // SetALPNs replaces the accepted ALPN set. If a listener is already running, it
-// is closed first; established connections are unaffected, while concurrent
-// accepts may observe a transient closed-listener error and retry. Pass each
-// ALPN as an arbitrary byte string represented as a Go string; see [WithALPNs].
+// is closed first; established connections are unaffected. SetALPNs returns an
+// error while an accept loop owner such as [Endpoint.Accept], [Endpoint.AcceptIncoming],
+// [Endpoint.ListenStreams], or [Router] is active. Pass each ALPN as an arbitrary
+// byte string represented as a Go string; see [WithALPNs].
 func (e *Endpoint) SetALPNs(alpns []string) error {
+	return e.setALPNs(alpns, acceptOwnerNone)
+}
+
+func (e *Endpoint) setALPNs(alpns []string, allowedOwner acceptOwner) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return ErrEndpointClosed
+	}
+	if e.acceptOwner != acceptOwnerNone && e.acceptOwner != allowedOwner {
+		return ErrEndpointAcceptLoopInUse
 	}
 	next := slices.Clone(alpns)
 	if e.listener != nil {
@@ -849,6 +867,10 @@ func (e *Endpoint) RemoveRelay(url netaddr.RelayURL) *RelayConfig {
 // ErrEndpointClosed is returned by operations on a closed [Endpoint].
 var ErrEndpointClosed = errors.New("iroh: endpoint closed")
 
+// ErrEndpointAcceptLoopInUse is returned when an operation would start or
+// reconfigure an endpoint accept loop while another accept owner is active.
+var ErrEndpointAcceptLoopInUse = errors.New("iroh: endpoint accept loop in use")
+
 // ErrSelfConnect is returned by [Endpoint.Connect] when asked to dial the
 // endpoint's own id.
 var ErrSelfConnect = errors.New("iroh: cannot connect to self")
@@ -979,6 +1001,14 @@ func (e *Endpoint) dialTargets(addr netaddr.EndpointAddr) []net.Addr {
 // AcceptIncoming blocks until an incoming connection attempt arrives. The
 // returned [Incoming] can be accepted, refused, retried, or ignored.
 func (e *Endpoint) AcceptIncoming(ctx context.Context) (*Incoming, error) {
+	if err := e.acquireAcceptOwner(acceptOwnerAccept); err != nil {
+		return nil, err
+	}
+	defer e.releaseAcceptOwner(acceptOwnerAccept)
+	return e.acceptIncoming(ctx)
+}
+
+func (e *Endpoint) acceptIncoming(ctx context.Context) (*Incoming, error) {
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
 	}
@@ -997,22 +1027,33 @@ func (e *Endpoint) AcceptIncoming(ctx context.Context) (*Incoming, error) {
 // no configured ALPNs. ctx cancels the wait.
 func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 	e.metrics.acceptsStarted.Add(1)
-	in, err := e.AcceptIncoming(ctx)
-	if err != nil {
+	if err := e.acquireAcceptOwner(acceptOwnerAccept); err != nil {
 		e.metrics.acceptsFailed.Add(1)
 		return nil, err
 	}
-	accepting, err := in.Accept()
-	if err != nil {
-		e.metrics.acceptsFailed.Add(1)
-		return nil, err
-	}
-	conn, err := accepting.Connection(ctx)
+	defer e.releaseAcceptOwner(acceptOwnerAccept)
+	conn, err := e.accept(ctx)
 	if err != nil {
 		e.metrics.acceptsFailed.Add(1)
 		return nil, err
 	}
 	e.metrics.acceptsAccepted.Add(1)
+	return conn, nil
+}
+
+func (e *Endpoint) accept(ctx context.Context) (*Conn, error) {
+	in, err := e.acceptIncoming(ctx)
+	if err != nil {
+		return nil, err
+	}
+	accepting, err := in.Accept()
+	if err != nil {
+		return nil, err
+	}
+	conn, err := accepting.Connection(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return conn, nil
 }
 
@@ -1181,4 +1222,25 @@ func (e *Endpoint) isClosed() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.closed
+}
+
+func (e *Endpoint) acquireAcceptOwner(owner acceptOwner) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return ErrEndpointClosed
+	}
+	if e.acceptOwner != acceptOwnerNone {
+		return ErrEndpointAcceptLoopInUse
+	}
+	e.acceptOwner = owner
+	return nil
+}
+
+func (e *Endpoint) releaseAcceptOwner(owner acceptOwner) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.acceptOwner == owner {
+		e.acceptOwner = acceptOwnerNone
+	}
 }

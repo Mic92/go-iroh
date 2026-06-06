@@ -13,22 +13,37 @@ import (
 // streams as [net.Conn] values. The endpoint must already be configured with
 // the ALPNs it should accept.
 //
-// The listener consumes e's incoming accept loop. Do not use it concurrently
-// with [Endpoint.Accept], [Endpoint.AcceptIncoming], or [Router].
+// The listener consumes e's incoming accept loop. ListenStreams returns
+// [ErrEndpointAcceptLoopInUse] if [Endpoint.Accept], [Endpoint.AcceptIncoming],
+// another stream listener, or [Router] already owns that loop.
 //
 // Closing the listener stops accepting new streams but does not close e or any
 // net.Conn values already returned by [StreamListener.Accept].
-func (e *Endpoint) ListenStreams() *StreamListener {
+func (e *Endpoint) ListenStreams() (*StreamListener, error) {
+	if err := e.acquireAcceptOwner(acceptOwnerListenStreams); err != nil {
+		return nil, err
+	}
+	l := NewStreamListener()
+	l.ep = e
+	l.addr = net.UDPAddrFromAddrPort(e.LocalAddr())
+	l.onClose = func() {
+		e.releaseAcceptOwner(acceptOwnerListenStreams)
+	}
+	go l.run()
+	return l, nil
+}
+
+// NewStreamListener returns a [net.Listener] that accepts bidirectional streams
+// from connections dispatched to its [StreamListener.Handler]. Register the
+// handler with a [Router] to serve one ALPN as a net.Listener.
+func NewStreamListener() *StreamListener {
 	ctx, cancel := context.WithCancel(context.Background())
-	l := &StreamListener{
-		ep:      e,
+	return &StreamListener{
 		ctx:     ctx,
 		cancel:  cancel,
 		streams: make(chan net.Conn),
 		done:    make(chan struct{}),
 	}
-	go l.run()
-	return l
 }
 
 // StreamListener accepts bidirectional iroh streams as [net.Conn] values.
@@ -36,14 +51,17 @@ func (e *Endpoint) ListenStreams() *StreamListener {
 // Each accepted net.Conn is one bidirectional QUIC stream. Multiple accepted
 // net.Conn values may come from the same peer connection. Closing an accepted
 // net.Conn closes only that stream; closing the StreamListener closes any peer
-// connections it has accepted but does not close the underlying endpoint.
+// connections it has accepted but does not close the underlying endpoint. An
+// accepted net.Conn also exposes RemoteID and Used0RTT methods.
 type StreamListener struct {
 	ep     *Endpoint
 	ctx    context.Context
 	cancel context.CancelFunc
+	addr   net.Addr
 
 	streams chan net.Conn
 	done    chan struct{}
+	onClose func()
 
 	closeOnce sync.Once
 	errMu     sync.Mutex
@@ -66,13 +84,42 @@ func (l *StreamListener) Close() error {
 		l.setErr(net.ErrClosed)
 		l.cancel()
 		close(l.done)
+		if l.onClose != nil {
+			l.onClose()
+		}
 	})
 	return nil
 }
 
 // Addr returns the endpoint's local UDP address.
 func (l *StreamListener) Addr() net.Addr {
-	return net.UDPAddrFromAddrPort(l.ep.LocalAddr())
+	return l.addr
+}
+
+// Handler returns a [ProtocolHandler] that dispatches accepted connection
+// streams to l.
+func (l *StreamListener) Handler() ProtocolHandler {
+	return streamListenerHandler{l}
+}
+
+func (l *StreamListener) handleConn(ctx context.Context, conn *Conn) error {
+	done := make(chan struct{})
+	go func() {
+		l.acceptStreams(conn)
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		conn.Close()
+		<-done
+		return ctx.Err()
+	case <-l.done:
+		conn.Close()
+		<-done
+		return net.ErrClosed
+	}
 }
 
 func (l *StreamListener) run() {
@@ -85,7 +132,7 @@ func (l *StreamListener) run() {
 		})
 	}()
 	for {
-		conn, err := l.ep.Accept(l.ctx)
+		conn, err := l.ep.accept(l.ctx)
 		if err != nil {
 			l.setErr(err)
 			return
@@ -96,6 +143,18 @@ func (l *StreamListener) run() {
 			l.acceptStreams(conn)
 		}(conn)
 	}
+}
+
+type streamListenerHandler struct {
+	l *StreamListener
+}
+
+func (h streamListenerHandler) Accept(ctx context.Context, conn *Conn) error {
+	return h.l.handleConn(ctx, conn)
+}
+
+func (h streamListenerHandler) Shutdown(ctx context.Context) {
+	h.l.Close()
 }
 
 func (l *StreamListener) acceptStreams(conn *Conn) {
@@ -177,6 +236,10 @@ func (c *listenerStreamConn) Close() error {
 
 func (c *listenerStreamConn) RemoteID() key.EndpointID {
 	return c.Conn.(interface{ RemoteID() key.EndpointID }).RemoteID()
+}
+
+func (c *listenerStreamConn) Used0RTT() bool {
+	return c.Conn.(interface{ Used0RTT() bool }).Used0RTT()
 }
 
 func (l *StreamListener) setErr(err error) {

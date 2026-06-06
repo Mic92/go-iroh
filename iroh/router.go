@@ -91,6 +91,16 @@ type RouterConfig struct {
 // conventional, but binary values compare byte-for-byte. NewRouter copies the
 // map before returning.
 func NewRouter(ep *Endpoint, handlers map[string]ProtocolHandler, cfg *RouterConfig) (*Router, error) {
+	if err := ep.acquireAcceptOwner(acceptOwnerRouter); err != nil {
+		return nil, err
+	}
+	releaseOwner := true
+	defer func() {
+		if releaseOwner {
+			ep.releaseAcceptOwner(acceptOwnerRouter)
+		}
+	}()
+
 	handlers = maps.Clone(handlers)
 	logger := slog.Default()
 	filter := IncomingFilter(nil)
@@ -115,9 +125,14 @@ func NewRouter(ep *Endpoint, handlers map[string]ProtocolHandler, cfg *RouterCon
 			return filter(&Incoming{ep: ep, remote: addr}) == FilterRetry
 		})
 	}
-	if err := ep.SetALPNs(alpns); err != nil {
+	if err := ep.setALPNs(alpns, acceptOwnerRouter); err != nil {
 		ep.setSourceAddressValidation(prevVerify)
 		return nil, fmt.Errorf("iroh: new router: %w", err)
+	}
+	for _, h := range handlers {
+		if h, ok := h.(streamListenerHandler); ok {
+			h.l.addr = net.UDPAddrFromAddrPort(ep.LocalAddr())
+		}
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -134,6 +149,7 @@ func NewRouter(ep *Endpoint, handlers map[string]ProtocolHandler, cfg *RouterCon
 	}
 	r.wg.Add(1)
 	go r.acceptLoop(ctx)
+	releaseOwner = false
 	return r, nil
 }
 
@@ -183,7 +199,7 @@ func (r *Router) acceptLoop(ctx context.Context) {
 		default:
 		}
 
-		in, err := r.ep.AcceptIncoming(ctx)
+		in, err := r.ep.acceptIncoming(ctx)
 		if err != nil {
 			// A cancelled context or a closed endpoint ends the loop cleanly.
 			if ctx.Err() != nil || errors.Is(err, ErrEndpointClosed) {
@@ -231,7 +247,9 @@ func (r *Router) acceptLoop(ctx context.Context) {
 			var err error
 			alpn, err = accepting.ALPN(ctx)
 			if err != nil {
-				r.logger.Warn("router: accepting ALPN failed", "err", err)
+				if !handlerShutdownErr(ctx, err) {
+					r.logger.Warn("router: accepting ALPN failed", "err", err)
+				}
 				return
 			}
 			handler, ok := r.handlers[alpn]
@@ -250,11 +268,18 @@ func (r *Router) acceptLoop(ctx context.Context) {
 				r.logger.Warn("router: on accepting failed", "alpn", alpn, "err", err)
 				return
 			}
-			if err := handler.Accept(ctx, conn); err != nil {
+			if err := handler.Accept(ctx, conn); err != nil && !handlerShutdownErr(ctx, err) {
 				r.logger.Warn("router: handler returned error", "alpn", conn.ALPN(), "err", err)
 			}
 		}(accepting)
 	}
+}
+
+func handlerShutdownErr(ctx context.Context, err error) bool {
+	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return true
+	}
+	return errors.Is(err, net.ErrClosed)
 }
 
 // Shutdown stops the router: it cancels the accept loop and all handler
@@ -270,6 +295,7 @@ func (r *Router) Shutdown(ctx context.Context) error {
 	}
 	r.shutdown = true
 	r.mu.Unlock()
+	defer r.ep.releaseAcceptOwner(acceptOwnerRouter)
 
 	if r.restoreSourceValidation != nil {
 		r.restoreSourceValidation()
