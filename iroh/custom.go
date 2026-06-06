@@ -29,6 +29,20 @@ type CustomTransport interface {
 	Send(remote netaddr.CustomAddr, local *netaddr.CustomAddr, p []byte) bool
 }
 
+// AdvertisingCustomTransport is a custom transport that can publish local
+// addresses in [Endpoint.Addr] and [Endpoint.WatchAddr].
+//
+// Existing [CustomTransport] implementations do not need to implement this
+// interface. Transports that do implement it must return only address material
+// that peers can dial through the same transport id.
+type AdvertisingCustomTransport interface {
+	CustomTransport
+
+	// LocalCustomAddrs returns the local custom addresses this endpoint should
+	// advertise. The returned slice is copied by the endpoint.
+	LocalCustomAddrs(context.Context) ([]netaddr.CustomAddr, error)
+}
+
 type customTransportAdapter struct {
 	t CustomTransport
 }
@@ -57,6 +71,22 @@ func customTransportAdapters(custom []CustomTransport) []socket.CustomTransport 
 		if t != nil {
 			out = append(out, customTransportAdapter{t: t})
 		}
+	}
+	return out
+}
+
+func customTransportLocalAddrs(ctx context.Context, custom []CustomTransport) []netaddr.CustomAddr {
+	var out []netaddr.CustomAddr
+	for _, t := range custom {
+		a, ok := t.(AdvertisingCustomTransport)
+		if !ok {
+			continue
+		}
+		addrs, err := a.LocalCustomAddrs(ctx)
+		if err != nil {
+			continue
+		}
+		out = append(out, addrs...)
 	}
 	return out
 }

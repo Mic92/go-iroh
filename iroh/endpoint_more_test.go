@@ -36,9 +36,11 @@ func withNetReportInterval(d time.Duration) Option {
 }
 
 type endpointFakeCustomTransport struct {
-	mu    sync.Mutex
-	sends []endpointFakeCustomSend
-	recv  chan CustomDatagram
+	mu      sync.Mutex
+	sends   []endpointFakeCustomSend
+	recv    chan CustomDatagram
+	addrs   []netaddr.CustomAddr
+	addrErr error
 }
 
 type endpointFakeCustomSend struct {
@@ -67,6 +69,13 @@ func (t *endpointFakeCustomTransport) Send(remote netaddr.CustomAddr, local *net
 	defer t.mu.Unlock()
 	t.sends = append(t.sends, endpointFakeCustomSend{remote: remote, data: append([]byte(nil), p...)})
 	return true
+}
+
+func (t *endpointFakeCustomTransport) LocalCustomAddrs(ctx context.Context) ([]netaddr.CustomAddr, error) {
+	_ = ctx
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return append([]netaddr.CustomAddr(nil), t.addrs...), t.addrErr
 }
 
 func (t *endpointFakeCustomTransport) lastSend() (endpointFakeCustomSend, bool) {
@@ -466,6 +475,68 @@ func TestEndpointWithCustomTransport(t *testing.T) {
 			t.Fatal("timed out waiting for custom send")
 		case <-time.After(time.Millisecond):
 		}
+	}
+}
+
+func TestEndpointAddrIncludesCustomTransportAddrs(t *testing.T) {
+	ctx := context.Background()
+	local := netaddr.NewCustomAddr(42, []byte("local-custom"))
+	custom := newEndpointFakeCustomTransport()
+	custom.addrs = []netaddr.CustomAddr{local}
+	ep, err := Bind(ctx, WithCustomTransport(custom))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Shutdown(ctx)
+
+	addr := ep.Addr()
+	if !slices.ContainsFunc(addr.Addrs(), func(a netaddr.TransportAddr) bool {
+		c, ok := a.(netaddr.CustomAddr)
+		return ok && c.String() == local.String()
+	}) {
+		t.Fatalf("Endpoint.Addr addrs = %v, want custom %v", addr.Addrs(), local)
+	}
+
+	w := ep.WatchAddr()
+	waddr, err := w.Updated(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(waddr.Addrs(), func(a netaddr.TransportAddr) bool {
+		c, ok := a.(netaddr.CustomAddr)
+		return ok && c.String() == local.String()
+	}) {
+		t.Fatalf("WatchAddr addrs = %v, want custom %v", waddr.Addrs(), local)
+	}
+}
+
+func TestEndpointDialTargetsIncludeCustomAddrs(t *testing.T) {
+	ctx := context.Background()
+	custom := newEndpointFakeCustomTransport()
+	ep, err := Bind(ctx, WithCustomTransport(custom), WithoutIPTransports(), WithoutRelayTransports())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Shutdown(ctx)
+
+	remoteKey, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := netaddr.NewCustomAddr(99, []byte("peer-fast"))
+	targets := ep.dialTargets(netaddr.NewEndpointAddr(remoteKey.Public().EndpointID()).WithAddrs(remote))
+	if len(targets) != 1 {
+		t.Fatalf("dialTargets len = %d, want 1: %v", len(targets), targets)
+	}
+	udp, ok := targets[0].(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("dial target type = %T, want *net.UDPAddr", targets[0])
+	}
+	if socket.Classify(udp.AddrPort().Addr()) != socket.KindCustom {
+		t.Fatalf("dial target = %v, want custom mapped address", udp)
+	}
+	if got, ok := ep.sock.LookupCustom(socket.CustomMappedAddrFromAddr(udp.AddrPort().Addr())); !ok || got.String() != remote.String() {
+		t.Fatalf("LookupCustom = %v, %v; want %v, true", got, ok, remote)
 	}
 }
 

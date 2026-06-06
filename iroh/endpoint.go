@@ -43,6 +43,7 @@ type Endpoint struct {
 	disableIP    bool
 	verifySource func(net.Addr) bool
 	hooks        []EndpointHooks
+	custom       []CustomTransport
 
 	// remotes is the per-remote state registry. The endpoint owns it: it
 	// registers every established connection so the actor for that remote can
@@ -400,6 +401,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		disableIP:    c.disableIP,
 		verifySource: c.verifySource,
 		hooks:        append([]EndpointHooks(nil), c.hooks...),
+		custom:       append([]CustomTransport(nil), c.custom...),
 		lookup:       c.lookup,
 		closedCh:     make(chan struct{}),
 		netReport:    endpointNetReportRunner(c, relayMap),
@@ -706,9 +708,9 @@ func equalAddrPorts(a, b []netip.AddrPort) bool {
 }
 
 // Addr returns the endpoint's [netaddr.EndpointAddr] from currently-known local
-// information: its id, the bound direct address, and (when relays are enabled
-// and a home relay is connected) its home relay URL. Later slices add reflexive
-// addresses.
+// information: its id, the bound direct address, any custom transport
+// addresses, and (when relays are enabled and a home relay is connected) its
+// home relay URL. Later slices add reflexive addresses.
 func (e *Endpoint) Addr() netaddr.EndpointAddr {
 	a := netaddr.NewEndpointAddr(e.ID())
 	if !e.disableIP {
@@ -721,6 +723,9 @@ func (e *Endpoint) Addr() netaddr.EndpointAddr {
 		for _, addr := range external {
 			a = a.WithIP(addr)
 		}
+	}
+	for _, addr := range e.localCustomAddrs(context.Background()) {
+		a = a.WithAddrs(addr)
 	}
 	if e.relay != nil {
 		if st := e.relay.HomeRelayStatus().Current(); st != nil {
@@ -759,12 +764,19 @@ func (e *Endpoint) addrLocked() netaddr.EndpointAddr {
 			a = a.WithIP(addr)
 		}
 	}
+	for _, addr := range e.localCustomAddrs(context.Background()) {
+		a = a.WithAddrs(addr)
+	}
 	if e.relay != nil {
 		if st := e.relay.HomeRelayStatus().Current(); st != nil {
 			a = a.WithRelayURL(st.URL)
 		}
 	}
 	return a
+}
+
+func (e *Endpoint) localCustomAddrs(ctx context.Context) []netaddr.CustomAddr {
+	return customTransportLocalAddrs(ctx, e.custom)
 }
 
 func equalTransportAddrs(a, b []netaddr.TransportAddr) bool {
@@ -978,16 +990,24 @@ func (e *Endpoint) Dial(ctx context.Context, addr netaddr.EndpointAddr, alpn str
 }
 
 // dialTargets returns the ordered net.Addr dial targets for addr: real UDP
-// addresses for direct IPs, then relay mapped addresses (when relays are
-// enabled) for each relay URL. Each relay target is registered in the
-// mapped-address table so the magic socket routes its QUIC packets to the relay
-// transport.
+// addresses for direct IPs, custom mapped addresses, then relay mapped
+// addresses (when relays are enabled). Each mapped target is registered in the
+// mapped-address table so the magic socket routes its QUIC packets to the
+// selected transport.
 func (e *Endpoint) dialTargets(addr netaddr.EndpointAddr) []net.Addr {
 	var targets []net.Addr
 	if !e.disableIP {
 		for _, ip := range addr.IPAddrs() {
 			targets = append(targets, net.UDPAddrFromAddrPort(ip))
 		}
+	}
+	for _, ta := range addr.Addrs() {
+		c, ok := ta.(netaddr.CustomAddr)
+		if !ok {
+			continue
+		}
+		m := e.sock.CustomMappedAddrFor(c)
+		targets = append(targets, net.UDPAddrFromAddrPort(m.AddrPort()))
 	}
 	if e.relay != nil {
 		for _, u := range addr.RelayURLs() {
