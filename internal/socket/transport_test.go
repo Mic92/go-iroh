@@ -20,6 +20,58 @@ type fakeCustomTransport struct {
 	recv  chan socket.CustomDatagram
 }
 
+type fakePacketTransport struct {
+	fakeCustomTransport
+
+	packetRecv chan socket.Packet
+
+	mu          sync.Mutex
+	packetSends []fakeCustomSend
+}
+
+func newFakePacketTransport() *fakePacketTransport {
+	return &fakePacketTransport{
+		fakeCustomTransport: *newFakeCustomTransport(),
+		packetRecv:          make(chan socket.Packet, 4),
+	}
+}
+
+func (t *fakePacketTransport) ServePackets(ctx context.Context, recv func(socket.Packet) bool) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case p := <-t.packetRecv:
+			recv(p)
+		}
+	}
+}
+
+func (t *fakePacketTransport) SendPacket(remote netaddr.CustomAddr, local *netaddr.CustomAddr, p []byte) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var localCopy *netaddr.CustomAddr
+	if local != nil {
+		v := *local
+		localCopy = &v
+	}
+	t.packetSends = append(t.packetSends, fakeCustomSend{
+		remote: remote,
+		local:  localCopy,
+		data:   append([]byte(nil), p...),
+	})
+	return true
+}
+
+func (t *fakePacketTransport) lastPacketSend() (fakeCustomSend, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.packetSends) == 0 {
+		return fakeCustomSend{}, false
+	}
+	return t.packetSends[len(t.packetSends)-1], true
+}
+
 type fakeCustomSend struct {
 	remote netaddr.CustomAddr
 	local  *netaddr.CustomAddr
@@ -282,6 +334,97 @@ func TestMagicConnCustomRecvRewrite(t *testing.T) {
 	}
 	if got, ok := sock.LookupCustom(socket.CustomMappedAddrFromAddr(udpAddr.AddrPort().Addr())); !ok || got.String() != remote.String() {
 		t.Fatalf("LookupCustom = %v, %v; want %v", got, ok, remote)
+	}
+}
+
+func TestMagicConnPacketTransportRecvReleasesBuffer(t *testing.T) {
+	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+
+	sock := socket.NewSocket()
+	packet := newFakePacketTransport()
+	m := socket.NewMagicConnWithTransports(sock, udp, nil, packet)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Serve(ctx)
+	defer m.Close()
+
+	remote := netaddr.NewCustomAddr(12, []byte("packet-peer"))
+	const payload = "packet-recv"
+	freed := make(chan struct{})
+	packet.packetRecv <- socket.Packet{
+		Remote: remote,
+		Data:   []byte(payload),
+		Free:   func() { close(freed) },
+	}
+
+	m.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 64)
+	n, _, err := m.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("ReadFrom: %v", err)
+	}
+	if string(buf[:n]) != payload {
+		t.Fatalf("payload = %q, want %q", buf[:n], payload)
+	}
+	select {
+	case <-freed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for packet buffer release")
+	}
+}
+
+func TestMagicConnPacketTransportSendUsesPacketPath(t *testing.T) {
+	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(
+		netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer udp.Close()
+
+	sock := socket.NewSocket()
+	packet := newFakePacketTransport()
+	m := socket.NewMagicConnWithTransports(sock, udp, nil, packet)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go m.Serve(ctx)
+	defer m.Close()
+
+	remote := netaddr.NewCustomAddr(13, []byte("packet-send"))
+	mapped := sock.CustomMappedAddrFor(remote)
+	const payload = "packet-send"
+	n, err := m.WriteTo([]byte(payload), net.UDPAddrFromAddrPort(mapped.AddrPort()))
+	if err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("WriteTo n = %d, want %d", n, len(payload))
+	}
+
+	deadline := time.After(2 * time.Second)
+	for {
+		send, ok := packet.lastPacketSend()
+		if ok {
+			if send.remote.String() != remote.String() {
+				t.Fatalf("send remote = %v, want %v", send.remote, remote)
+			}
+			if string(send.data) != payload {
+				t.Fatalf("send data = %q, want %q", send.data, payload)
+			}
+			if _, ok := packet.lastSend(); ok {
+				t.Fatal("compatibility Send was called for packet transport")
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for packet send")
+		case <-time.After(time.Millisecond):
+		}
 	}
 }
 

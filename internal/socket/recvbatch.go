@@ -104,10 +104,14 @@ type recvBatch struct {
 	info      RecvInfo
 	ip        netip.AddrPort
 	releaseIP bool
+	releaseFn func()
 }
 
 func (b recvBatch) release() {
 	if b.releaseIP {
 		putIPRecvBuffer(b.data)
+	}
+	if b.releaseFn != nil {
+		b.releaseFn()
 	}
 }
