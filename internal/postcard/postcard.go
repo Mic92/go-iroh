@@ -15,6 +15,16 @@ type Marshaler interface {
 	MarshalPostcard() ([]byte, error)
 }
 
+// EncoderTo is implemented by values that encode themselves to e.
+type EncoderTo interface {
+	EncodePostcard(*Encoder) error
+}
+
+// DecoderFrom is implemented by values that decode themselves from d.
+type DecoderFrom interface {
+	DecodePostcard(*Decoder) error
+}
+
 var (
 	// ErrTrailingBytes is returned when Unmarshal does not consume all input.
 	ErrTrailingBytes = errors.New("postcard: trailing bytes")
@@ -23,7 +33,7 @@ var (
 
 // Marshal encodes v in postcard format.
 func Marshal(v any) ([]byte, error) {
-	var e encoder
+	var e Encoder
 	if err := e.value(reflect.ValueOf(v)); err != nil {
 		return nil, err
 	}
@@ -35,7 +45,7 @@ func Unmarshal(data []byte, v any) error {
 	if v == nil {
 		return errors.New("postcard: nil target")
 	}
-	d := decoder{b: data}
+	d := Decoder{b: data}
 	rv := reflect.ValueOf(v)
 	if rv.Kind() != reflect.Pointer || rv.IsNil() {
 		return errors.New("postcard: target must be non-nil pointer")
@@ -49,11 +59,44 @@ func Unmarshal(data []byte, v any) error {
 	return nil
 }
 
-type encoder struct {
+// Encoder incrementally encodes postcard values.
+type Encoder struct {
 	b []byte
 }
 
-func (e *encoder) value(v reflect.Value) error {
+// Encode appends v to e.
+func (e *Encoder) Encode(v any) error {
+	return e.value(reflect.ValueOf(v))
+}
+
+// Bytes returns a copy of the encoded bytes.
+func (e *Encoder) Bytes() []byte { return append([]byte(nil), e.b...) }
+
+// Uint appends v as a postcard unsigned integer.
+func (e *Encoder) Uint(v uint64) { e.b = appendVarint(e.b, v) }
+
+// Int appends v as a postcard signed integer.
+func (e *Encoder) Int(v int64) { e.b = appendVarint(e.b, zigzag(v)) }
+
+// Bool appends v as a postcard bool.
+func (e *Encoder) Bool(v bool) {
+	if v {
+		e.b = append(e.b, 1)
+	} else {
+		e.b = append(e.b, 0)
+	}
+}
+
+// BytesValue appends b as a postcard byte sequence.
+func (e *Encoder) BytesValue(b []byte) {
+	e.b = appendVarint(e.b, uint64(len(b)))
+	e.b = append(e.b, b...)
+}
+
+// String appends s as a postcard string.
+func (e *Encoder) String(s string) { e.BytesValue([]byte(s)) }
+
+func (e *Encoder) value(v reflect.Value) error {
 	if !v.IsValid() {
 		return errors.New("postcard: invalid value")
 	}
@@ -69,6 +112,9 @@ func (e *encoder) value(v reflect.Value) error {
 			e.b = append(e.b, b...)
 			return nil
 		}
+		if m, ok := v.Interface().(EncoderTo); ok {
+			return m.EncodePostcard(e)
+		}
 		if tm, ok := v.Interface().(encoding.TextMarshaler); ok && v.Kind() == reflect.String {
 			b, err := tm.MarshalText()
 			if err != nil {
@@ -80,19 +126,17 @@ func (e *encoder) value(v reflect.Value) error {
 	switch v.Kind() {
 	case reflect.Pointer:
 		if v.IsNil() {
-			return errors.New("postcard: nil pointer")
+			e.b = append(e.b, 0)
+			return nil
 		}
+		e.b = append(e.b, 1)
 		return e.value(v.Elem())
 	case reflect.Bool:
-		if v.Bool() {
-			e.b = append(e.b, 1)
-		} else {
-			e.b = append(e.b, 0)
-		}
+		e.Bool(v.Bool())
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		e.b = appendVarint(e.b, v.Uint())
+		e.Uint(v.Uint())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		e.b = appendVarint(e.b, zigzag(v.Int()))
+		e.Int(v.Int())
 	case reflect.String:
 		return e.bytes([]byte(v.String()))
 	case reflect.Array:
@@ -138,40 +182,108 @@ func (e *encoder) value(v reflect.Value) error {
 	return nil
 }
 
-func (e *encoder) bytes(b []byte) error {
+func (e *Encoder) bytes(b []byte) error {
 	e.b = appendVarint(e.b, uint64(len(b)))
 	e.b = append(e.b, b...)
 	return nil
 }
 
-type decoder struct {
+// Decoder incrementally decodes postcard values.
+type Decoder struct {
 	b   []byte
 	off int
 }
 
-func (d *decoder) value(v reflect.Value) error {
+// NewDecoder returns a decoder reading b.
+func NewDecoder(b []byte) *Decoder { return &Decoder{b: b} }
+
+// Decode decodes the next postcard value into v.
+func (d *Decoder) Decode(v any) error {
+	if v == nil {
+		return errors.New("postcard: nil target")
+	}
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return errors.New("postcard: target must be non-nil pointer")
+	}
+	return d.value(rv.Elem())
+}
+
+// Done reports whether d consumed all input.
+func (d *Decoder) Done() bool { return d.off == len(d.b) }
+
+// Uint decodes a postcard unsigned integer.
+func (d *Decoder) Uint() (uint64, error) { return d.varint() }
+
+// Int decodes a postcard signed integer.
+func (d *Decoder) Int() (int64, error) {
+	x, err := d.varint()
+	if err != nil {
+		return 0, err
+	}
+	return unzigzag(x), nil
+}
+
+// Bool decodes a postcard bool.
+func (d *Decoder) Bool() (bool, error) {
+	x, err := d.byte()
+	if err != nil {
+		return false, err
+	}
+	switch x {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	default:
+		return false, fmt.Errorf("postcard: invalid bool %d", x)
+	}
+}
+
+// BytesValue decodes a postcard byte sequence.
+func (d *Decoder) BytesValue() ([]byte, error) { return d.bytes() }
+
+// String decodes a postcard string.
+func (d *Decoder) String() (string, error) {
+	b, err := d.bytes()
+	if err != nil {
+		return "", err
+	}
+	if !utf8.Valid(b) {
+		return "", fmt.Errorf("postcard: invalid utf-8 string")
+	}
+	return string(b), nil
+}
+
+func (d *Decoder) value(v reflect.Value) error {
 	if !v.CanSet() {
 		return fmt.Errorf("postcard: cannot set %s", v.Type())
 	}
+	if v.CanAddr() {
+		if u, ok := v.Addr().Interface().(DecoderFrom); ok {
+			return u.DecodePostcard(d)
+		}
+	}
 	switch v.Kind() {
 	case reflect.Pointer:
+		ok, err := d.option()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			v.SetZero()
+			return nil
+		}
 		if v.IsNil() {
 			v.Set(reflect.New(v.Type().Elem()))
 		}
 		return d.value(v.Elem())
 	case reflect.Bool:
-		x, err := d.byte()
+		x, err := d.Bool()
 		if err != nil {
 			return err
 		}
-		switch x {
-		case 0:
-			v.SetBool(false)
-		case 1:
-			v.SetBool(true)
-		default:
-			return fmt.Errorf("postcard: invalid bool %d", x)
-		}
+		v.SetBool(x)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		x, err := d.varint()
 		if err != nil {
@@ -182,24 +294,20 @@ func (d *decoder) value(v reflect.Value) error {
 		}
 		v.SetUint(x)
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		x, err := d.varint()
+		i, err := d.Int()
 		if err != nil {
 			return err
 		}
-		i := unzigzag(x)
 		if v.OverflowInt(i) {
 			return fmt.Errorf("postcard: %d overflows %s", i, v.Type())
 		}
 		v.SetInt(i)
 	case reflect.String:
-		b, err := d.bytes()
+		s, err := d.String()
 		if err != nil {
 			return err
 		}
-		if !utf8.Valid(b) {
-			return fmt.Errorf("postcard: invalid utf-8 string")
-		}
-		v.SetString(string(b))
+		v.SetString(s)
 	case reflect.Array:
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			if d.off+v.Len() > len(d.b) {
@@ -254,7 +362,7 @@ func (d *decoder) value(v reflect.Value) error {
 	return nil
 }
 
-func (d *decoder) byte() (byte, error) {
+func (d *Decoder) byte() (byte, error) {
 	if d.off >= len(d.b) {
 		return 0, errShort
 	}
@@ -263,7 +371,7 @@ func (d *decoder) byte() (byte, error) {
 	return x, nil
 }
 
-func (d *decoder) bytes() ([]byte, error) {
+func (d *Decoder) bytes() ([]byte, error) {
 	n, err := d.varint()
 	if err != nil {
 		return nil, err
@@ -276,7 +384,22 @@ func (d *decoder) bytes() ([]byte, error) {
 	return b, nil
 }
 
-func (d *decoder) varint() (uint64, error) {
+func (d *Decoder) option() (bool, error) {
+	x, err := d.byte()
+	if err != nil {
+		return false, err
+	}
+	switch x {
+	case 0:
+		return false, nil
+	case 1:
+		return true, nil
+	default:
+		return false, fmt.Errorf("postcard: invalid option %d", x)
+	}
+}
+
+func (d *Decoder) varint() (uint64, error) {
 	x, n, err := readVarint(d.b[d.off:])
 	if err != nil {
 		return 0, err

@@ -54,6 +54,56 @@ type query struct {
 	Flags   queryFlags
 }
 
+type maybeU16 struct {
+	Value *uint16
+}
+
+type testMessage struct {
+	Kind uint64
+	One  uint16
+	Pair struct {
+		A uint8
+		B *uint8
+	}
+	Many []uint16
+}
+
+func (m testMessage) EncodePostcard(e *Encoder) error {
+	e.Uint(m.Kind)
+	switch m.Kind {
+	case 0:
+		return nil
+	case 1:
+		return e.Encode(m.One)
+	case 2:
+		return e.Encode(m.Pair)
+	case 3:
+		return e.Encode(m.Many)
+	default:
+		return nil
+	}
+}
+
+func (m *testMessage) DecodePostcard(d *Decoder) error {
+	kind, err := d.Uint()
+	if err != nil {
+		return err
+	}
+	m.Kind = kind
+	switch kind {
+	case 0:
+		return nil
+	case 1:
+		return d.Decode(&m.One)
+	case 2:
+		return d.Decode(&m.Pair)
+	case 3:
+		return d.Decode(&m.Many)
+	default:
+		return nil
+	}
+}
+
 func TestRustVectors(t *testing.T) {
 	var fixed [4]byte
 	copy(fixed[:], []byte{9, 8, 7, 6})
@@ -127,6 +177,46 @@ func TestRustVectors(t *testing.T) {
 	}
 }
 
+func TestOptionAndEnumRustVectors(t *testing.T) {
+	u300 := uint16(300)
+	u9 := uint8(9)
+	pair := struct {
+		A uint8
+		B *uint8
+	}{A: 7, B: &u9}
+
+	tests := []struct {
+		name string
+		v    any
+		hex  string
+	}{
+		{name: "option none", v: maybeU16{}, hex: "00"},
+		{name: "option some", v: maybeU16{Value: &u300}, hex: "01ac02"},
+		{name: "enum unit", v: testMessage{Kind: 0}, hex: "00"},
+		{name: "enum one", v: testMessage{Kind: 1, One: 300}, hex: "01ac02"},
+		{name: "enum pair", v: testMessage{Kind: 2, Pair: pair}, hex: "02070109"},
+		{name: "enum many", v: testMessage{Kind: 3, Many: []uint16{1, 300, 40000}}, hex: "030301ac02c0b802"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Marshal(tt.v)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if hex.EncodeToString(got) != tt.hex {
+				t.Fatalf("Marshal = %x, want %s", got, tt.hex)
+			}
+			dst := reflect.New(reflect.TypeOf(tt.v)).Interface()
+			if err := Unmarshal(got, dst); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(reflect.ValueOf(dst).Elem().Interface(), tt.v) {
+				t.Fatalf("round trip = %#v, want %#v", reflect.ValueOf(dst).Elem().Interface(), tt.v)
+			}
+		})
+	}
+}
+
 func TestUnmarshalErrors(t *testing.T) {
 	var u uint64
 	if err := Unmarshal([]byte{0x80}, &u); !errors.Is(err, errShort) {
@@ -142,5 +232,9 @@ func TestUnmarshalErrors(t *testing.T) {
 	var s string
 	if err := Unmarshal([]byte{1, 0xff}, &s); err == nil {
 		t.Fatal("Unmarshal accepted invalid UTF-8")
+	}
+	var p *uint8
+	if err := Unmarshal([]byte{2}, &p); err == nil {
+		t.Fatal("Unmarshal accepted invalid option")
 	}
 }
