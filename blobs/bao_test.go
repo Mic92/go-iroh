@@ -14,6 +14,8 @@ func TestSingleLeafRoundTrip(t *testing.T) {
 		{name: "empty", data: nil},
 		{name: "small", data: []byte("hello from iroh-blobs")},
 		{name: "chunk", data: repeatByte(0xab, ChunkSize)},
+		{name: "multi chunk block", data: repeatByte(0xcd, 2*ChunkSize+17)},
+		{name: "block", data: repeatByte(0xef, BlockSize)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -48,7 +50,7 @@ func TestSingleLeafRoundTrip(t *testing.T) {
 }
 
 func TestSingleLeafErrors(t *testing.T) {
-	if _, _, err := EncodeSingleLeaf(repeatByte(0, ChunkSize+1)); !errors.Is(err, ErrSingleLeafTooLarge) {
+	if _, _, err := EncodeSingleLeaf(repeatByte(0, BlockSize+1)); !errors.Is(err, ErrSingleLeafTooLarge) {
 		t.Fatalf("EncodeSingleLeaf too large error = %v", err)
 	}
 	hash := NewHash([]byte("ok"))
@@ -56,7 +58,7 @@ func TestSingleLeafErrors(t *testing.T) {
 		t.Fatalf("DecodeSingleLeaf truncated error = %v", err)
 	}
 	encoded := make([]byte, 8)
-	binary.LittleEndian.PutUint64(encoded, ChunkSize+1)
+	binary.LittleEndian.PutUint64(encoded, BlockSize+1)
 	if _, err := DecodeSingleLeaf(hash, encoded); !errors.Is(err, ErrSingleLeafTooLarge) {
 		t.Fatalf("DecodeSingleLeaf too large error = %v", err)
 	}

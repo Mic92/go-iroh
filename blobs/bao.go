@@ -9,9 +9,11 @@ import (
 const (
 	// ChunkSize is the BLAKE3 chunk size used by iroh-blobs.
 	ChunkSize = 1024
+	// BlockSize is the iroh-blobs BAO block size.
+	BlockSize = 16 * ChunkSize
 	// MaxSingleLeafSize is the largest payload accepted by the single-leaf
 	// BAO helpers.
-	MaxSingleLeafSize = ChunkSize
+	MaxSingleLeafSize = BlockSize
 )
 
 var (
@@ -25,9 +27,9 @@ var (
 
 // EncodeSingleLeaf returns the Rust-compatible full-range BAO response for data.
 //
-// The single-leaf encoding is valid only for blobs up to one BLAKE3 chunk. The
-// response bytes are an 8-byte little-endian size prefix followed by data. The
-// returned hash is the BLAKE3 hash of data.
+// The single-leaf encoding is valid only for blobs up to one iroh-blobs BAO
+// block. The response bytes are an 8-byte little-endian size prefix followed by
+// data. The returned hash is the BLAKE3 hash of data.
 func EncodeSingleLeaf(data []byte) (Hash, []byte, error) {
 	if len(data) > MaxSingleLeafSize {
 		return Hash{}, nil, fmt.Errorf("%w: %d > %d", ErrSingleLeafTooLarge, len(data), MaxSingleLeafSize)
@@ -41,8 +43,8 @@ func EncodeSingleLeaf(data []byte) (Hash, []byte, error) {
 // DecodeSingleLeaf validates and decodes a Rust-compatible single-leaf BAO
 // response.
 //
-// It accepts only full-range responses for blobs up to one BLAKE3 chunk. Larger
-// blobs require parent hashes and the full BAO tree decoder.
+// It accepts only full-range responses for blobs up to one iroh-blobs BAO block.
+// Larger blobs require parent hashes and the full BAO tree decoder.
 func DecodeSingleLeaf(expected Hash, encoded []byte) ([]byte, error) {
 	if len(encoded) < 8 {
 		return nil, fmt.Errorf("%w: truncated size prefix", ErrInvalidSingleLeaf)

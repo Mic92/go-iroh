@@ -20,7 +20,7 @@ type BidiStream interface {
 	Close() error
 }
 
-// SingleLeafStore stores raw blobs that fit in one BLAKE3 chunk.
+// SingleLeafStore stores raw blobs that fit in one iroh-blobs BAO block.
 type SingleLeafStore interface {
 	GetBlob(Hash) ([]byte, bool)
 }
