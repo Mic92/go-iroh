@@ -84,6 +84,15 @@ func (i Item) EndpointID() key.EndpointID { return i.info.ID }
 // EndpointInfo returns the discovered endpoint info.
 func (i Item) EndpointInfo() dns.EndpointInfo { return i.info }
 
+// UserData returns the discovered user data, if set.
+func (i Item) UserData() (dns.UserData, bool) {
+	u := i.info.Data.UserData()
+	if u == nil {
+		return dns.UserData{}, false
+	}
+	return *u, true
+}
+
 // Provenance returns a stable string identifying the lookup source that
 // produced this item, such as "pkarr", "dns", or "memory_lookup".
 func (i Item) Provenance() string { return i.provenance }

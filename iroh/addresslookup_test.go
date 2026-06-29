@@ -3,6 +3,7 @@ package iroh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
 	"net/http"
@@ -133,6 +134,50 @@ func TestItemLastUpdatedTime(t *testing.T) {
 	if got, ok := unknown.LastUpdatedTime(); ok || !got.IsZero() {
 		t.Fatalf("unknown LastUpdatedTime = %v, %v; want zero, false", got, ok)
 	}
+}
+
+func TestItemUserData(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	info := endpointInfoWithIP(sk.Public().EndpointID(), netip.MustParseAddrPort("127.0.0.1:1"))
+	ud, err := dns.NewUserData("hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info.Data.SetUserData(&ud)
+
+	tests := []struct {
+		name string
+		item Item
+		want string
+		ok   bool
+	}{
+		{"set", NewItem(info, "test", nil), "hello", true},
+		{"unset", NewItem(endpointInfoWithIP(sk.Public().EndpointID(), netip.MustParseAddrPort("127.0.0.1:2")), "test", nil), "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := tt.item.UserData()
+			if ok != tt.ok {
+				t.Fatalf("UserData ok = %v, want %v", ok, tt.ok)
+			}
+			if got.String() != tt.want {
+				t.Fatalf("UserData = %q, want %q", got.String(), tt.want)
+			}
+		})
+	}
+}
+
+func ExampleItem_UserData() {
+	sk, _ := key.GenerateSecretKey()
+	info := endpointInfoWithIP(sk.Public().EndpointID(), netip.MustParseAddrPort("127.0.0.1:1"))
+	ud, _ := dns.NewUserData("room=alpha")
+	info.Data.SetUserData(&ud)
+
+	item := NewItem(info, "memory", nil)
+	got, ok := item.UserData()
+	fmt.Println(ok, got.String())
+	// Output:
+	// true room=alpha
 }
 
 func TestMemoryLookupAddMerges(t *testing.T) {
