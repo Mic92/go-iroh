@@ -62,6 +62,14 @@ func TestRustWireVectors(t *testing.T) {
 			hex: "02404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f01404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f010301020309",
 		},
 		{
+			name: "shuffle reply",
+			v: HyparviewMessage{
+				Kind:         HyparviewShuffleReply,
+				ShuffleReply: ShuffleReply{Nodes: []PeerInfo{peerInfo}},
+			},
+			hex: "0301404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f0103010203",
+		},
+		{
 			name: "disconnect",
 			v:    HyparviewMessage{Kind: HyparviewDisconnect, Disconnect: Disconnect{Alive: true}},
 			hex:  "050100",

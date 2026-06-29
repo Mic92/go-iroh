@@ -3,6 +3,7 @@ package gossipproto
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"io"
 	"reflect"
@@ -46,6 +47,47 @@ func TestFrameRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotMessage, msg.Message) {
 		t.Fatalf("message = %#v, want %#v", gotMessage, msg.Message)
+	}
+}
+
+func TestRustFrameVectors(t *testing.T) {
+	topic := TopicID(seq32(0))
+	tests := []struct {
+		name string
+		v    any
+		hex  string
+	}{
+		{
+			name: "stream header",
+			v:    StreamHeader{Topic: topic},
+			hex:  "00000020000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+		},
+		{
+			name: "topic prune",
+			v: TopicMessage{
+				Kind:   TopicMessageGossip,
+				Gossip: PlumtreeMessage{Kind: PlumtreePrune},
+			},
+			hex: "000000020101",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if err := WriteFrame(&buf, tt.v, DefaultMaxMessageSize); err != nil {
+				t.Fatalf("WriteFrame: %v", err)
+			}
+			if got := hex.EncodeToString(buf.Bytes()); got != tt.hex {
+				t.Fatalf("frame = %s, want %s", got, tt.hex)
+			}
+			dst := reflect.New(reflect.TypeOf(tt.v)).Interface()
+			if err := ReadFrame(&buf, dst, DefaultMaxMessageSize); err != nil {
+				t.Fatalf("ReadFrame: %v", err)
+			}
+			if !reflect.DeepEqual(reflect.ValueOf(dst).Elem().Interface(), tt.v) {
+				t.Fatalf("round trip = %#v, want %#v", reflect.ValueOf(dst).Elem().Interface(), tt.v)
+			}
+		})
 	}
 }
 
