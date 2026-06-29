@@ -53,14 +53,71 @@ func (s *MemoryStore) GetExact(namespace NamespaceID, author AuthorID, key []byt
 func (s *MemoryStore) Entries() []SignedEntry {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.entriesLocked()
+}
 
+// GetRange returns entries whose identifiers are in r.
+func (s *MemoryStore) GetRange(r Range) []SignedEntry {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.getRangeLocked(r)
+}
+
+func (s *MemoryStore) getRangeLocked(r Range) []SignedEntry {
+	var entries []SignedEntry
+	for _, entry := range s.entries {
+		if r.Contains(entry.Entry.ID) {
+			entries = append(entries, entry)
+		}
+	}
+	sortEntries(entries)
+	return entries
+}
+
+// Fingerprint returns the fingerprint of entries in r.
+func (s *MemoryStore) Fingerprint(r Range) Fingerprint {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.fingerprintLocked(r)
+}
+
+// InitialMessage returns the Rust range reconciliation initial message.
+func (s *MemoryStore) InitialMessage() Message {
+	s.mu.RLock()
+	entries := s.entriesLocked()
+	var first RecordIdentifier
+	if len(entries) != 0 {
+		first = entries[0].Entry.ID
+	}
+	r := NewRange(first, first)
+	fingerprint := s.fingerprintLocked(r)
+	s.mu.RUnlock()
+
+	return Message{Parts: []MessagePart{{
+		Kind: MessagePartRangeFingerprint,
+		RangeFingerprint: RangeFingerprint{
+			Range:       r,
+			Fingerprint: fingerprint,
+		},
+	}}}
+}
+
+func (s *MemoryStore) fingerprintLocked(r Range) Fingerprint {
+	fp := EmptyFingerprint()
+	for _, entry := range s.getRangeLocked(r) {
+		fp.Xor(Fingerprint(entry.Fingerprint()))
+	}
+	return fp
+}
+
+func (s *MemoryStore) entriesLocked() []SignedEntry {
 	entries := make([]SignedEntry, 0, len(s.entries))
 	for _, entry := range s.entries {
 		entries = append(entries, entry)
 	}
-	slices.SortFunc(entries, func(a, b SignedEntry) int {
-		return a.Compare(b)
-	})
+	sortEntries(entries)
 	return entries
 }
 
@@ -92,4 +149,10 @@ func (s *MemoryStore) Put(entry SignedEntry) InsertOutcome {
 
 func hasEntryPrefix(id, prefix RecordIdentifier) bool {
 	return id.namespace == prefix.namespace && id.author == prefix.author && bytes.HasPrefix(id.key, prefix.key)
+}
+
+func sortEntries(entries []SignedEntry) {
+	slices.SortFunc(entries, func(a, b SignedEntry) int {
+		return a.Compare(b)
+	})
 }
