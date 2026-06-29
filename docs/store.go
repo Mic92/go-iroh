@@ -240,8 +240,21 @@ func (s *MemoryStore) Put(entry SignedEntry) InsertOutcome {
 	return s.PutWithOrigin(entry, InsertOrigin{Kind: InsertOriginLocal})
 }
 
+func (s *MemoryStore) put(entry SignedEntry) InsertOutcome {
+	outcome, _, _ := s.putEntry(entry, InsertOrigin{}, false)
+	return outcome
+}
+
 // PutWithOrigin inserts entry with origin metadata for subscribers.
 func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) InsertOutcome {
+	outcome, event, events := s.putEntry(entry, origin, true)
+	if outcome.Inserted() && events != nil {
+		events.Send(event)
+	}
+	return outcome
+}
+
+func (s *MemoryStore) putEntry(entry SignedEntry, origin InsertOrigin, notify bool) (InsertOutcome, StoreEvent, *storeWatcher) {
 	s.mu.Lock()
 
 	if s.entries == nil {
@@ -252,7 +265,7 @@ func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) Inse
 	for _, existing := range s.entries {
 		if hasEntryPrefix(id, existing.Entry.ID) && entry.Entry.Record.Compare(existing.Entry.Record) <= 0 {
 			s.mu.Unlock()
-			return InsertOutcome{}
+			return InsertOutcome{}, StoreEvent{}, nil
 		}
 	}
 	removed := 0
@@ -263,22 +276,24 @@ func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) Inse
 		}
 	}
 	s.entries[string(key)] = entry
-	s.seq++
-	event := StoreEvent{
-		Kind:          storeEventKind(origin.Kind),
-		Sequence:      s.seq,
-		Entry:         entry,
-		Removed:       removed,
-		From:          origin.From,
-		ContentStatus: origin.ContentStatus,
+	outcome := InsertOutcome{inserted: true, removed: removed}
+	var event StoreEvent
+	var events *storeWatcher
+	if notify {
+		s.seq++
+		event = StoreEvent{
+			Kind:          storeEventKind(origin.Kind),
+			Sequence:      s.seq,
+			Entry:         entry,
+			Removed:       removed,
+			From:          origin.From,
+			ContentStatus: origin.ContentStatus,
+		}
+		events = s.events
 	}
-	events := s.events
 	s.mu.Unlock()
 
-	if events != nil {
-		events.Send(event)
-	}
-	return InsertOutcome{inserted: true, removed: removed}
+	return outcome, event, events
 }
 
 // InsertOriginKind tags the origin of a store insert.
