@@ -1,6 +1,9 @@
 package gossipproto
 
-import "time"
+import (
+	"math/rand"
+	"time"
+)
 
 // TopicConfig configures one gossip topic state machine.
 type TopicConfig struct {
@@ -127,12 +130,18 @@ type TopicState struct {
 
 // NewTopicState returns a state machine for one topic.
 func NewTopicState(me PeerID, data *PeerData, config TopicConfig) *TopicState {
+	return NewTopicStateWithRand(me, data, config, nil)
+}
+
+// NewTopicStateWithRand returns a state machine for one topic using r for
+// HyParView peer selection.
+func NewTopicStateWithRand(me PeerID, data *PeerData, config TopicConfig, r *rand.Rand) *TopicState {
 	if config == (TopicConfig{}) {
 		config = DefaultTopicConfig()
 	}
 	return &TopicState{
 		me:     me,
-		swarm:  NewHyparviewState(me, data, config.Membership),
+		swarm:  NewHyparviewStateWithRand(me, data, config.Membership, r),
 		gossip: NewPlumtreeState(me, config.Broadcast),
 	}
 }

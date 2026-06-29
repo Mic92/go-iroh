@@ -1,6 +1,9 @@
 package gossipproto
 
-import "time"
+import (
+	"math/rand"
+	"time"
+)
 
 // Config configures the gossip protocol state machine.
 type Config struct {
@@ -74,14 +77,24 @@ type State struct {
 	me         PeerID
 	meData     PeerData
 	config     Config
+	rand       *rand.Rand
 	topics     map[TopicID]*TopicState
 	peerTopics map[PeerID]map[TopicID]struct{}
 }
 
 // NewState returns a gossip protocol state machine.
 func NewState(me PeerID, data PeerData, config Config) *State {
+	return NewStateWithRand(me, data, config, nil)
+}
+
+// NewStateWithRand returns a gossip protocol state machine using r to seed
+// per-topic HyParView peer selection.
+func NewStateWithRand(me PeerID, data PeerData, config Config, r *rand.Rand) *State {
 	if config == (Config{}) {
 		config = DefaultConfig()
+	}
+	if r == nil {
+		r = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
 	config.MaxMessageSize = NormalizeMaxMessageSize(config.MaxMessageSize)
 	config.Topic.Broadcast.MaxPayloadSize = MaxPayloadSize(config.MaxMessageSize)
@@ -89,6 +102,7 @@ func NewState(me PeerID, data PeerData, config Config) *State {
 		me:         me,
 		meData:     clonePeerData(data),
 		config:     config,
+		rand:       r,
 		topics:     map[TopicID]*TopicState{},
 		peerTopics: map[PeerID]map[TopicID]struct{}{},
 	}
@@ -123,7 +137,7 @@ func (s *State) Handle(ev InEvent) []OutEvent {
 		if ev.Command.Kind == TopicCommandJoin {
 			if _, ok := s.topics[ev.Topic]; !ok {
 				data := clonePeerData(s.meData)
-				s.topics[ev.Topic] = NewTopicState(s.me, &data, s.config.Topic)
+				s.topics[ev.Topic] = NewTopicStateWithRand(s.me, &data, s.config.Topic, rand.New(rand.NewSource(s.rand.Int63())))
 			}
 		}
 		quit := ev.Command.Kind == TopicCommandQuit

@@ -1,6 +1,9 @@
 package gossipproto
 
-import "time"
+import (
+	"math/rand"
+	"time"
+)
 
 // HyparviewConfig configures the HyParView membership state machine.
 type HyparviewConfig struct {
@@ -112,6 +115,7 @@ type HyparviewState struct {
 	me     PeerID
 	meData *PeerData
 	config HyparviewConfig
+	rand   *rand.Rand
 
 	active  peerList
 	passive peerList
@@ -126,13 +130,23 @@ type HyparviewState struct {
 
 // NewHyparviewState returns a HyParView state machine for me.
 func NewHyparviewState(me PeerID, data *PeerData, config HyparviewConfig) *HyparviewState {
+	return NewHyparviewStateWithRand(me, data, config, nil)
+}
+
+// NewHyparviewStateWithRand returns a HyParView state machine using r for peer
+// selection. A nil r uses a process-local random source.
+func NewHyparviewStateWithRand(me PeerID, data *PeerData, config HyparviewConfig, r *rand.Rand) *HyparviewState {
 	if config == (HyparviewConfig{}) {
 		config = DefaultHyparviewConfig()
+	}
+	if r == nil {
+		r = rand.New(rand.NewSource(time.Now().UnixNano()))
 	}
 	return &HyparviewState{
 		me:              me,
 		meData:          clonePeerDataPtr(data),
 		config:          config,
+		rand:            r,
 		pendingNeighbor: map[PeerID]struct{}{},
 		peerData:        map[PeerID]PeerData{},
 		aliveDisconnect: map[PeerID]struct{}{},
@@ -250,7 +264,7 @@ func (s *HyparviewState) onForwardJoin(sender PeerID, message ForwardJoin, out *
 		s.addPassive(peer, message.Peer.Data, out)
 	}
 	if !s.active.contains(peer) && !s.isPending(peer) {
-		if next, ok := s.active.firstWithout(sender); ok {
+		if next, ok := s.active.randomWithout(s.rand, sender); ok {
 			message.Ttl--
 			*out = append(*out, HyparviewOutEvent{
 				Kind:    HyparviewSendMessage,
@@ -308,7 +322,7 @@ func (s *HyparviewState) onShuffle(from PeerID, shuffle Shuffle, out *[]Hyparvie
 		s.sendShuffleReply(shuffle.Origin, n, out)
 		return
 	}
-	if next, ok := s.active.firstWithout(shuffle.Origin, from); ok {
+	if next, ok := s.active.randomWithout(s.rand, shuffle.Origin, from); ok {
 		shuffle.Ttl--
 		*out = append(*out, HyparviewOutEvent{
 			Kind:    HyparviewSendMessage,
@@ -320,10 +334,10 @@ func (s *HyparviewState) onShuffle(from PeerID, shuffle Shuffle, out *[]Hyparvie
 
 func (s *HyparviewState) sendShuffleReply(to PeerID, n int, out *[]HyparviewOutEvent) {
 	var nodes []PeerInfo
-	for _, id := range s.passive.firstN(n) {
+	for _, id := range s.passive.shuffledN(s.rand, n) {
 		nodes = append(nodes, s.peerInfo(id))
 	}
-	for _, id := range s.active.firstN(n - len(nodes)) {
+	for _, id := range s.active.shuffledN(s.rand, n-len(nodes)) {
 		nodes = append(nodes, s.peerInfo(id))
 	}
 	*out = append(*out, HyparviewOutEvent{
@@ -341,18 +355,12 @@ func (s *HyparviewState) onShuffleReply(reply ShuffleReply, out *[]HyparviewOutE
 }
 
 func (s *HyparviewState) handleShuffleTimer(out *[]HyparviewOutEvent) {
-	if node, ok := s.active.first(); ok {
+	if node, ok := s.active.random(s.rand); ok {
 		var nodes []PeerInfo
-		for _, id := range s.active.without(node) {
-			if len(nodes) >= s.config.ShuffleActiveViewCount {
-				break
-			}
+		for _, id := range s.active.shuffledWithoutN(s.rand, s.config.ShuffleActiveViewCount, node) {
 			nodes = append(nodes, s.peerInfo(id))
 		}
-		for _, id := range s.passive.without(node) {
-			if len(nodes) >= s.config.ShuffleActiveViewCount+s.config.ShufflePassiveViewCount {
-				break
-			}
+		for _, id := range s.passive.shuffledWithoutN(s.rand, s.config.ShufflePassiveViewCount, node) {
 			nodes = append(nodes, s.peerInfo(id))
 		}
 		nodes = append(nodes, PeerInfo{ID: s.me, Data: clonePeerDataPtr(s.meData)})
@@ -408,7 +416,7 @@ func (s *HyparviewState) addActive(peer PeerID, data *PeerData, priority Priorit
 		return false
 	}
 	if s.active.len() >= s.config.ActiveViewCapacity {
-		if old, ok := s.active.first(); ok {
+		if old, ok := s.active.random(s.rand); ok {
 			s.removeActive(old, removalRandom, false, false, out)
 		}
 	}
@@ -431,7 +439,7 @@ func (s *HyparviewState) addPassive(peer PeerID, data *PeerData, out *[]Hyparvie
 		return
 	}
 	if s.passive.len() >= s.config.PassiveViewCapacity {
-		if old, ok := s.passive.first(); ok {
+		if old, ok := s.passive.random(s.rand); ok {
 			s.passive.remove(old)
 		}
 	}
@@ -496,7 +504,7 @@ func (s *HyparviewState) refillActiveFromPassive(skip []PeerID, out *[]Hyparview
 	for peer := range s.pendingNeighbor {
 		allSkip = append(allSkip, peer)
 	}
-	if peer, ok := s.passive.firstWithout(allSkip...); ok {
+	if peer, ok := s.passive.randomWithout(s.rand, allSkip...); ok {
 		priority := PriorityLow
 		if s.active.len() == 0 {
 			priority = PriorityHigh
@@ -587,21 +595,18 @@ func (l peerList) slice() []PeerID {
 	return append([]PeerID(nil), l...)
 }
 
-func (l peerList) first() (PeerID, bool) {
+func (l peerList) random(r *rand.Rand) (PeerID, bool) {
 	if len(l) == 0 {
 		return PeerID{}, false
 	}
-	return l[0], true
+	return l[r.Intn(len(l))], true
 }
 
-func (l peerList) firstN(n int) []PeerID {
+func (l peerList) shuffledN(r *rand.Rand, n int) []PeerID {
 	if n <= 0 {
 		return nil
 	}
-	if n > len(l) {
-		n = len(l)
-	}
-	return append([]PeerID(nil), l[:n]...)
+	return l.shuffledWithoutN(r, n)
 }
 
 func (l peerList) without(skip ...PeerID) []PeerID {
@@ -614,13 +619,23 @@ func (l peerList) without(skip ...PeerID) []PeerID {
 	return out
 }
 
-func (l peerList) firstWithout(skip ...PeerID) (PeerID, bool) {
-	for _, peer := range l {
-		if !peerIn(peer, skip) {
-			return peer, true
-		}
+func (l peerList) shuffledWithoutN(r *rand.Rand, n int, skip ...PeerID) []PeerID {
+	peers := l.without(skip...)
+	if n > len(peers) {
+		n = len(peers)
 	}
-	return PeerID{}, false
+	r.Shuffle(len(peers), func(i, j int) {
+		peers[i], peers[j] = peers[j], peers[i]
+	})
+	return peers[:n]
+}
+
+func (l peerList) randomWithout(r *rand.Rand, skip ...PeerID) (PeerID, bool) {
+	peers := l.without(skip...)
+	if len(peers) == 0 {
+		return PeerID{}, false
+	}
+	return peers[r.Intn(len(peers))], true
 }
 
 func peerIn(peer PeerID, peers []PeerID) bool {

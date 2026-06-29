@@ -1,6 +1,7 @@
 package gossipproto
 
 import (
+	"math/rand"
 	"reflect"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func TestHyparviewJoinAddsActiveAndForwards(t *testing.T) {
 	joiner := PeerID(seq32(2))
 	existing := PeerID(seq32(3))
 	data := PeerData{4, 5}
-	state := NewHyparviewState(me, nil, DefaultHyparviewConfig())
+	state := NewHyparviewStateWithRand(me, nil, DefaultHyparviewConfig(), rand.New(rand.NewSource(1)))
 	state.active.insert(existing)
 
 	got := state.Handle(HyparviewInEvent{
@@ -263,7 +264,7 @@ func TestHyparviewShuffleTimer(t *testing.T) {
 	active := PeerID(seq32(2))
 	other := PeerID(seq32(3))
 	passive := PeerID(seq32(4))
-	state := NewHyparviewState(me, nil, DefaultHyparviewConfig())
+	state := NewHyparviewStateWithRand(me, nil, DefaultHyparviewConfig(), rand.New(rand.NewSource(1)))
 	state.active.insert(active)
 	state.active.insert(other)
 	state.passive.insert(passive)
@@ -276,12 +277,12 @@ func TestHyparviewShuffleTimer(t *testing.T) {
 	want := []HyparviewOutEvent{
 		{
 			Kind: HyparviewSendMessage,
-			To:   active,
+			To:   other,
 			Message: HyparviewMessage{
 				Kind: HyparviewShuffle,
 				Shuffle: Shuffle{
 					Origin: me,
-					Nodes:  []PeerInfo{{ID: other}, {ID: passive}, {ID: me}},
+					Nodes:  []PeerInfo{{ID: active}, {ID: passive}, {ID: me}},
 					Ttl:    DefaultHyparviewConfig().ShuffleRandomWalkLength,
 				},
 			},
@@ -290,6 +291,31 @@ func TestHyparviewShuffleTimer(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("shuffle = %#v, want %#v", got, want)
+	}
+}
+
+func TestHyparviewRandomSelectionCanPickNonFirst(t *testing.T) {
+	peers := peerList{
+		PeerID(seq32(1)),
+		PeerID(seq32(2)),
+		PeerID(seq32(3)),
+	}
+	r := rand.New(rand.NewSource(1))
+	got, ok := peers.random(r)
+	if !ok {
+		t.Fatal("random returned no peer")
+	}
+	if got == peers[0] {
+		t.Fatalf("random selected first peer with seed 1")
+	}
+
+	r = rand.New(rand.NewSource(1))
+	got, ok = peers.randomWithout(r, peers[2])
+	if !ok {
+		t.Fatal("randomWithout returned no peer")
+	}
+	if got == peers[0] {
+		t.Fatalf("randomWithout selected first eligible peer with seed 1")
 	}
 }
 
