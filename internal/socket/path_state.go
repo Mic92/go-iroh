@@ -109,6 +109,20 @@ func (p *RemotePathState) Addrs() []Addr {
 	return out
 }
 
+// OpenAddrs returns the addresses of all currently open paths.
+func (p *RemotePathState) OpenAddrs() []Addr {
+	out := make([]Addr, 0, len(p.paths))
+	for _, e := range p.paths {
+		if e.state.Status == PathStatusOpen {
+			out = append(out, e.addr)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].String() < out[j].String()
+	})
+	return out
+}
+
 // Status returns the status of addr and whether it is known.
 func (p *RemotePathState) Status(addr Addr) (PathStatus, bool) {
 	e, ok := p.paths[pathKey(addr)]

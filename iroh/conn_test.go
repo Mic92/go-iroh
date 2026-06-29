@@ -185,6 +185,75 @@ func TestConnStats(t *testing.T) {
 	}
 }
 
+func TestConnPaths(t *testing.T) {
+	client, server := connPair(t, "iroh-paths/0")
+	defer client.CloseWithError(0, "")
+	defer server.CloseWithError(0, "")
+
+	tests := []struct {
+		name string
+		conn *Conn
+	}{
+		{"client", client},
+		{"server", server},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			paths := tt.conn.Paths()
+			if len(paths) == 0 {
+				t.Fatal("Paths() returned no paths")
+			}
+			var selected int
+			for _, p := range paths {
+				if p.Selected {
+					selected++
+				}
+				if p.Selected && !p.Validated {
+					t.Errorf("selected path is not validated: %+v", p)
+				}
+				if p.Selected && !p.HasAddr {
+					t.Errorf("selected path has no address: %+v", p)
+				}
+				if p.Relayed {
+					t.Errorf("loopback path Relayed = true, want false: %+v", p)
+				}
+			}
+			if selected != 1 {
+				t.Fatalf("selected path count = %d, want 1; paths=%+v", selected, paths)
+			}
+		})
+	}
+}
+
+func TestConnWatchPaths(t *testing.T) {
+	client, server := connPair(t, "iroh-watch-paths/0")
+	defer client.CloseWithError(0, "")
+	defer server.CloseWithError(0, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	watch, err := client.WatchPaths(ctx)
+	if err != nil {
+		t.Fatalf("WatchPaths: %v", err)
+	}
+	select {
+	case paths, ok := <-watch:
+		if !ok {
+			t.Fatal("WatchPaths closed before initial snapshot")
+		}
+		var selected bool
+		for _, p := range paths {
+			selected = selected || p.Selected
+		}
+		if !selected {
+			t.Fatalf("initial WatchPaths snapshot has no selected path: %+v", paths)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+}
+
 func TestStreamConn(t *testing.T) {
 	client, server := connPair(t, "iroh-stream-conn/0")
 	defer client.CloseWithError(0, "")
@@ -406,6 +475,73 @@ func ExampleConn_Stats() {
 
 	stats := conn.Stats()
 	fmt.Println(stats.BytesSent > 0)
+	// Output:
+	// true
+}
+
+// ExampleConn_Paths prints whether a loopback connection has a selected path.
+func ExampleConn_Paths() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-paths-example/0"
+	srvKey, _ := key.GenerateSecretKey()
+	server, _ := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	defer server.Shutdown(ctx)
+	client, _ := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	defer client.Shutdown(ctx)
+
+	go server.Accept(ctx)
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		fmt.Println("connect:", err)
+		return
+	}
+	defer conn.CloseWithError(0, "")
+
+	for _, path := range conn.Paths() {
+		if path.Selected {
+			fmt.Println(path.HasAddr, path.Relayed)
+			break
+		}
+	}
+	// Output:
+	// true false
+}
+
+// ExampleConn_WatchPaths prints whether the initial path snapshot is usable.
+func ExampleConn_WatchPaths() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-watch-paths-example/0"
+	srvKey, _ := key.GenerateSecretKey()
+	server, _ := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	defer server.Shutdown(ctx)
+	client, _ := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	defer client.Shutdown(ctx)
+
+	go server.Accept(ctx)
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		fmt.Println("connect:", err)
+		return
+	}
+	defer conn.CloseWithError(0, "")
+
+	watch, err := conn.WatchPaths(ctx)
+	if err != nil {
+		fmt.Println("watch:", err)
+		return
+	}
+	paths := <-watch
+	fmt.Println(len(paths) > 0)
 	// Output:
 	// true
 }

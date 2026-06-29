@@ -96,6 +96,9 @@ type PathInfo struct {
 	RTT time.Duration
 	// HasRTT reports whether RTT was observed from qng per-path state.
 	HasRTT bool
+	// Selected reports whether this path is currently selected for application
+	// data transmission.
+	Selected bool
 }
 
 type pathObservingConnection interface {
@@ -338,7 +341,6 @@ func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
 	localNAT := append([]netip.AddrPort(nil), a.localNAT...)
 	a.mu.Unlock()
 
-	m.reply <- sub
 	seedNATTraversalAddresses(m.conn, localNAT)
 
 	// Watch the connection's lifetime. One goroutine per connection (single-path:
@@ -359,6 +361,7 @@ func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
 		a.watcher.Send(PathEvent{Kind: PathEventOpened, Addr: addr})
 	}
 	a.reselect()
+	m.reply <- sub
 }
 
 // handleResolve resolves additional addresses for the remote and adds them as
@@ -714,6 +717,67 @@ func (a *RemoteStateActor) SelectedPath() (Addr, bool) {
 		return Addr{}, false
 	}
 	return *a.selected, true
+}
+
+// PathInfos returns a snapshot of currently open paths for conn.
+func (a *RemoteStateActor) PathInfos(conn Connection) []PathInfo {
+	a.mu.Lock()
+	cs, ok := a.conns[conn]
+	if !ok {
+		a.mu.Unlock()
+		return nil
+	}
+	open := append([]Addr{cs.addr}, cs.paths...)
+	var selected *Addr
+	if a.selected != nil {
+		sel := *a.selected
+		selected = &sel
+	}
+	a.mu.Unlock()
+
+	infos := make([]PathInfo, 0, len(open))
+	byAddr := make(map[string]int, len(open))
+	for _, addr := range open {
+		info := PathInfo{
+			Validated: true,
+			Addr:      addr,
+			HasAddr:   true,
+			Selected:  selected != nil && selected.String() == addr.String(),
+		}
+		byAddr[addr.String()] = len(infos)
+		infos = append(infos, info)
+	}
+
+	for _, p := range observeMultipathPaths(conn) {
+		if p.HasAddr {
+			if i, ok := byAddr[p.Addr.String()]; ok {
+				infos[i].ID = p.ID
+				infos[i].Validated = p.Validated
+				infos[i].RTT = p.RTT
+				infos[i].HasRTT = p.HasRTT
+				continue
+			}
+			p.Selected = selected != nil && selected.String() == p.Addr.String()
+			byAddr[p.Addr.String()] = len(infos)
+			infos = append(infos, p)
+			continue
+		}
+		infos = append(infos, p)
+	}
+
+	sort.Slice(infos, func(i, j int) bool {
+		if infos[i].Selected != infos[j].Selected {
+			return infos[i].Selected
+		}
+		if infos[i].HasAddr != infos[j].HasAddr {
+			return infos[i].HasAddr
+		}
+		if infos[i].HasAddr && infos[j].HasAddr && infos[i].Addr.String() != infos[j].Addr.String() {
+			return infos[i].Addr.String() < infos[j].Addr.String()
+		}
+		return infos[i].ID < infos[j].ID
+	})
+	return infos
 }
 
 // MultipathPaths returns qng multipath path state observed from active

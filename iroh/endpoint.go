@@ -962,7 +962,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 		if err != nil {
 			return nil, err
 		}
-		e.registerConn(addr.ID, qc)
+		conn.pathState, conn.pathConn = e.registerConn(addr.ID, qc)
 		if err := e.afterHandshake(ctx, conn); err != nil {
 			conn.CloseWithError(0, "rejected by hook")
 			return nil, err
@@ -1099,7 +1099,7 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 	if err != nil {
 		return nil, err
 	}
-	e.registerConn(remote, qc)
+	conn.pathState, conn.pathConn = e.registerConn(remote, qc)
 	if err := e.afterHandshake(ctx, conn); err != nil {
 		conn.CloseWithError(0, "rejected by hook")
 		return nil, err
@@ -1138,20 +1138,22 @@ func (e *Endpoint) afterHandshake(ctx context.Context, conn *Conn) error {
 // available paths. Registration failures are non-fatal: the connection still
 // works; it just is not path-managed. It mirrors the Rust RemoteMap::add_connection
 // (iroh/src/socket/remote_map.rs:273).
-func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn) {
+func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn) (*socket.RemoteStateActor, *connAdapter) {
 	if e.remotes == nil {
-		return
+		return nil, nil
 	}
 	addr := e.sock.PathAddr(remote, qc.RemoteAddr())
-	e.remotes.AddConnection(remote, newConnAdapter(qc, addr))
+	adapter := newConnAdapter(qc, addr)
+	_, actor := e.remotes.AddConnectionActor(remote, adapter)
 	if !qc.ConnectionState().MultipathNegotiated {
-		return
+		return actor, adapter
 	}
 	// Candidate seeding is opportunistic: QNT may still be disabled or
 	// incomplete, and path management must not make an otherwise-established
 	// connection fail. The actor/qng layers keep the failure visible to explicit
 	// hole-punch calls.
-	_ = e.remotes.Actor(remote).AddNATTraversalAddresses(e.localNATTraversalCandidates())
+	_ = actor.AddNATTraversalAddresses(e.localNATTraversalCandidates())
+	return actor, adapter
 }
 
 func (e *Endpoint) connStableID(qc *quic.Conn) uint64 {

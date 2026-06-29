@@ -113,6 +113,13 @@ func (m *RemoteMap) Len() int {
 // safely (O12): if the actor is mid-teardown the send observes its done channel
 // and a fresh actor is spawned on the retry.
 func (m *RemoteMap) AddConnection(remote key.EndpointID, conn Connection) <-chan PathEvent {
+	ch, _ := m.AddConnectionActor(remote, conn)
+	return ch
+}
+
+// AddConnectionActor is like [RemoteMap.AddConnection], but also returns the
+// actor that accepted conn.
+func (m *RemoteMap) AddConnectionActor(remote key.EndpointID, conn Connection) (<-chan PathEvent, *RemoteStateActor) {
 	for {
 		m.mu.Lock()
 		a := m.actor(remote)
@@ -132,7 +139,7 @@ func (m *RemoteMap) AddConnection(remote key.EndpointID, conn Connection) <-chan
 			m.dropIfStopped(remote, a)
 			continue
 		}
-		return ch
+		return ch, a
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // Side reports whether a [Conn] was dialed locally or accepted from a peer.
@@ -103,11 +104,13 @@ func (s *ReceiveStream) CancelRead(code uint64) { s.s.CancelRead(quic.StreamErro
 // identity is authenticated by the RFC 7250 handshake and available via
 // [Conn.RemoteID].
 type Conn struct {
-	qc       *quic.Conn
-	remoteID key.EndpointID
-	alpn     string
-	side     Side
-	stableID uint64
+	qc        *quic.Conn
+	remoteID  key.EndpointID
+	alpn      string
+	side      Side
+	stableID  uint64
+	pathState *socket.RemoteStateActor
+	pathConn  *connAdapter
 }
 
 // ConnStats is a snapshot of connection statistics.
@@ -139,6 +142,27 @@ type ConnStats struct {
 	// PacketsLost is the number of packets declared lost on the underlying
 	// connection. It may decrease if packets declared lost are later received.
 	PacketsLost uint64
+}
+
+// PathInfo is a snapshot of one currently open network path for a connection.
+type PathInfo struct {
+	// ID is the QUIC multipath PathID when known. The initial path has ID 0.
+	ID uint32
+	// Validated reports whether the path can carry non-probing application data.
+	Validated bool
+	// Addr is the path's transport address, when HasAddr is true.
+	Addr netaddr.TransportAddr
+	// HasAddr reports whether Addr is known.
+	HasAddr bool
+	// RTT is the path's smoothed round-trip time, when HasRTT is true.
+	RTT time.Duration
+	// HasRTT reports whether RTT was observed for this path.
+	HasRTT bool
+	// Selected reports whether this path is currently selected for application
+	// data transmission.
+	Selected bool
+	// Relayed reports whether this path uses a relay server.
+	Relayed bool
 }
 
 func newConn(qc *quic.Conn, remoteID key.EndpointID, alpn string, side Side, stableID uint64) (*Conn, error) {
@@ -274,6 +298,99 @@ func (c *Conn) Stats() ConnStats {
 		PacketsReceived: s.PacketsReceived,
 		BytesLost:       s.BytesLost,
 		PacketsLost:     s.PacketsLost,
+	}
+}
+
+// Paths returns a snapshot of the connection's currently open network paths.
+func (c *Conn) Paths() []PathInfo {
+	if c.pathState != nil && c.pathConn != nil {
+		return pathInfosFromSocket(c.pathState.PathInfos(c.pathConn))
+	}
+	return pathInfosFromSocket((&connAdapter{qc: c.qc}).Paths())
+}
+
+// WatchPaths returns a stream of path snapshots for this connection.
+//
+// The first value is the current snapshot. Later values are sent when the
+// endpoint observes a path change for the peer. The stream ends when ctx is
+// done, the connection closes, or path observation is unavailable.
+func (c *Conn) WatchPaths(ctx context.Context) (<-chan []PathInfo, error) {
+	if c.pathState == nil || c.pathConn == nil {
+		return nil, errors.New("iroh: path observation not available")
+	}
+	events, cancel := c.pathState.PathEvents()
+	out := make(chan []PathInfo, 1)
+	go func() {
+		defer cancel()
+		defer close(out)
+		send := func() bool {
+			paths := c.Paths()
+			select {
+			case out <- paths:
+				return true
+			case <-ctx.Done():
+				return false
+			case <-c.Context().Done():
+				return false
+			}
+		}
+		if !send() {
+			return
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-c.Context().Done():
+				return
+			case _, ok := <-events:
+				if !ok {
+					return
+				}
+				if !send() {
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+func pathInfosFromSocket(paths []socket.PathInfo) []PathInfo {
+	if len(paths) == 0 {
+		return nil
+	}
+	out := make([]PathInfo, 0, len(paths))
+	for _, p := range paths {
+		info := PathInfo{
+			ID:        p.ID,
+			Validated: p.Validated,
+			HasAddr:   p.HasAddr,
+			RTT:       p.RTT,
+			HasRTT:    p.HasRTT,
+			Selected:  p.Selected,
+		}
+		if p.HasAddr {
+			info.Addr, info.Relayed = transportAddrFromSocket(p.Addr)
+		}
+		out = append(out, info)
+	}
+	return out
+}
+
+func transportAddrFromSocket(addr socket.Addr) (netaddr.TransportAddr, bool) {
+	switch addr.Kind() {
+	case socket.AddrIP:
+		ap, _ := addr.IP()
+		return netaddr.IPAddr{Addr: ap}, false
+	case socket.AddrRelay:
+		u, _, _ := addr.Relay()
+		return netaddr.RelayAddr{URL: u}, true
+	case socket.AddrCustom:
+		c, _ := addr.Custom()
+		return c, false
+	default:
+		return nil, false
 	}
 }
 

@@ -169,6 +169,30 @@ func TestStatusTransitions(t *testing.T) {
 	}
 }
 
+func TestOpenAddrs(t *testing.T) {
+	p := NewRemotePathState()
+	open2 := ipPath(2)
+	open1 := ipPath(1)
+	inactive := ipPath(3)
+	unknown := ipPath(4)
+	unusable := ipPath(5)
+
+	p.SetOpen(open2)
+	p.SetOpen(open1)
+	p.SetOpen(inactive)
+	p.SetClosed(inactive, time.Now())
+	p.Add(unknown)
+	p.SetUnusable(unusable)
+
+	got := p.OpenAddrs()
+	if len(got) != 2 {
+		t.Fatalf("OpenAddrs len = %d, want 2: %v", len(got), got)
+	}
+	if got[0].String() != open1.String() || got[1].String() != open2.String() {
+		t.Fatalf("OpenAddrs = %v, want sorted [%v %v]", got, open1, open2)
+	}
+}
+
 func TestExpireIdleUsesPathTimeouts(t *testing.T) {
 	now := time.Unix(1000, 0)
 	direct := ipPath(1)
