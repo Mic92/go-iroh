@@ -7,13 +7,15 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
 
 const (
-	prefix       = "endpoint"
+	// Kind is the string prefix for endpoint tickets.
+	Kind         = "endpoint"
 	wireVariant1 = 0
 	maxAddrs     = 1024
 )
@@ -21,9 +23,6 @@ const (
 var base32NoPad = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 var (
-	// ErrMissingPrefix is returned when a ticket does not start with
-	// "endpoint".
-	ErrMissingPrefix = errors.New("endpoint ticket: missing endpoint prefix")
 	// ErrTrailingBytes is returned when a ticket has extra data after the
 	// endpoint address.
 	ErrTrailingBytes = errors.New("endpoint ticket: trailing bytes")
@@ -31,6 +30,165 @@ var (
 	ErrTruncated = errors.New("endpoint ticket: truncated")
 	// ErrVarintOverflow is returned when a varint field exceeds 64 bits.
 	ErrVarintOverflow = errors.New("endpoint ticket: varint overflow")
+)
+
+// TicketCodec is the generic shape of an iroh ticket implementation.
+//
+// It mirrors Rust's iroh_tickets::Ticket trait: a ticket has a lowercase kind
+// prefix, a byte representation, and a canonical string form of kind plus
+// base32-without-padding bytes.
+type TicketCodec interface {
+	Kind() string
+	EncodeBytes() []byte
+	EncodeString() string
+}
+
+// Decoder decodes a ticket from its byte representation.
+type Decoder func([]byte) (TicketCodec, error)
+
+// Registry decodes tickets by kind.
+type Registry struct {
+	mu       sync.RWMutex
+	decoders map[string]Decoder
+}
+
+// NewRegistry returns an empty ticket decoder registry.
+func NewRegistry() *Registry {
+	return &Registry{decoders: make(map[string]Decoder)}
+}
+
+// Register adds decoder for kind. Kind must be non-empty and unique.
+func (r *Registry) Register(kind string, decoder Decoder) error {
+	if r == nil {
+		return errors.New("endpoint ticket: nil registry")
+	}
+	if kind == "" {
+		return errors.New("endpoint ticket: empty kind")
+	}
+	if decoder == nil {
+		return errors.New("endpoint ticket: nil decoder")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.decoders == nil {
+		r.decoders = make(map[string]Decoder)
+	}
+	if _, ok := r.decoders[kind]; ok {
+		return fmt.Errorf("endpoint ticket: duplicate kind %q", kind)
+	}
+	r.decoders[kind] = decoder
+	return nil
+}
+
+// DecodeBytes decodes bytes as a ticket of kind.
+func (r *Registry) DecodeBytes(kind string, b []byte) (TicketCodec, error) {
+	if r == nil {
+		return nil, errors.New("endpoint ticket: nil registry")
+	}
+	r.mu.RLock()
+	decoder := r.decoders[kind]
+	r.mu.RUnlock()
+	if decoder == nil {
+		return nil, &ParseError{Kind: ParseErrorKindKind, Expected: kind}
+	}
+	return decoder(b)
+}
+
+// DecodeString decodes s using the registered kind prefix.
+func (r *Registry) DecodeString(s string) (TicketCodec, error) {
+	if r == nil {
+		return nil, errors.New("endpoint ticket: nil registry")
+	}
+	r.mu.RLock()
+	var kind string
+	var decoder Decoder
+	for k, d := range r.decoders {
+		if strings.HasPrefix(s, k) && len(k) > len(kind) {
+			kind, decoder = k, d
+		}
+	}
+	r.mu.RUnlock()
+	if decoder == nil {
+		return nil, &ParseError{Kind: ParseErrorKindKind}
+	}
+	rest := s[len(kind):]
+	b, err := base32NoPad.DecodeString(strings.ToUpper(rest))
+	if err != nil {
+		return nil, &ParseError{Kind: ParseErrorKindEncoding, Err: err}
+	}
+	return decoder(b)
+}
+
+// RegisterEndpoint registers the endpoint ticket decoder in r.
+func RegisterEndpoint(r *Registry) error {
+	return r.Register(Kind, func(b []byte) (TicketCodec, error) {
+		return DecodeBytes(b)
+	})
+}
+
+// ParseErrorKind classifies ticket parse failures.
+type ParseErrorKind string
+
+const (
+	// ParseErrorKindKind means the ticket string had the wrong kind prefix.
+	ParseErrorKindKind ParseErrorKind = "kind"
+	// ParseErrorKindEncoding means the ticket payload was not valid base32.
+	ParseErrorKindEncoding ParseErrorKind = "encoding"
+	// ParseErrorKindPostcard means the payload looked like this ticket kind but
+	// did not decode as the ticket byte format.
+	ParseErrorKindPostcard ParseErrorKind = "postcard"
+	// ParseErrorKindVerify means decoded bytes failed semantic validation.
+	ParseErrorKindVerify ParseErrorKind = "verify"
+)
+
+// ParseError reports a structured ticket parse failure.
+type ParseError struct {
+	Kind     ParseErrorKind
+	Expected string
+	Message  string
+	Err      error
+}
+
+func (e *ParseError) Error() string {
+	switch e.Kind {
+	case ParseErrorKindKind:
+		return fmt.Sprintf("endpoint ticket: wrong prefix, expected %s", e.Expected)
+	case ParseErrorKindEncoding:
+		if e.Err != nil {
+			return "endpoint ticket: decode base32: " + e.Err.Error()
+		}
+		return "endpoint ticket: decode base32"
+	case ParseErrorKindVerify:
+		return "endpoint ticket: verification failed: " + e.Message
+	default:
+		if e.Err != nil {
+			return "endpoint ticket: decode: " + e.Err.Error()
+		}
+		return "endpoint ticket: decode"
+	}
+}
+
+func (e *ParseError) Unwrap() error { return e.Err }
+
+func (e *ParseError) Is(target error) bool {
+	t, ok := target.(*ParseError)
+	if !ok {
+		return false
+	}
+	return t.Kind == "" || e.Kind == t.Kind
+}
+
+var (
+	// ErrMissingPrefix is returned when a ticket does not start with
+	// "endpoint".
+	ErrMissingPrefix = &ParseError{Kind: ParseErrorKindKind, Expected: Kind}
+	// ErrEncoding is returned when the ticket payload is not valid base32.
+	ErrEncoding = &ParseError{Kind: ParseErrorKindEncoding}
+	// ErrDecode is returned when the decoded bytes are not a valid endpoint
+	// ticket payload.
+	ErrDecode = &ParseError{Kind: ParseErrorKindPostcard}
+	// ErrVerify is returned when decoded bytes fail semantic validation.
+	ErrVerify = &ParseError{Kind: ParseErrorKindVerify}
 )
 
 // Ticket is an endpoint ticket.
@@ -48,6 +206,11 @@ func Encode(addr netaddr.EndpointAddr) string {
 	return New(addr).String()
 }
 
+// EncodeString returns t's canonical string form.
+func EncodeString(t TicketCodec) string {
+	return t.EncodeString()
+}
+
 // Parse parses s as an endpoint ticket.
 func Parse(s string) (Ticket, error) {
 	addr, err := Decode(s)
@@ -59,49 +222,63 @@ func Parse(s string) (Ticket, error) {
 
 // Decode parses s as an endpoint ticket and returns its endpoint address.
 func Decode(s string) (netaddr.EndpointAddr, error) {
-	rest, ok := strings.CutPrefix(s, prefix)
+	t, err := DecodeString(s)
+	if err != nil {
+		return netaddr.EndpointAddr{}, err
+	}
+	return t.Addr(), nil
+}
+
+// DecodeString parses s as an endpoint ticket.
+func DecodeString(s string) (Ticket, error) {
+	rest, ok := strings.CutPrefix(s, Kind)
 	if !ok {
-		return netaddr.EndpointAddr{}, ErrMissingPrefix
+		return Ticket{}, ErrMissingPrefix
 	}
 	b, err := base32NoPad.DecodeString(strings.ToUpper(rest))
 	if err != nil {
-		return netaddr.EndpointAddr{}, fmt.Errorf("endpoint ticket: decode base32: %w", err)
+		return Ticket{}, &ParseError{Kind: ParseErrorKindEncoding, Err: err}
 	}
+	return DecodeBytes(b)
+}
+
+// DecodeBytes decodes an endpoint ticket from its byte representation.
+func DecodeBytes(b []byte) (Ticket, error) {
 	p := parser{b: b}
 	variant, err := p.varint()
 	if err != nil {
-		return netaddr.EndpointAddr{}, err
+		return Ticket{}, wrapDecodeErr(err)
 	}
 	if variant != wireVariant1 {
-		return netaddr.EndpointAddr{}, fmt.Errorf("endpoint ticket: unsupported variant %d", variant)
+		return Ticket{}, &ParseError{Kind: ParseErrorKindVerify, Message: fmt.Sprintf("unsupported variant %d", variant)}
 	}
 	idBytes, err := p.bytes(key.PublicKeySize)
 	if err != nil {
-		return netaddr.EndpointAddr{}, err
+		return Ticket{}, wrapDecodeErr(err)
 	}
 	id, err := key.EndpointIDFromSlice(idBytes)
 	if err != nil {
-		return netaddr.EndpointAddr{}, fmt.Errorf("endpoint ticket: endpoint id: %w", err)
+		return Ticket{}, &ParseError{Kind: ParseErrorKindVerify, Message: "endpoint id", Err: err}
 	}
 	n, err := p.varint()
 	if err != nil {
-		return netaddr.EndpointAddr{}, err
+		return Ticket{}, wrapDecodeErr(err)
 	}
 	if n > maxAddrs {
-		return netaddr.EndpointAddr{}, fmt.Errorf("endpoint ticket: too many addresses %d", n)
+		return Ticket{}, &ParseError{Kind: ParseErrorKindVerify, Message: fmt.Sprintf("too many addresses %d", n)}
 	}
 	addrs := make([]netaddr.TransportAddr, 0, n)
 	for range n {
 		a, err := p.transportAddr()
 		if err != nil {
-			return netaddr.EndpointAddr{}, err
+			return Ticket{}, wrapDecodeErr(err)
 		}
 		addrs = append(addrs, a)
 	}
 	if !p.done() {
-		return netaddr.EndpointAddr{}, ErrTrailingBytes
+		return Ticket{}, wrapDecodeErr(ErrTrailingBytes)
 	}
-	return netaddr.NewEndpointAddr(id, addrs...), nil
+	return New(netaddr.NewEndpointAddr(id, addrs...)), nil
 }
 
 // Addr returns the endpoint address in t.
@@ -109,8 +286,11 @@ func (t Ticket) Addr() netaddr.EndpointAddr {
 	return t.addr
 }
 
-// String returns the encoded ticket string.
-func (t Ticket) String() string {
+// Kind returns the ticket kind prefix.
+func (t Ticket) Kind() string { return Kind }
+
+// EncodeBytes returns the ticket's byte representation.
+func (t Ticket) EncodeBytes() []byte {
 	var b []byte
 	b = appendVarint(b, wireVariant1)
 	id := t.addr.ID.Bytes()
@@ -120,7 +300,49 @@ func (t Ticket) String() string {
 	for _, a := range addrs {
 		b = appendTransportAddr(b, a)
 	}
-	return prefix + strings.ToLower(base32NoPad.EncodeToString(b))
+	return b
+}
+
+// EncodeString returns the encoded ticket string.
+func (t Ticket) EncodeString() string {
+	return Kind + strings.ToLower(base32NoPad.EncodeToString(t.EncodeBytes()))
+}
+
+// String returns the encoded ticket string.
+func (t Ticket) String() string {
+	return t.EncodeString()
+}
+
+// Short returns a ticket containing only the endpoint id and relay URLs.
+func (t Ticket) Short() Ticket {
+	return New(ShortAddr(t.addr))
+}
+
+// Short returns a ticket for addr containing only the endpoint id and relay
+// URLs.
+func Short(addr netaddr.EndpointAddr) Ticket {
+	return New(ShortAddr(addr))
+}
+
+// ShortAddr returns addr with direct IP and custom addresses removed.
+func ShortAddr(addr netaddr.EndpointAddr) netaddr.EndpointAddr {
+	var addrs []netaddr.TransportAddr
+	for _, a := range addr.Addrs() {
+		if _, ok := a.(netaddr.RelayAddr); ok {
+			addrs = append(addrs, a)
+		}
+	}
+	return netaddr.NewEndpointAddr(addr.ID, addrs...)
+}
+
+func wrapDecodeErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrTrailingBytes) || errors.Is(err, ErrTruncated) || errors.Is(err, ErrVarintOverflow) {
+		return &ParseError{Kind: ParseErrorKindPostcard, Err: err}
+	}
+	return err
 }
 
 func appendTransportAddr(b []byte, a netaddr.TransportAddr) []byte {

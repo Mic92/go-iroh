@@ -38,7 +38,7 @@ func TestGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := prefix + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(wantBytes))
+	want := Kind + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(wantBytes))
 	if got := Encode(addr); got != want {
 		t.Fatalf("Encode = %q, want %q", got, want)
 	}
@@ -81,6 +81,122 @@ func TestParseTicket(t *testing.T) {
 	}
 }
 
+func TestTicketCodec(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := netaddr.ParseRelayURL("https://relay.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := netaddr.NewEndpointAddr(id, netaddr.RelayAddr{URL: relay})
+	ticket := New(addr)
+	var _ TicketCodec = ticket
+
+	if got := ticket.Kind(); got != Kind {
+		t.Fatalf("Kind = %q, want %q", got, Kind)
+	}
+	if got := EncodeString(ticket); got != ticket.String() {
+		t.Fatalf("EncodeString = %q, want %q", got, ticket.String())
+	}
+	decoded, err := DecodeBytes(ticket.EncodeBytes())
+	if err != nil {
+		t.Fatalf("DecodeBytes: %v", err)
+	}
+	assertEndpointAddrEqual(t, decoded.Addr(), addr)
+	decoded, err = DecodeString(ticket.EncodeString())
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	assertEndpointAddrEqual(t, decoded.Addr(), addr)
+}
+
+func TestShortTicket(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := netaddr.ParseRelayURL("https://relay.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := netaddr.NewEndpointAddr(id,
+		netaddr.RelayAddr{URL: relay},
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1024")},
+		netaddr.NewCustomAddr(7, []byte("local")),
+	)
+	short := Short(addr).Addr()
+	want := netaddr.NewEndpointAddr(id, netaddr.RelayAddr{URL: relay})
+	assertEndpointAddrEqual(t, short, want)
+	assertEndpointAddrEqual(t, New(addr).Short().Addr(), want)
+}
+
+func TestStructuredParseErrors(t *testing.T) {
+	if _, err := DecodeString("nodeabc"); !errors.Is(err, ErrMissingPrefix) {
+		t.Fatalf("DecodeString missing prefix error = %v, want %v", err, ErrMissingPrefix)
+	}
+	if _, err := DecodeString(Kind + "!"); !errors.Is(err, ErrEncoding) {
+		t.Fatalf("DecodeString encoding error = %v, want %v", err, ErrEncoding)
+	}
+	if _, err := DecodeString(Kind + "aa"); !errors.Is(err, ErrDecode) {
+		t.Fatalf("DecodeString decode error = %v, want %v", err, ErrDecode)
+	}
+}
+
+func TestRegistry(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := netaddr.NewEndpointAddr(id)
+	ticket := New(addr)
+
+	r := NewRegistry()
+	if err := RegisterEndpoint(r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.DecodeString(ticket.String())
+	if err != nil {
+		t.Fatalf("Registry.DecodeString: %v", err)
+	}
+	endpoint, ok := got.(Ticket)
+	if !ok {
+		t.Fatalf("Registry.DecodeString returned %T, want Ticket", got)
+	}
+	assertEndpointAddrEqual(t, endpoint.Addr(), addr)
+
+	got, err = r.DecodeBytes(Kind, ticket.EncodeBytes())
+	if err != nil {
+		t.Fatalf("Registry.DecodeBytes: %v", err)
+	}
+	endpoint, ok = got.(Ticket)
+	if !ok {
+		t.Fatalf("Registry.DecodeBytes returned %T, want Ticket", got)
+	}
+	assertEndpointAddrEqual(t, endpoint.Addr(), addr)
+}
+
+func TestRegistryRejectsDuplicate(t *testing.T) {
+	r := NewRegistry()
+	if err := RegisterEndpoint(r); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterEndpoint(r); err == nil {
+		t.Fatal("RegisterEndpoint duplicate succeeded")
+	}
+}
+
+func TestRegistryRejectsInvalidSource(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register("", func([]byte) (TicketCodec, error) { return Ticket{}, nil }); err == nil {
+		t.Fatal("Register accepted empty kind")
+	}
+	if err := r.Register("endpoint", nil); err == nil {
+		t.Fatal("Register accepted nil decoder")
+	}
+}
+
 func TestDecodeErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -88,7 +204,7 @@ func TestDecodeErrors(t *testing.T) {
 		want error
 	}{
 		{name: "missing prefix", in: "nodeabc", want: ErrMissingPrefix},
-		{name: "truncated", in: prefix + "aa", want: ErrTruncated},
+		{name: "truncated", in: Kind + "aa", want: ErrTruncated},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
