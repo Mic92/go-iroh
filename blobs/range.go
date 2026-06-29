@@ -260,12 +260,24 @@ func (seq ChunkRangesSeq) Entries() []struct {
 	return out
 }
 
+// At returns the chunk ranges selected at offset.
+func (seq ChunkRangesSeq) At(offset uint64) ChunkRanges {
+	ranges := RangeEmpty()
+	for _, e := range seq.entries {
+		if e.offset > offset {
+			break
+		}
+		ranges = e.ranges
+	}
+	return ranges
+}
+
 // IsBlob reports whether seq requests a single raw blob.
 func (seq ChunkRangesSeq) IsBlob() bool {
 	if len(seq.entries) != 2 {
 		return false
 	}
-	return seq.entries[0].offset+1 == seq.entries[1].offset && seq.entries[1].ranges.IsEmpty()
+	return seq.entries[0].ranges.IsAll() && seq.entries[0].offset+1 == seq.entries[1].offset && seq.entries[1].ranges.IsEmpty()
 }
 
 // IsAll reports whether seq selects all chunks forever.

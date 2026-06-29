@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 
 	"lukechampine.com/blake3/bao"
 )
@@ -43,17 +44,27 @@ func EncodeBlob(data []byte) (Hash, []byte, error) {
 
 // DecodeBlob validates and decodes a Rust-compatible full-range BAO response.
 func DecodeBlob(expected Hash, encoded []byte) ([]byte, error) {
-	var out bytes.Buffer
 	r := bytes.NewReader(encoded)
+	out, err := DecodeBlobReader(expected, r)
+	if err != nil {
+		return nil, err
+	}
+	if r.Len() != 0 {
+		return nil, fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, r.Len())
+	}
+	return out, nil
+}
+
+// DecodeBlobReader validates and decodes one Rust-compatible full-range BAO
+// response from r.
+func DecodeBlobReader(expected Hash, r io.Reader) ([]byte, error) {
+	var out bytes.Buffer
 	ok, err := bao.Decode(&out, r, nil, 4, expected.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidBlob, err)
 	}
 	if !ok {
 		return nil, fmt.Errorf("%w: hash mismatch", ErrInvalidBlob)
-	}
-	if r.Len() != 0 {
-		return nil, fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, r.Len())
 	}
 	return out.Bytes(), nil
 }

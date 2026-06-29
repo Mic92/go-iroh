@@ -7,7 +7,7 @@ import (
 	"io"
 )
 
-// BidiStream is the stream shape used by the single-leaf transfer helpers.
+// BidiStream is the stream shape used by the blob transfer helpers.
 //
 // If a stream implements CloseWrite, the helpers use it to close the send side.
 // Otherwise Close must close the send side while still allowing reads from the
@@ -45,7 +45,7 @@ var (
 	// ErrBlobNotFound is returned when a requested blob is not in a store.
 	ErrBlobNotFound = errors.New("blobs: blob not found")
 	// ErrUnsupportedRequest is returned when a request is outside the
-	// single-leaf raw-blob transfer subset.
+	// raw-blob transfer subset.
 	ErrUnsupportedRequest = errors.New("blobs: unsupported request")
 )
 
@@ -81,29 +81,58 @@ func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byt
 		_ = s.Close()
 		return fmt.Errorf("blobs: decode request: %w", err)
 	}
-	if req.Type != RequestGet || req.Get == nil || !req.Get.Ranges.IsBlob() {
+	switch req.Type {
+	case RequestGet:
+		if req.Get == nil || !req.Get.Ranges.IsBlob() {
+			_ = s.Close()
+			return ErrUnsupportedRequest
+		}
+		if err := writeBlob(s, store, req.Get.Hash, encode); err != nil {
+			_ = s.Close()
+			return err
+		}
+	case RequestGetMany:
+		if req.GetMany == nil {
+			_ = s.Close()
+			return ErrUnsupportedRequest
+		}
+		for i, hash := range req.GetMany.Hashes {
+			ranges := req.GetMany.Ranges.At(uint64(i))
+			if ranges.IsEmpty() {
+				continue
+			}
+			if !ranges.IsAll() {
+				_ = s.Close()
+				return ErrUnsupportedRequest
+			}
+			if err := writeBlob(s, store, hash, encode); err != nil {
+				_ = s.Close()
+				return err
+			}
+		}
+	default:
 		_ = s.Close()
 		return ErrUnsupportedRequest
 	}
-	data, ok := store.GetBlob(req.Get.Hash)
+	return closeWrite(s)
+}
+
+func writeBlob(s io.Writer, store Store, hash Hash, encode func([]byte) (Hash, []byte, error)) error {
+	data, ok := store.GetBlob(hash)
 	if !ok {
-		_ = s.Close()
 		return ErrBlobNotFound
 	}
-	hash, encoded, err := encode(data)
+	got, encoded, err := encode(data)
 	if err != nil {
-		_ = s.Close()
 		return err
 	}
-	if hash != req.Get.Hash {
-		_ = s.Close()
+	if got != hash {
 		return fmt.Errorf("blobs: stored blob hash mismatch")
 	}
 	if _, err := s.Write(encoded); err != nil {
-		_ = s.Close()
 		return fmt.Errorf("blobs: write response: %w", err)
 	}
-	return closeWrite(s)
+	return nil
 }
 
 // GetBlobBytes requests and validates one full-range raw blob from s.
@@ -112,6 +141,59 @@ func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byt
 // verifies the returned BAO body against hash.
 func GetBlobBytes(ctx context.Context, s BidiStream, hash Hash) ([]byte, error) {
 	return getBlob(ctx, s, hash, DecodeBlob)
+}
+
+// GetManyBlobBytes requests and validates full-range raw blobs from s.
+func GetManyBlobBytes(ctx context.Context, s BidiStream, hashes []Hash) ([][]byte, error) {
+	hashes = append([]Hash(nil), hashes...)
+	if _, err := s.Write(EncodeGetManyRequestBytes(NewGetManyRequest(hashes, ChunkRangesSeqAll()))); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("blobs: write request: %w", err)
+	}
+	if err := closeWrite(s); err != nil {
+		return nil, fmt.Errorf("blobs: close request: %w", err)
+	}
+
+	type result struct {
+		data [][]byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		data := make([][]byte, 0, len(hashes))
+		for _, hash := range hashes {
+			b, err := DecodeBlobReader(hash, s)
+			if err != nil {
+				done <- result{err: fmt.Errorf("blobs: decode response: %w", err)}
+				return
+			}
+			data = append(data, b)
+		}
+		extra, err := io.ReadAll(s)
+		if err != nil {
+			done <- result{err: fmt.Errorf("blobs: read response: %w", err)}
+			return
+		}
+		if len(extra) != 0 {
+			done <- result{err: fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, len(extra))}
+			return
+		}
+		done <- result{data: data}
+	}()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case res := <-done:
+		return res.data, res.err
+	case <-ctx.Done():
+		_ = s.Close()
+		res := <-done
+		if res.err != nil {
+			return nil, ctx.Err()
+		}
+		return nil, ctx.Err()
+	}
 }
 
 // GetSingleLeaf requests and validates one single-leaf raw blob from s.

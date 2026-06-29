@@ -60,6 +60,45 @@ func TestBlobTransfer(t *testing.T) {
 	}
 }
 
+func TestGetManyBlobTransfer(t *testing.T) {
+	data := [][]byte{
+		[]byte("first blob"),
+		vectorData(BlockSize + 1),
+		[]byte("third blob"),
+	}
+	var hashes []Hash
+	blobs := make(map[Hash][]byte)
+	for _, b := range data {
+		hash := NewHash(b)
+		hashes = append(hashes, hash)
+		blobs[hash] = append([]byte(nil), b...)
+	}
+
+	client, server := newTestBidiStreamPair()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- ServeBlob(context.Background(), server, StoreFunc(func(hash Hash) ([]byte, bool) {
+			b, ok := blobs[hash]
+			return append([]byte(nil), b...), ok
+		}))
+	}()
+	got, err := GetManyBlobBytes(context.Background(), client, hashes)
+	if err != nil {
+		t.Fatalf("GetManyBlobBytes: %v", err)
+	}
+	if len(got) != len(data) {
+		t.Fatalf("GetManyBlobBytes returned %d blobs, want %d", len(got), len(data))
+	}
+	for i := range data {
+		if !bytes.Equal(got[i], data[i]) {
+			t.Fatalf("blob %d length = %d, want %d", i, len(got[i]), len(data[i]))
+		}
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
+	}
+}
+
 func TestServeSingleLeafErrors(t *testing.T) {
 	hash := NewHash([]byte("missing"))
 	client, server := newTestBidiStreamPair()

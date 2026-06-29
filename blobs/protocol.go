@@ -188,6 +188,14 @@ func EncodeGetRequestBytes(r GetRequest) []byte {
 	return b
 }
 
+// EncodeGetManyRequestBytes encodes r as a full Request::GetMany message.
+func EncodeGetManyRequestBytes(r GetManyRequest) []byte {
+	var b []byte
+	b = appendVarint(b, uint64(RequestGetMany))
+	b = r.encode(b)
+	return b
+}
+
 // DecodeGetRequestBytes decodes a full Request::Get message.
 func DecodeGetRequestBytes(b []byte) (GetRequest, error) {
 	req, err := DecodeRequestBytes(b)
