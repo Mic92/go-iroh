@@ -905,7 +905,7 @@ func (c *Conn) Context() context.Context {
 }
 
 func (c *Conn) supportsDatagrams() bool {
-	return c.peerParams.MaxDatagramFrameSize > 0
+	return c.peerParams != nil && c.peerParams.MaxDatagramFrameSize > 0
 }
 
 // ConnectionState returns basic details about the QUIC connection.
@@ -3886,19 +3886,30 @@ func (c *Conn) SendDatagram(p []byte) error {
 		return errors.New("datagram support disabled")
 	}
 
+	maxDataLen, _ := c.MaxDatagramSize()
+	if int64(len(p)) > maxDataLen {
+		return &DatagramTooLargeError{MaxDatagramPayloadSize: maxDataLen}
+	}
 	f := &wire.DatagramFrame{DataLenPresent: true}
-	// The payload size estimate is conservative.
-	// Under many circumstances we could send a few more bytes.
+	f.Data = make([]byte, len(p))
+	copy(f.Data, p)
+	return c.datagramQueue.Add(f)
+}
+
+// MaxDatagramSize returns the largest payload currently accepted by
+// SendDatagram. The size may change as the path MTU estimate changes.
+func (c *Conn) MaxDatagramSize() (int64, bool) {
+	if !c.supportsDatagrams() {
+		return 0, false
+	}
+	f := &wire.DatagramFrame{DataLenPresent: true}
+	// The payload size estimate is conservative. Under many circumstances we
+	// could send a few more bytes.
 	maxDataLen := min(
 		f.MaxDataLen(c.peerParams.MaxDatagramFrameSize, c.version),
 		protocol.ByteCount(c.currentMTUEstimate.Load()),
 	)
-	if protocol.ByteCount(len(p)) > maxDataLen {
-		return &DatagramTooLargeError{MaxDatagramPayloadSize: int64(maxDataLen)}
-	}
-	f.Data = make([]byte, len(p))
-	copy(f.Data, p)
-	return c.datagramQueue.Add(f)
+	return int64(maxDataLen), true
 }
 
 // ReceiveDatagram gets a message received in a QUIC datagram, as specified in RFC 9221.

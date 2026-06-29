@@ -458,6 +458,49 @@ func TestConnUniStream(t *testing.T) {
 	}
 }
 
+func TestConnMaxDatagramSize(t *testing.T) {
+	client, server := connPair(t, "iroh-max-datagram/0")
+	defer client.CloseWithError(0, "")
+	defer server.CloseWithError(0, "")
+
+	maxSize, ok := client.MaxDatagramSize()
+	if !ok {
+		t.Fatal("client.MaxDatagramSize ok = false, want true")
+	}
+	if maxSize <= 0 {
+		t.Fatalf("client.MaxDatagramSize = %d, want positive", maxSize)
+	}
+
+	if err := client.SendDatagram(make([]byte, maxSize+1)); err == nil {
+		t.Fatal("SendDatagram over max size succeeded")
+	} else {
+		var tooLarge *quic.DatagramTooLargeError
+		if !errors.As(err, &tooLarge) {
+			t.Fatalf("SendDatagram over max size error = %T, want *quic.DatagramTooLargeError", err)
+		}
+		if got := int(tooLarge.MaxDatagramPayloadSize); got != maxSize {
+			t.Fatalf("too large max = %d, want %d", got, maxSize)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	msg := make([]byte, min(maxSize, 64))
+	for i := range msg {
+		msg[i] = byte(i)
+	}
+	if err := client.SendDatagram(msg); err != nil {
+		t.Fatalf("SendDatagram within max size: %v", err)
+	}
+	got, err := server.ReadDatagram(ctx)
+	if err != nil {
+		t.Fatalf("server ReadDatagram: %v", err)
+	}
+	if string(got) != string(msg) {
+		t.Fatalf("server datagram = %x, want %x", got, msg)
+	}
+}
+
 func clientStableIDCount(e *Endpoint) int {
 	e.mu.Lock()
 	defer e.mu.Unlock()

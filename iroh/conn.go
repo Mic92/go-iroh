@@ -465,6 +465,15 @@ func (c *Conn) AcceptUniStream(ctx context.Context) (*ReceiveStream, error) {
 // SendDatagram sends an unreliable datagram.
 func (c *Conn) SendDatagram(b []byte) error { return c.qc.SendDatagram(b) }
 
+// MaxDatagramSize returns the largest payload that can currently be passed to
+// [Conn.SendDatagram]. The size may change over the connection lifetime as the
+// path MTU estimate changes. The ok result is false if datagrams were not
+// negotiated.
+func (c *Conn) MaxDatagramSize() (n int, ok bool) {
+	size, ok := c.qc.MaxDatagramSize()
+	return int(size), ok
+}
+
 // ReadDatagram receives the next unreliable datagram.
 func (c *Conn) ReadDatagram(ctx context.Context) ([]byte, error) {
 	return c.qc.ReceiveDatagram(ctx)
