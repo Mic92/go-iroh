@@ -2,6 +2,7 @@ package quic
 
 import (
 	"net"
+	"sync"
 	"sync/atomic"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
@@ -33,6 +34,14 @@ type sconn struct {
 	remoteAddrInfo atomic.Pointer[remoteAddrInfo]
 
 	logger utils.Logger
+
+	// writeMu serializes writes. A sconn is written from several goroutines:
+	// the connection run loop (inline sends, probes, connection-close packets)
+	// and the dedicated sendQueue.Run goroutine. They share the gotGSOError and
+	// wroteFirstPacket fields and the oob scratch buffer, so writes must not
+	// overlap. The mutex is uncontended on the common path and is never held
+	// across a blocking operation.
+	writeMu sync.Mutex
 
 	// If GSO enabled, and we receive a GSO error for this remote address, GSO is disabled.
 	gotGSOError bool
@@ -70,6 +79,8 @@ func newSendConn(c rawConn, remote net.Addr, info packetInfo, logger utils.Logge
 }
 
 func (c *sconn) Write(p []byte, gsoSize uint16, ecn protocol.ECN) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	ai := c.remoteAddrInfo.Load()
 	err := c.writePacket(p, ai.addr, ai.oob, gsoSize, ecn)
 	if err != nil && isGSOError(err) {
@@ -104,6 +115,8 @@ func (c *sconn) writePacket(p []byte, addr net.Addr, oob []byte, gsoSize uint16,
 }
 
 func (c *sconn) WriteTo(b []byte, addr net.Addr) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	_, err := c.WritePacket(b, addr, nil, 0, protocol.ECNUnsupported)
 	return err
 }
