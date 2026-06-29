@@ -208,7 +208,7 @@ func (s *State) handleTopicOut(topic TopicID, ev TopicOutEvent, out *[]OutEvent)
 			*out = append(*out, OutEvent{Kind: DisconnectPeer, To: ev.To})
 		}
 	case TopicPeerData:
-		*out = append(*out, OutEvent{Kind: PeerDataEvent, To: ev.To, Data: clonePeerDataPtr(ev.Data)})
+		*out = append(*out, OutEvent{Kind: PeerDataEvent, Topic: topic, To: ev.To, Data: clonePeerDataPtr(ev.Data)})
 	}
 }
 

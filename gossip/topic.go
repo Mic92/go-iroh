@@ -26,6 +26,8 @@ const (
 	NeighborDown
 	// Received reports an application gossip message.
 	Received
+	// PeerData reports metadata propagated by the topic membership overlay.
+	PeerData
 	// Lagged reports that a slow receiver missed one or more events.
 	Lagged
 )
@@ -44,6 +46,7 @@ const (
 type Event struct {
 	Kind          EventKind
 	Peer          key.EndpointID
+	Data          []byte
 	Content       []byte
 	DeliveredFrom key.EndpointID
 	Scope         DeliveryScope
@@ -313,6 +316,8 @@ func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) {
 			}
 		case gossipproto.EmitEvent:
 			g.emit(ev.Topic, ev.Event)
+		case gossipproto.PeerDataEvent:
+			g.emitPeerData(ev.Topic, ev.To, ev.Data)
 		case gossipproto.ScheduleTimer:
 			g.schedule(ev.After, ev.Timer)
 		case gossipproto.DisconnectPeer:
@@ -378,6 +383,26 @@ func (g *Gossip) emit(topic TopicID, ev gossipproto.TopicEvent) {
 	g.mu.Unlock()
 	for _, t := range subs {
 		t.sendEvent(event)
+	}
+}
+
+func (g *Gossip) emitPeerData(topic TopicID, peer PeerID, data *gossipproto.PeerData) {
+	id, err := endpointFromPeerID(peer)
+	if err != nil {
+		return
+	}
+	ev := Event{Kind: PeerData, Peer: id}
+	if data != nil {
+		ev.Data = append([]byte(nil), (*data)...)
+	}
+	g.mu.Lock()
+	subs := make([]*Topic, 0, len(g.topics[topic]))
+	for t := range g.topics[topic] {
+		subs = append(subs, t)
+	}
+	g.mu.Unlock()
+	for _, t := range subs {
+		t.sendEvent(ev)
 	}
 }
 

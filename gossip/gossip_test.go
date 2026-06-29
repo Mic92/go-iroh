@@ -243,15 +243,13 @@ func TestDiscoveryLoopback(t *testing.T) {
 	serverDiscovery := gossip.New(server.ID(), gossip.WithGossip(serverGossip, topic, nil))
 	clientDiscovery := gossip.New(client.ID(), gossip.WithGossip(clientGossip, topic, []netaddr.EndpointAddr{serverAddr}))
 
+	data := dns.NewEndpointData(netaddr.IPAddr{Addr: server.LocalAddr()})
+	serverDiscovery.Publish(data)
+
 	startErr := make(chan error, 2)
 	go func() { startErr <- serverDiscovery.Start(ctx) }()
 	go func() { startErr <- clientDiscovery.Start(ctx) }()
 
-	userData, err := dns.NewUserData("server")
-	if err != nil {
-		t.Fatalf("user data: %v", err)
-	}
-	data := dns.NewEndpointData(netaddr.IPAddr{Addr: server.LocalAddr()}).WithUserData(&userData)
 	tick := time.NewTicker(25 * time.Millisecond)
 	defer tick.Stop()
 	done := make(chan struct{})
@@ -273,10 +271,6 @@ func TestDiscoveryLoopback(t *testing.T) {
 		}
 		if item.Provenance() != gossip.Provenance {
 			t.Fatalf("provenance = %q, want %q", item.Provenance(), gossip.Provenance)
-		}
-		gotUserData, ok := item.UserData()
-		if !ok || gotUserData.String() != "server" {
-			t.Fatalf("user data = %q, %v; want server, true", gotUserData.String(), ok)
 		}
 		if got := item.EndpointInfo().Data.IPAddrs(); len(got) != 1 || got[0] != server.LocalAddr() {
 			t.Fatalf("ip addrs = %v, want %v", got, server.LocalAddr())

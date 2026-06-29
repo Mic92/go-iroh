@@ -2,14 +2,16 @@ package gossip
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
+	"net/netip"
 	"sync"
 	"time"
 
 	"github.com/tmc/go-iroh/dns"
+	"github.com/tmc/go-iroh/internal/gossipproto"
+	"github.com/tmc/go-iroh/internal/postcard"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
@@ -67,12 +69,6 @@ type discoveryPeer struct {
 	lastUpdated uint64
 }
 
-type discoveryMessage struct {
-	ID       string   `json:"id"`
-	Addrs    []string `json:"addrs,omitempty"`
-	UserData *string  `json:"user_data,omitempty"`
-}
-
 // New returns a Discovery for id.
 func New(id key.EndpointID, opts ...Option) *Discovery {
 	d := &Discovery{
@@ -96,17 +92,19 @@ func (d *Discovery) Start(ctx context.Context) error {
 		<-ctx.Done()
 		return nil
 	}
+	d.mu.Lock()
+	pending := cloneEndpointDataPtr(d.pending)
+	d.mu.Unlock()
+	if pending != nil {
+		d.publishPeerData(*pending)
+	}
 	topic, err := d.gossip.Subscribe(ctx, d.topicID, d.bootstrap)
 	if err != nil {
 		return fmt.Errorf("gossip: discovery subscribe: %w", err)
 	}
 	d.mu.Lock()
 	d.topic = topic
-	pending := cloneEndpointDataPtr(d.pending)
 	d.mu.Unlock()
-	if pending != nil {
-		d.broadcast(*pending)
-	}
 	go func() {
 		<-ctx.Done()
 		_ = topic.Close()
@@ -115,10 +113,19 @@ func (d *Discovery) Start(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if ev.Kind != Received {
+		if ev.Kind == NeighborUp {
+			d.mu.Lock()
+			pending := cloneEndpointDataPtr(d.pending)
+			d.mu.Unlock()
+			if pending != nil {
+				d.publishPeerData(*pending)
+			}
 			continue
 		}
-		if err := d.handleMessage(ev.Content); err != nil {
+		if ev.Kind != PeerData {
+			continue
+		}
+		if err := d.handlePeerData(ev.Peer, ev.Data); err != nil {
 			continue
 		}
 	}
@@ -140,7 +147,7 @@ func (d *Discovery) Publish(data dns.EndpointData) {
 	topic := d.topic
 	d.mu.Unlock()
 	if topic != nil {
-		d.broadcast(data)
+		d.publishPeerData(data)
 	}
 }
 
@@ -176,22 +183,44 @@ func (d *Discovery) Resolve(ctx context.Context, id key.EndpointID) iter.Seq2[ir
 	}
 }
 
-func (d *Discovery) broadcast(data dns.EndpointData) {
-	b, err := encodeDiscoveryMessage(d.id, data)
+func (d *Discovery) publishPeerData(data dns.EndpointData) {
+	b, err := encodeDiscoveryPeerData(data)
 	if err != nil {
 		return
 	}
 	d.mu.Lock()
-	topic := d.topic
+	g := d.gossip
 	d.mu.Unlock()
-	if topic == nil {
+	if g == nil {
 		return
 	}
-	go func() { _ = topic.Broadcast(context.Background(), b) }()
+	g.mu.Lock()
+	out := g.handleLocked(gossipproto.InEvent{
+		Kind: gossipproto.UpdatePeerData,
+		Data: gossipproto.PeerData(b),
+		Now:  time.Now(),
+	})
+	var peers []gossipproto.PeerID
+	for peer := range g.neighbors[d.topicID] {
+		peers = append(peers, peer)
+	}
+	if len(peers) > 0 {
+		out = append(out, g.handleLocked(gossipproto.InEvent{
+			Kind:  gossipproto.CommandEvent,
+			Topic: d.topicID,
+			Command: gossipproto.TopicCommand{
+				Kind:  gossipproto.TopicCommandJoin,
+				Peers: peers,
+			},
+			Now: time.Now(),
+		})...)
+	}
+	g.mu.Unlock()
+	g.dispatch(context.Background(), out)
 }
 
-func (d *Discovery) handleMessage(b []byte) error {
-	id, data, err := decodeDiscoveryMessage(b)
+func (d *Discovery) handlePeerData(id key.EndpointID, b []byte) error {
+	data, err := decodeDiscoveryPeerData(b)
 	if err != nil {
 		return err
 	}
@@ -218,44 +247,153 @@ func (d *Discovery) item(id key.EndpointID) (iroh.Item, bool) {
 	return iroh.NewItem(info, Provenance, &peer.lastUpdated), true
 }
 
-func encodeDiscoveryMessage(id key.EndpointID, data dns.EndpointData) ([]byte, error) {
-	msg := discoveryMessage{ID: id.String()}
-	for _, addr := range data.Addrs() {
-		msg.Addrs = append(msg.Addrs, addr.String())
-	}
-	if u := data.UserData(); u != nil {
-		s := u.String()
-		msg.UserData = &s
-	}
-	return json.Marshal(msg)
+type discoveryAddrInfo struct {
+	relayURL        *string
+	directAddresses []netip.AddrPort
 }
 
-func decodeDiscoveryMessage(b []byte) (key.EndpointID, dns.EndpointData, error) {
-	var msg discoveryMessage
-	if err := json.Unmarshal(b, &msg); err != nil {
-		return key.EndpointID{}, dns.EndpointData{}, fmt.Errorf("gossip: decode discovery message: %w", err)
+func encodeDiscoveryPeerData(data dns.EndpointData) ([]byte, error) {
+	info := discoveryAddrInfo{}
+	if relays := data.RelayURLs(); len(relays) > 0 {
+		s := relays[0].String()
+		info.relayURL = &s
 	}
-	id, err := key.ParseEndpointID(msg.ID)
-	if err != nil {
-		return key.EndpointID{}, dns.EndpointData{}, fmt.Errorf("gossip: decode discovery id: %w", err)
+	info.directAddresses = data.IPAddrs()
+	var e postcard.Encoder
+	if err := info.EncodePostcard(&e); err != nil {
+		return nil, err
+	}
+	return e.Bytes(), nil
+}
+
+func decodeDiscoveryPeerData(b []byte) (dns.EndpointData, error) {
+	var info discoveryAddrInfo
+	d := postcard.NewDecoder(b)
+	if err := info.DecodePostcard(d); err != nil {
+		return dns.EndpointData{}, fmt.Errorf("gossip: decode discovery peer data: %w", err)
+	}
+	if !d.Done() {
+		return dns.EndpointData{}, postcard.ErrTrailingBytes
 	}
 	var addrs []netaddr.TransportAddr
-	for _, s := range msg.Addrs {
-		addr, err := netaddr.ParseTransportAddr(s)
+	if info.relayURL != nil {
+		relay, err := netaddr.ParseRelayURL(*info.relayURL)
 		if err != nil {
-			return key.EndpointID{}, dns.EndpointData{}, fmt.Errorf("gossip: decode discovery addr: %w", err)
+			return dns.EndpointData{}, fmt.Errorf("gossip: decode discovery relay: %w", err)
 		}
-		addrs = append(addrs, addr)
+		addrs = append(addrs, netaddr.RelayAddr{URL: relay})
 	}
-	data := dns.NewEndpointData(addrs...)
-	if msg.UserData != nil {
-		u, err := dns.NewUserData(*msg.UserData)
+	for _, addr := range info.directAddresses {
+		addrs = append(addrs, netaddr.IPAddr{Addr: addr})
+	}
+	return dns.NewEndpointData(addrs...), nil
+}
+
+func (a discoveryAddrInfo) EncodePostcard(e *postcard.Encoder) error {
+	if a.relayURL == nil {
+		e.Uint(0)
+	} else {
+		e.Uint(1)
+		e.String(*a.relayURL)
+	}
+	e.Uint(uint64(len(a.directAddresses)))
+	for _, addr := range a.directAddresses {
+		if err := encodeSocketAddr(e, addr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *discoveryAddrInfo) DecodePostcard(d *postcard.Decoder) error {
+	ok, err := d.Uint()
+	if err != nil {
+		return err
+	}
+	switch ok {
+	case 0:
+		a.relayURL = nil
+	case 1:
+		s, err := d.String()
 		if err != nil {
-			return key.EndpointID{}, dns.EndpointData{}, fmt.Errorf("gossip: decode discovery user data: %w", err)
+			return err
 		}
-		data = data.WithUserData(&u)
+		a.relayURL = &s
+	default:
+		return fmt.Errorf("gossip: invalid discovery relay option %d", ok)
 	}
-	return id, data, nil
+	n, err := d.Uint()
+	if err != nil {
+		return err
+	}
+	if n > 1024 {
+		return fmt.Errorf("gossip: too many discovery addresses %d", n)
+	}
+	a.directAddresses = make([]netip.AddrPort, 0, n)
+	for range int(n) {
+		addr, err := decodeSocketAddr(d)
+		if err != nil {
+			return err
+		}
+		a.directAddresses = append(a.directAddresses, addr)
+	}
+	return nil
+}
+
+func encodeSocketAddr(e *postcard.Encoder, addr netip.AddrPort) error {
+	a := addr.Addr()
+	if a.Is4() {
+		e.Uint(0)
+		b := a.As4()
+		e.RawBytes(b[:])
+		e.Uint(uint64(addr.Port()))
+		return nil
+	}
+	if a.Is6() {
+		e.Uint(1)
+		b := a.As16()
+		e.RawBytes(b[:])
+		e.Uint(uint64(addr.Port()))
+		return nil
+	}
+	return fmt.Errorf("gossip: invalid discovery address %s", addr)
+}
+
+func decodeSocketAddr(d *postcard.Decoder) (netip.AddrPort, error) {
+	kind, err := d.Uint()
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	var addr netip.Addr
+	switch kind {
+	case 0:
+		b, err := d.RawBytes(4)
+		if err != nil {
+			return netip.AddrPort{}, err
+		}
+		addr = netip.AddrFrom4([4]byte{b[0], b[1], b[2], b[3]})
+	case 1:
+		b, err := d.RawBytes(16)
+		if err != nil {
+			return netip.AddrPort{}, err
+		}
+		addr = netip.AddrFrom16([16]byte{
+			b[0], b[1], b[2], b[3],
+			b[4], b[5], b[6], b[7],
+			b[8], b[9], b[10], b[11],
+			b[12], b[13], b[14], b[15],
+		})
+	default:
+		return netip.AddrPort{}, fmt.Errorf("gossip: invalid discovery address kind %d", kind)
+	}
+	port, err := d.Uint()
+	if err != nil {
+		return netip.AddrPort{}, err
+	}
+	if port > 65535 {
+		return netip.AddrPort{}, fmt.Errorf("gossip: invalid discovery port %d", port)
+	}
+	return netip.AddrPortFrom(addr, uint16(port)), nil
 }
 
 func cloneEndpointDataPtr(data *dns.EndpointData) *dns.EndpointData {
