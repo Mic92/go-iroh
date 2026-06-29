@@ -95,6 +95,96 @@ func TestConnAddr(t *testing.T) {
 	}
 }
 
+func TestConnStats(t *testing.T) {
+	client, server := connPair(t, "iroh-stats/0")
+	defer client.CloseWithError(0, "")
+	defer server.CloseWithError(0, "")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		s, err := server.AcceptStream(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		if _, err := io.Copy(s, s); err != nil {
+			done <- err
+			return
+		}
+		done <- s.Close()
+	}()
+
+	s, err := client.OpenStreamSync(ctx)
+	if err != nil {
+		t.Fatalf("OpenStreamSync: %v", err)
+	}
+	if _, err := s.Write([]byte("hello")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := io.ReadAll(s); err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		conn *Conn
+	}{
+		{"client", client},
+		{"server", server},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.conn.Stats()
+			want := tt.conn.qc.ConnectionStats()
+			if got.MinRTT != want.MinRTT {
+				t.Errorf("MinRTT = %v, want %v", got.MinRTT, want.MinRTT)
+			}
+			if got.LatestRTT != want.LatestRTT {
+				t.Errorf("LatestRTT = %v, want %v", got.LatestRTT, want.LatestRTT)
+			}
+			if got.SmoothedRTT != want.SmoothedRTT {
+				t.Errorf("SmoothedRTT = %v, want %v", got.SmoothedRTT, want.SmoothedRTT)
+			}
+			if got.MeanDeviation != want.MeanDeviation {
+				t.Errorf("MeanDeviation = %v, want %v", got.MeanDeviation, want.MeanDeviation)
+			}
+			if got.BytesSent != want.BytesSent {
+				t.Errorf("BytesSent = %d, want %d", got.BytesSent, want.BytesSent)
+			}
+			if got.PacketsSent != want.PacketsSent {
+				t.Errorf("PacketsSent = %d, want %d", got.PacketsSent, want.PacketsSent)
+			}
+			if got.BytesReceived != want.BytesReceived {
+				t.Errorf("BytesReceived = %d, want %d", got.BytesReceived, want.BytesReceived)
+			}
+			if got.PacketsReceived != want.PacketsReceived {
+				t.Errorf("PacketsReceived = %d, want %d", got.PacketsReceived, want.PacketsReceived)
+			}
+			if got.BytesLost != want.BytesLost {
+				t.Errorf("BytesLost = %d, want %d", got.BytesLost, want.BytesLost)
+			}
+			if got.PacketsLost != want.PacketsLost {
+				t.Errorf("PacketsLost = %d, want %d", got.PacketsLost, want.PacketsLost)
+			}
+			if got.BytesSent == 0 {
+				t.Error("BytesSent = 0, want traffic recorded")
+			}
+			if got.BytesReceived == 0 {
+				t.Error("BytesReceived = 0, want traffic recorded")
+			}
+		})
+	}
+}
+
 func TestStreamConn(t *testing.T) {
 	client, server := connPair(t, "iroh-stream-conn/0")
 	defer client.CloseWithError(0, "")
@@ -289,6 +379,35 @@ func clientStableIDCount(e *Endpoint) int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return len(e.stableIDs)
+}
+
+// ExampleConn_Stats prints whether a loopback connection has recorded traffic.
+func ExampleConn_Stats() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-stats-example/0"
+	srvKey, _ := key.GenerateSecretKey()
+	server, _ := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	defer server.Shutdown(ctx)
+	client, _ := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	defer client.Shutdown(ctx)
+
+	go server.Accept(ctx)
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		fmt.Println("connect:", err)
+		return
+	}
+	defer conn.CloseWithError(0, "")
+
+	stats := conn.Stats()
+	fmt.Println(stats.BytesSent > 0)
+	// Output:
+	// true
 }
 
 // ExampleConn_CloseWithError closes a loopback connection with an application

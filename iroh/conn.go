@@ -110,6 +110,37 @@ type Conn struct {
 	stableID uint64
 }
 
+// ConnStats is a snapshot of connection statistics.
+type ConnStats struct {
+	// MinRTT is the minimum RTT observed on the active path.
+	MinRTT time.Duration
+	// LatestRTT is the most recent RTT sample observed on the active path.
+	LatestRTT time.Duration
+	// SmoothedRTT is an exponentially weighted moving average of RTT samples.
+	SmoothedRTT time.Duration
+	// MeanDeviation estimates variation in RTT samples.
+	MeanDeviation time.Duration
+
+	// BytesSent is the number of bytes sent on the underlying connection,
+	// including retransmissions.
+	BytesSent uint64
+	// PacketsSent is the number of packets sent on the underlying connection,
+	// including packets later declared lost.
+	PacketsSent uint64
+	// BytesReceived is the number of bytes received on the underlying
+	// connection, including duplicate stream data.
+	BytesReceived uint64
+	// PacketsReceived is the number of packets received on the underlying
+	// connection, including packets that were not processable.
+	PacketsReceived uint64
+	// BytesLost is the number of bytes declared lost on the underlying
+	// connection. It may decrease if packets declared lost are later received.
+	BytesLost uint64
+	// PacketsLost is the number of packets declared lost on the underlying
+	// connection. It may decrease if packets declared lost are later received.
+	PacketsLost uint64
+}
+
 func newConn(qc *quic.Conn, remoteID key.EndpointID, alpn string, side Side, stableID uint64) (*Conn, error) {
 	return &Conn{qc: qc, remoteID: remoteID, alpn: alpn, side: side, stableID: stableID}, nil
 }
@@ -228,6 +259,23 @@ func (c *Conn) Side() Side { return c.side }
 // StableID returns an endpoint-local identifier for this connection. It is
 // fixed for the connection lifetime, even when the transport path changes.
 func (c *Conn) StableID() uint64 { return c.stableID }
+
+// Stats returns a snapshot of connection statistics.
+func (c *Conn) Stats() ConnStats {
+	s := c.qc.ConnectionStats()
+	return ConnStats{
+		MinRTT:          s.MinRTT,
+		LatestRTT:       s.LatestRTT,
+		SmoothedRTT:     s.SmoothedRTT,
+		MeanDeviation:   s.MeanDeviation,
+		BytesSent:       s.BytesSent,
+		PacketsSent:     s.PacketsSent,
+		BytesReceived:   s.BytesReceived,
+		PacketsReceived: s.PacketsReceived,
+		BytesLost:       s.BytesLost,
+		PacketsLost:     s.PacketsLost,
+	}
+}
 
 // OpenStreamSync opens a new bidirectional stream, blocking until the peer's
 // flow control permits it or ctx is done.
