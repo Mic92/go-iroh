@@ -3,6 +3,7 @@ package blobs
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,9 @@ type FSStore struct {
 	dir     string
 	dataDir string
 	baoDir  string
+	tags    map[string]HashAndFormat
+	temp    map[uint64]HashAndFormat
+	nextTag uint64
 	mu      sync.RWMutex
 }
 
@@ -36,6 +40,9 @@ func NewFSStore(dir string) (*FSStore, error) {
 	}
 	if err := os.MkdirAll(s.baoDir, 0o755); err != nil {
 		return nil, fmt.Errorf("blobs: create outboard dir: %w", err)
+	}
+	if err := s.loadTags(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -137,6 +144,10 @@ func (s *FSStore) outboardPath(hash Hash) string {
 	return filepath.Join(s.baoDir, hash.String())
 }
 
+func (s *FSStore) tagsPath() string {
+	return filepath.Join(s.dir, "tags.json")
+}
+
 type fsEntry struct {
 	store *FSStore
 	hash  Hash
@@ -204,4 +215,31 @@ func writeFileAtomic(name string, data []byte, perm os.FileMode) error {
 	}
 	ok = true
 	return nil
+}
+
+func (s *FSStore) loadTags() error {
+	s.tags = make(map[string]HashAndFormat)
+	s.temp = make(map[uint64]HashAndFormat)
+	data, err := os.ReadFile(s.tagsPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("blobs: read tags: %w", err)
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(data, &s.tags); err != nil {
+		return fmt.Errorf("blobs: decode tags: %w", err)
+	}
+	return nil
+}
+
+func (s *FSStore) saveTagsLocked() error {
+	data, err := json.MarshalIndent(s.tags, "", "\t")
+	if err != nil {
+		return fmt.Errorf("blobs: encode tags: %w", err)
+	}
+	return writeFileAtomic(s.tagsPath(), data, 0o644)
 }
