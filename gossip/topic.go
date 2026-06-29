@@ -233,6 +233,19 @@ func (g *Gossip) Subscribe(ctx context.Context, topic TopicID, bootstrap []netad
 	return t, nil
 }
 
+// SubscribeAndJoin subscribes to topic and waits until it has a direct neighbor.
+func (g *Gossip) SubscribeAndJoin(ctx context.Context, topic TopicID, bootstrap []netaddr.EndpointAddr) (*Topic, error) {
+	t, err := g.Subscribe(ctx, topic, bootstrap)
+	if err != nil {
+		return nil, err
+	}
+	if err := t.Joined(ctx); err != nil {
+		_ = t.Close()
+		return nil, err
+	}
+	return t, nil
+}
+
 func (g *Gossip) receive(ctx context.Context, from key.EndpointID, msg Message) error {
 	g.mu.Lock()
 	out := g.handleLocked(gossipproto.InEvent{
@@ -449,6 +462,11 @@ type Topic struct {
 // ID returns the topic ID.
 func (t *Topic) ID() TopicID { return t.id }
 
+// Split returns separate sender and receiver handles for t.
+func (t *Topic) Split() (*Sender, *Receiver) {
+	return &Sender{topic: t}, &Receiver{topic: t}
+}
+
 // Broadcast sends content to the topic's epidemic overlay.
 func (t *Topic) Broadcast(ctx context.Context, content []byte) error {
 	if t.isClosed() {
@@ -461,6 +479,14 @@ func (t *Topic) Broadcast(ctx context.Context, content []byte) error {
 	})
 }
 
+// Broadcast sends content to the sender's topic epidemic overlay.
+func (s *Sender) Broadcast(ctx context.Context, content []byte) error {
+	if s == nil || s.topic == nil {
+		return errors.New("gossip: nil topic sender")
+	}
+	return s.topic.Broadcast(ctx, content)
+}
+
 // BroadcastNeighbors sends content to the topic's direct neighbors.
 func (t *Topic) BroadcastNeighbors(ctx context.Context, content []byte) error {
 	if t.isClosed() {
@@ -471,6 +497,14 @@ func (t *Topic) BroadcastNeighbors(ctx context.Context, content []byte) error {
 		Content: append([]byte(nil), content...),
 		Scope:   gossipproto.ScopeNeighbors,
 	})
+}
+
+// BroadcastNeighbors sends content to the sender's direct topic neighbors.
+func (s *Sender) BroadcastNeighbors(ctx context.Context, content []byte) error {
+	if s == nil || s.topic == nil {
+		return errors.New("gossip: nil topic sender")
+	}
+	return s.topic.BroadcastNeighbors(ctx, content)
 }
 
 // JoinPeers dials and joins additional peers for this topic.
@@ -495,6 +529,32 @@ func (t *Topic) JoinPeers(ctx context.Context, peers []netaddr.EndpointAddr) err
 	})
 }
 
+// JoinPeers dials and joins additional peers for the sender's topic.
+func (s *Sender) JoinPeers(ctx context.Context, peers []netaddr.EndpointAddr) error {
+	if s == nil || s.topic == nil {
+		return errors.New("gossip: nil topic sender")
+	}
+	return s.topic.JoinPeers(ctx, peers)
+}
+
+// Joined waits until the topic has at least one direct neighbor.
+func (t *Topic) Joined(ctx context.Context) error {
+	_, r := t.Split()
+	return r.Joined(ctx)
+}
+
+// IsJoined reports whether the topic has at least one direct neighbor.
+func (t *Topic) IsJoined() bool {
+	_, r := t.Split()
+	return r.IsJoined()
+}
+
+// Neighbors returns the topic's current direct neighbors.
+func (t *Topic) Neighbors() []key.EndpointID {
+	_, r := t.Split()
+	return r.Neighbors()
+}
+
 // Events returns the topic event stream.
 func (t *Topic) Events() iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
@@ -508,6 +568,65 @@ func (t *Topic) Events() iter.Seq2[Event, error] {
 
 // Close leaves the topic when this is its last local subscription.
 func (t *Topic) Close() error { return t.g.closeTopic(t) }
+
+// Receiver receives events for a gossip topic.
+type Receiver struct {
+	topic *Topic
+}
+
+// Events returns the receiver's topic event stream.
+func (r *Receiver) Events() iter.Seq2[Event, error] {
+	if r == nil || r.topic == nil {
+		return nil
+	}
+	return r.topic.Events()
+}
+
+// Joined waits until the receiver's topic has at least one direct neighbor.
+func (r *Receiver) Joined(ctx context.Context) error {
+	if r == nil || r.topic == nil {
+		return errors.New("gossip: nil receiver")
+	}
+	if r.IsJoined() {
+		return nil
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ev, ok := <-r.topic.events:
+			if !ok {
+				return errors.New("gossip: topic closed")
+			}
+			if ev.Kind == NeighborUp || r.IsJoined() {
+				return nil
+			}
+		}
+	}
+}
+
+// IsJoined reports whether the receiver's topic has at least one direct neighbor.
+func (r *Receiver) IsJoined() bool {
+	return len(r.Neighbors()) > 0
+}
+
+// Neighbors returns the receiver's current direct neighbors.
+func (r *Receiver) Neighbors() []key.EndpointID {
+	if r == nil || r.topic == nil || r.topic.g == nil {
+		return nil
+	}
+	r.topic.g.mu.Lock()
+	defer r.topic.g.mu.Unlock()
+	peers := r.topic.g.neighbors[r.topic.id]
+	out := make([]key.EndpointID, 0, len(peers))
+	for peer := range peers {
+		id, err := endpointFromPeerID(peer)
+		if err == nil {
+			out = append(out, id)
+		}
+	}
+	return out
+}
 
 func (t *Topic) sendEvent(ev Event) {
 	t.mu.Lock()

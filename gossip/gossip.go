@@ -101,6 +101,7 @@ func (h *Handler) maxMessageSize() int {
 type Sender struct {
 	conn    *iroh.Conn
 	maxSize int
+	topic   *Topic
 
 	mu      sync.Mutex
 	streams map[TopicID]*iroh.SendStream
@@ -117,6 +118,9 @@ func NewSender(conn *iroh.Conn, maxMessageSize int) *Sender {
 
 // Send writes msg on the topic stream for msg.Topic.
 func (s *Sender) Send(ctx context.Context, msg Message) error {
+	if s.topic != nil {
+		return errors.New("gossip: topic sender cannot send wire messages")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -147,6 +151,9 @@ func (s *Sender) Send(ctx context.Context, msg Message) error {
 
 // Close closes all open topic streams.
 func (s *Sender) Close() error {
+	if s.topic != nil {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
