@@ -17,3 +17,10 @@ func Example() {
 	fmt.Println(parsed.Hash() == hash, parsed.Format())
 	// Output: true Raw
 }
+
+func ExampleEncodeBlob() {
+	hash, encoded, _ := blobs.EncodeBlob([]byte("hello"))
+	data, _ := blobs.DecodeBlob(hash, encoded)
+	fmt.Println(string(data))
+	// Output: hello
+}

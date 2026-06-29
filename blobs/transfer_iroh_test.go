@@ -11,11 +11,11 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-func TestSingleLeafTransferIroh(t *testing.T) {
+func TestBlobTransferIroh(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	data := []byte("single leaf over iroh")
+	data := testData(blobs.BlockSize + 1)
 	hash := blobs.NewHash(data)
 
 	server, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
@@ -28,7 +28,7 @@ func TestSingleLeafTransferIroh(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			return blobs.ServeSingleLeaf(ctx, s, blobs.SingleLeafStoreFunc(func(got blobs.Hash) ([]byte, bool) {
+			return blobs.ServeBlob(ctx, s, blobs.StoreFunc(func(got blobs.Hash) ([]byte, bool) {
 				if got != hash {
 					return nil, false
 				}
@@ -58,11 +58,19 @@ func TestSingleLeafTransferIroh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
-	got, err := blobs.GetSingleLeaf(ctx, s, hash)
+	got, err := blobs.GetBlobBytes(ctx, s, hash)
 	if err != nil {
-		t.Fatalf("get single leaf: %v", err)
+		t.Fatalf("get blob: %v", err)
 	}
 	if string(got) != string(data) {
-		t.Fatalf("data = %q, want %q", got, data)
+		t.Fatalf("data length = %d, want %d", len(got), len(data))
 	}
+}
+
+func testData(n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = byte(i*31 + 7)
+	}
+	return out
 }

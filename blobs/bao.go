@@ -1,9 +1,12 @@
 package blobs
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
+
+	"lukechampine.com/blake3/bao"
 )
 
 const (
@@ -17,6 +20,9 @@ const (
 )
 
 var (
+	// ErrInvalidBlob is returned when a full-range BAO response is malformed
+	// or fails hash verification.
+	ErrInvalidBlob = errors.New("blobs: invalid blob")
 	// ErrSingleLeafTooLarge is returned when data cannot be represented as a
 	// single BAO leaf.
 	ErrSingleLeafTooLarge = errors.New("blobs: single leaf too large")
@@ -24,6 +30,33 @@ var (
 	// malformed or fails hash verification.
 	ErrInvalidSingleLeaf = errors.New("blobs: invalid single leaf")
 )
+
+// EncodeBlob returns the Rust-compatible full-range BAO response for data.
+//
+// The response bytes are an 8-byte little-endian size prefix followed by the
+// pre-order BAO tree for iroh-blobs' 16 KiB block size. The returned hash is the
+// BLAKE3 root hash of data.
+func EncodeBlob(data []byte) (Hash, []byte, error) {
+	encoded, root := bao.EncodeBuf(data, 4, false)
+	return Hash(root), encoded, nil
+}
+
+// DecodeBlob validates and decodes a Rust-compatible full-range BAO response.
+func DecodeBlob(expected Hash, encoded []byte) ([]byte, error) {
+	var out bytes.Buffer
+	r := bytes.NewReader(encoded)
+	ok, err := bao.Decode(&out, r, nil, 4, expected.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidBlob, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("%w: hash mismatch", ErrInvalidBlob)
+	}
+	if r.Len() != 0 {
+		return nil, fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, r.Len())
+	}
+	return out.Bytes(), nil
+}
 
 // EncodeSingleLeaf returns the Rust-compatible full-range BAO response for data.
 //
@@ -34,10 +67,7 @@ func EncodeSingleLeaf(data []byte) (Hash, []byte, error) {
 	if len(data) > MaxSingleLeafSize {
 		return Hash{}, nil, fmt.Errorf("%w: %d > %d", ErrSingleLeafTooLarge, len(data), MaxSingleLeafSize)
 	}
-	encoded := make([]byte, 8+len(data))
-	binary.LittleEndian.PutUint64(encoded[:8], uint64(len(data)))
-	copy(encoded[8:], data)
-	return NewHash(data), encoded, nil
+	return EncodeBlob(data)
 }
 
 // DecodeSingleLeaf validates and decodes a Rust-compatible single-leaf BAO

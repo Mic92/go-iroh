@@ -20,16 +20,26 @@ type BidiStream interface {
 	Close() error
 }
 
-// SingleLeafStore stores raw blobs that fit in one iroh-blobs BAO block.
-type SingleLeafStore interface {
+// Store stores raw blobs.
+type Store interface {
 	GetBlob(Hash) ([]byte, bool)
 }
 
-// SingleLeafStoreFunc adapts a function to [SingleLeafStore].
-type SingleLeafStoreFunc func(Hash) ([]byte, bool)
+// StoreFunc adapts a function to [Store].
+type StoreFunc func(Hash) ([]byte, bool)
 
 // GetBlob calls f(hash).
-func (f SingleLeafStoreFunc) GetBlob(hash Hash) ([]byte, bool) { return f(hash) }
+func (f StoreFunc) GetBlob(hash Hash) ([]byte, bool) { return f(hash) }
+
+// SingleLeafStore stores raw blobs.
+//
+// Deprecated: use [Store].
+type SingleLeafStore = Store
+
+// SingleLeafStoreFunc adapts a function to [SingleLeafStore].
+//
+// Deprecated: use [StoreFunc].
+type SingleLeafStoreFunc = StoreFunc
 
 var (
 	// ErrBlobNotFound is returned when a requested blob is not in a store.
@@ -39,14 +49,27 @@ var (
 	ErrUnsupportedRequest = errors.New("blobs: unsupported request")
 )
 
+// ServeBlob serves one full-range raw blob request on s.
+//
+// The client must send a full [RequestGet] / [GetBlob] request, then close its
+// send side. ServeBlob writes the full-range BAO response and closes its send
+// side.
+func ServeBlob(ctx context.Context, s BidiStream, store Store) error {
+	return serveBlob(ctx, s, store, EncodeBlob)
+}
+
 // ServeSingleLeaf serves one single-leaf raw blob request on s.
 //
 // The client must send a full [RequestGet] / [GetBlob] request, then close its
 // send side. ServeSingleLeaf writes the single-leaf BAO response and closes its
 // send side. Blobs larger than [MaxSingleLeafSize] are rejected.
-func ServeSingleLeaf(ctx context.Context, s BidiStream, store SingleLeafStore) error {
+func ServeSingleLeaf(ctx context.Context, s BidiStream, store Store) error {
+	return serveBlob(ctx, s, store, EncodeSingleLeaf)
+}
+
+func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byte) (Hash, []byte, error)) error {
 	if store == nil {
-		return errors.New("blobs: nil single-leaf store")
+		return errors.New("blobs: nil blob store")
 	}
 	requestBytes, err := readAllContext(ctx, s)
 	if err != nil {
@@ -67,7 +90,7 @@ func ServeSingleLeaf(ctx context.Context, s BidiStream, store SingleLeafStore) e
 		_ = s.Close()
 		return ErrBlobNotFound
 	}
-	hash, encoded, err := EncodeSingleLeaf(data)
+	hash, encoded, err := encode(data)
 	if err != nil {
 		_ = s.Close()
 		return err
@@ -83,11 +106,23 @@ func ServeSingleLeaf(ctx context.Context, s BidiStream, store SingleLeafStore) e
 	return closeWrite(s)
 }
 
+// GetBlobBytes requests and validates one full-range raw blob from s.
+//
+// GetBlobBytes sends [GetBlob], closes its send side, reads the response, and
+// verifies the returned BAO body against hash.
+func GetBlobBytes(ctx context.Context, s BidiStream, hash Hash) ([]byte, error) {
+	return getBlob(ctx, s, hash, DecodeBlob)
+}
+
 // GetSingleLeaf requests and validates one single-leaf raw blob from s.
 //
 // GetSingleLeaf sends [GetBlob], closes its send side, reads the response, and
 // verifies the returned single-leaf BAO body against hash.
 func GetSingleLeaf(ctx context.Context, s BidiStream, hash Hash) ([]byte, error) {
+	return getBlob(ctx, s, hash, DecodeSingleLeaf)
+}
+
+func getBlob(ctx context.Context, s BidiStream, hash Hash, decode func(Hash, []byte) ([]byte, error)) ([]byte, error) {
 	if _, err := s.Write(EncodeGetRequestBytes(GetBlob(hash))); err != nil {
 		_ = s.Close()
 		return nil, fmt.Errorf("blobs: write request: %w", err)
@@ -99,7 +134,7 @@ func GetSingleLeaf(ctx context.Context, s BidiStream, hash Hash) ([]byte, error)
 	if err != nil {
 		return nil, fmt.Errorf("blobs: read response: %w", err)
 	}
-	data, err := DecodeSingleLeaf(hash, encoded)
+	data, err := decode(hash, encoded)
 	if err != nil {
 		return nil, fmt.Errorf("blobs: decode response: %w", err)
 	}

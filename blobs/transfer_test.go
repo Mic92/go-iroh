@@ -34,6 +34,32 @@ func TestSingleLeafTransfer(t *testing.T) {
 	}
 }
 
+func TestBlobTransfer(t *testing.T) {
+	data := vectorData(BlockSize + 1)
+	hash := NewHash(data)
+	client, server := newTestBidiStreamPair()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- ServeBlob(context.Background(), server, StoreFunc(func(got Hash) ([]byte, bool) {
+			if got != hash {
+				t.Errorf("requested hash = %s, want %s", got, hash)
+				return nil, false
+			}
+			return append([]byte(nil), data...), true
+		}))
+	}()
+	got, err := GetBlobBytes(context.Background(), client, hash)
+	if err != nil {
+		t.Fatalf("GetBlobBytes: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("GetBlobBytes returned %d bytes, want %d", len(got), len(data))
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
+	}
+}
+
 func TestServeSingleLeafErrors(t *testing.T) {
 	hash := NewHash([]byte("missing"))
 	client, server := newTestBidiStreamPair()
