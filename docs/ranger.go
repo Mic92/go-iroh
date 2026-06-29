@@ -10,6 +10,30 @@ import (
 // Fingerprint is a range-reconciliation fingerprint.
 type Fingerprint [32]byte
 
+// SyncConfig configures range reconciliation.
+type SyncConfig struct {
+	MaxSetSize  int
+	SplitFactor int
+}
+
+// DefaultSyncConfig returns the Rust iroh-docs reconciliation defaults.
+func DefaultSyncConfig() SyncConfig {
+	return SyncConfig{
+		MaxSetSize:  1,
+		SplitFactor: 2,
+	}
+}
+
+func (c SyncConfig) withDefaults() SyncConfig {
+	if c.MaxSetSize == 0 {
+		c.MaxSetSize = 1
+	}
+	if c.SplitFactor < 2 {
+		c.SplitFactor = 2
+	}
+	return c
+}
+
 // EmptyFingerprint returns the fingerprint of the empty set.
 func EmptyFingerprint() Fingerprint {
 	return Fingerprint(blake3.Sum256(nil))

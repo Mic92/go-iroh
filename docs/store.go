@@ -104,6 +104,104 @@ func (s *MemoryStore) InitialMessage() Message {
 	}}}
 }
 
+// ProcessMessage processes message and returns a response, if reconciliation
+// should continue. The validate callback must verify incoming entries that
+// should be trusted.
+func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validate func(SignedEntry, ContentStatus) bool, onInsert func(SignedEntry, ContentStatus), contentStatus func(SignedEntry) ContentStatus) (Message, bool) {
+	config = config.withDefaults()
+	if validate == nil {
+		validate = func(SignedEntry, ContentStatus) bool { return true }
+	}
+	if contentStatus == nil {
+		contentStatus = func(SignedEntry) ContentStatus { return ContentComplete }
+	}
+
+	var out []MessagePart
+	var items []RangeItem
+	var fingerprints []RangeFingerprint
+	for _, part := range message.Parts {
+		switch part.Kind {
+		case MessagePartRangeItem:
+			items = append(items, part.RangeItem)
+		case MessagePartRangeFingerprint:
+			fingerprints = append(fingerprints, part.RangeFingerprint)
+		}
+	}
+
+	for _, item := range items {
+		var diff []RangeValue
+		if !item.HaveLocal {
+			for _, entry := range s.GetRange(item.Range) {
+				if !peerHasNewerValue(item.Values, entry) {
+					diff = append(diff, RangeValue{Entry: entry, Status: contentStatus(entry)})
+				}
+			}
+		}
+		for _, value := range item.Values {
+			if !validate(value.Entry, value.Status) {
+				continue
+			}
+			if outcome := s.Put(value.Entry); outcome.Inserted() && onInsert != nil {
+				onInsert(value.Entry, value.Status)
+			}
+		}
+		if len(diff) != 0 {
+			out = append(out, MessagePart{
+				Kind: MessagePartRangeItem,
+				RangeItem: RangeItem{
+					Range:     item.Range,
+					Values:    diff,
+					HaveLocal: true,
+				},
+			})
+		}
+	}
+
+	for _, remote := range fingerprints {
+		local := s.Fingerprint(remote.Range)
+		if local == remote.Fingerprint {
+			continue
+		}
+		entries := s.GetRange(remote.Range)
+		if len(entries) <= 1 || remote.Fingerprint == EmptyFingerprint() {
+			out = append(out, MessagePart{
+				Kind: MessagePartRangeItem,
+				RangeItem: RangeItem{
+					Range:     remote.Range,
+					Values:    rangeValues(entries, contentStatus),
+					HaveLocal: false,
+				},
+			})
+			continue
+		}
+		for _, r := range s.splitRange(remote.Range, config.SplitFactor) {
+			chunk := s.GetRange(r)
+			if len(chunk) > config.MaxSetSize {
+				out = append(out, MessagePart{
+					Kind: MessagePartRangeFingerprint,
+					RangeFingerprint: RangeFingerprint{
+						Range:       r,
+						Fingerprint: s.Fingerprint(r),
+					},
+				})
+			} else {
+				out = append(out, MessagePart{
+					Kind: MessagePartRangeItem,
+					RangeItem: RangeItem{
+						Range:     r,
+						Values:    rangeValues(chunk, contentStatus),
+						HaveLocal: false,
+					},
+				})
+			}
+		}
+	}
+	if len(out) == 0 {
+		return Message{}, false
+	}
+	return Message{Parts: out}, true
+}
+
 func (s *MemoryStore) fingerprintLocked(r Range) Fingerprint {
 	fp := EmptyFingerprint()
 	for _, entry := range s.getRangeLocked(r) {
@@ -155,4 +253,77 @@ func sortEntries(entries []SignedEntry) {
 	slices.SortFunc(entries, func(a, b SignedEntry) int {
 		return a.Compare(b)
 	})
+}
+
+func peerHasNewerValue(values []RangeValue, entry SignedEntry) bool {
+	for _, value := range values {
+		if value.Entry.Entry.ID.Compare(entry.Entry.ID) == 0 && value.Entry.Entry.Record.Compare(entry.Entry.Record) >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func rangeValues(entries []SignedEntry, contentStatus func(SignedEntry) ContentStatus) []RangeValue {
+	values := make([]RangeValue, 0, len(entries))
+	for _, entry := range entries {
+		values = append(values, RangeValue{Entry: entry, Status: contentStatus(entry)})
+	}
+	return values
+}
+
+func (s *MemoryStore) splitRange(r Range, splitFactor int) []Range {
+	if splitFactor < 2 {
+		splitFactor = 2
+	}
+	entries := s.GetRange(r)
+	n := len(entries)
+	if n == 0 {
+		return nil
+	}
+	start := 0
+	for ; start < len(entries); start++ {
+		if entries[start].Entry.ID.Compare(r.Start) >= 0 {
+			break
+		}
+	}
+	if start == len(entries) {
+		start = 0
+	}
+	pivot := func(i int) RecordIdentifier {
+		i %= splitFactor
+		offset := (n * (i + 1)) / splitFactor
+		offset = (start + offset) % n
+		return entries[offset].Entry.ID
+	}
+
+	var ranges []Range
+	if r.IsAll() {
+		for i := 0; i < splitFactor; i++ {
+			x, y := pivot(i), pivot(i+1)
+			if x.Compare(y) != 0 {
+				ranges = append(ranges, NewRange(x, y))
+			}
+		}
+		return ranges
+	}
+	ranges = append(ranges, NewRange(r.Start, pivot(0)))
+	for i := 0; i < splitFactor-2; i++ {
+		x, y := pivot(i), pivot(i+1)
+		if x.Compare(y) != 0 {
+			ranges = append(ranges, NewRange(x, y))
+		}
+	}
+	ranges = append(ranges, NewRange(pivot(splitFactor-2), r.End))
+	return nonEmptyRanges(ranges)
+}
+
+func nonEmptyRanges(ranges []Range) []Range {
+	out := ranges[:0]
+	for _, r := range ranges {
+		if r.Start.Compare(r.End) != 0 {
+			out = append(out, r)
+		}
+	}
+	return out
 }
