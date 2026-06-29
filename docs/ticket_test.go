@@ -1,0 +1,96 @@
+package docs
+
+import (
+	"encoding/base32"
+	"encoding/hex"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/tmc/go-iroh/endpointticket"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
+)
+
+func TestDocTicketRustVector(t *testing.T) {
+	nodeID, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nsBytes [32]byte
+	if _, err := hex.Decode(nsBytes[:], []byte("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")); err != nil {
+		t.Fatal(err)
+	}
+	namespace := MustNamespaceID(nsBytes)
+	ticket := NewTicket(NewReadCapability(namespace), []netaddr.EndpointAddr{
+		netaddr.NewEndpointAddr(nodeID),
+	})
+	wantBytes, err := hex.DecodeString(
+		"00" +
+			"01" +
+			"ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6" +
+			"01" +
+			"ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6" +
+			"00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := ticket.EncodeBytes(); hex.EncodeToString(got) != hex.EncodeToString(wantBytes) {
+		t.Fatalf("EncodeBytes = %x, want %x", got, wantBytes)
+	}
+	want := TicketKind + strings.ToLower(base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(wantBytes))
+	if got := ticket.String(); got != want {
+		t.Fatalf("String = %q, want %q", got, want)
+	}
+	decoded, err := DecodeString(want)
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	if decoded.Capability().Kind() != CapabilityRead {
+		t.Fatalf("capability kind = %v, want read", decoded.Capability().Kind())
+	}
+	if decoded.Capability().NamespaceID().String() != namespace.String() {
+		t.Fatalf("namespace = %s, want %s", decoded.Capability().NamespaceID(), namespace)
+	}
+	if len(decoded.Nodes()) != 1 || !decoded.Nodes()[0].ID.Equal(nodeID) || len(decoded.Nodes()[0].Addrs()) != 0 {
+		t.Fatalf("nodes = %+v, want one node with no addrs", decoded.Nodes())
+	}
+}
+
+func TestDocTicketRegistry(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns := NewReadCapability(NamespaceID{id: sk.Public().EndpointID()})
+	ticket := NewTicket(ns, []netaddr.EndpointAddr{netaddr.NewEndpointAddr(sk.Public().EndpointID())})
+	var _ endpointticket.TicketCodec = ticket
+
+	r := endpointticket.NewRegistry()
+	if err := Register(r); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.DecodeString(ticket.String())
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	doc, ok := got.(DocTicket)
+	if !ok {
+		t.Fatalf("DecodeString returned %T, want DocTicket", got)
+	}
+	if doc.Capability().NamespaceID().String() != ticket.Capability().NamespaceID().String() {
+		t.Fatalf("namespace = %s, want %s", doc.Capability().NamespaceID(), ticket.Capability().NamespaceID())
+	}
+}
+
+func TestDocTicketErrors(t *testing.T) {
+	if _, err := DecodeString("blobabc"); !errors.Is(err, &endpointticket.ParseError{Kind: endpointticket.ParseErrorKindKind}) {
+		t.Fatalf("missing prefix error = %v", err)
+	}
+	if _, err := DecodeString(TicketKind + "!"); !errors.Is(err, endpointticket.ErrEncoding) {
+		t.Fatalf("encoding error = %v", err)
+	}
+	if _, err := DecodeBytes([]byte{0, 1}); !errors.Is(err, endpointticket.ErrDecode) {
+		t.Fatalf("decode error = %v", err)
+	}
+}
