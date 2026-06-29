@@ -354,6 +354,13 @@ func TestConnCloseWithError(t *testing.T) {
 	} else if uint64(appErr.ErrorCode) != code {
 		t.Errorf("local close code = %d, want %d", appErr.ErrorCode, code)
 	}
+	publicErr, ok := AsApplicationError(context.Cause(client.Context()))
+	if !ok {
+		t.Fatalf("AsApplicationError returned false")
+	}
+	if publicErr.Code != code || publicErr.Reason != "bye" || publicErr.Remote {
+		t.Fatalf("AsApplicationError = %+v, want code %d reason bye remote false", publicErr, code)
+	}
 
 	// The peer observes the close carrying the same application code.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -368,6 +375,13 @@ func TestConnCloseWithError(t *testing.T) {
 	}
 	if !peerErr.Remote {
 		t.Error("peer's ApplicationError.Remote = false, want true (peer-initiated)")
+	}
+	publicPeerErr, ok := AsApplicationError(err)
+	if !ok {
+		t.Fatalf("AsApplicationError(peer err) returned false")
+	}
+	if publicPeerErr.Code != code || publicPeerErr.Reason != "bye" || !publicPeerErr.Remote {
+		t.Fatalf("AsApplicationError(peer err) = %+v, want code %d reason bye remote true", publicPeerErr, code)
 	}
 
 	select {
@@ -578,4 +592,40 @@ func ExampleConn_CloseWithError() {
 	}
 	// Output:
 	// close code: 42
+}
+
+func ExampleAsApplicationError() {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-application-error-example/0"
+	srvKey, _ := key.GenerateSecretKey()
+	server, _ := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	defer server.Shutdown(ctx)
+	client, _ := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	defer client.Shutdown(ctx)
+
+	accepted := make(chan *Conn, 1)
+	go func() {
+		conn, _ := server.Accept(ctx)
+		accepted <- conn
+	}()
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		fmt.Println("connect:", err)
+		return
+	}
+	defer conn.CloseWithError(0, "")
+
+	peer := <-accepted
+	peer.CloseWithError(7, "done")
+	<-conn.Context().Done()
+
+	appErr, ok := AsApplicationError(context.Cause(conn.Context()))
+	fmt.Println(ok, appErr.Code, appErr.Reason, appErr.Remote)
+	// Output:
+	// true 7 done true
 }
