@@ -90,6 +90,7 @@ type config struct {
 	netReportEvery  time.Duration
 	keyLogWriter    io.Writer
 	transportConfig *QUICTransportConfig
+	pathSelector    socket.PathSelector
 	verifySource    func(net.Addr) bool
 	hooks           []EndpointHooks
 	custom          []CustomTransport
@@ -292,6 +293,17 @@ func WithTransportConfig(tc *QUICTransportConfig) Option {
 	}
 }
 
+// WithPathSelector sets the policy used to choose among candidate network paths
+// to a remote endpoint. When unset, the endpoint uses [BiasedRttPathSelector].
+func WithPathSelector(selector PathSelector) Option {
+	return func(c *config) error {
+		if selector != nil {
+			c.pathSelector = pathSelectorAdapter{selector: selector}
+		}
+		return nil
+	}
+}
+
 // WithCustomTransport adds a custom transport backend to the magic socket.
 // Custom transports own their wire format and exchange datagrams using
 // [netaddr.CustomAddr] values advertised in endpoint addresses.
@@ -411,7 +423,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	// when the endpoint's recv loop stops. Its resolve hook is backed by the
 	// endpoint's address-lookup services (slice G), passed down as a func value
 	// so internal/socket does not import iroh.
-	ep.remotes = socket.NewRemoteMap(serveCtx, socket.BiasedRttPathSelector{}, ep.resolveFunc())
+	ep.remotes = socket.NewRemoteMap(serveCtx, c.pathSelector, ep.resolveFunc())
 	ep.magic.SetEndpointSender(func(id key.EndpointID, p []byte) bool {
 		err := ep.remotes.Actor(id).SendDatagram(p, func(addr socket.Addr, data []byte) bool {
 			return ep.magic.SendAddr(addr, data)

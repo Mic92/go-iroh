@@ -393,6 +393,42 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	}
 }
 
+type relayPreferredPathSelector struct{}
+
+func (relayPreferredPathSelector) Select(current netaddr.TransportAddr, candidates []PathCandidate) (netaddr.TransportAddr, bool) {
+	for _, c := range candidates {
+		if c.Addr.Network() == "relay" {
+			return c.Addr, true
+		}
+	}
+	return current, current != nil
+}
+
+func TestEndpointWithPathSelector(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx, WithPathSelector(relayPreferredPathSelector{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Shutdown(ctx)
+
+	remote, _ := key.GenerateSecretKey()
+	remoteID := remote.Public().EndpointID()
+	relayURL := relayURL(t, "https://relay.example/")
+	ip := &endpointQNTFakeConn{
+		addr: socket.IPAddr(netip.MustParseAddrPort("127.0.0.1:9")),
+		done: make(chan struct{}),
+	}
+	relay := &endpointQNTFakeConn{
+		addr: socket.RelayAddr(relayURL, remoteID),
+		done: make(chan struct{}),
+	}
+	_, actor := ep.remotes.AddConnectionActor(remoteID, ip)
+	ep.remotes.AddConnection(remoteID, relay)
+
+	waitForSelectedPath(t, ctx, actor, socket.RelayAddr(relayURL, remoteID))
+}
+
 func TestEndpointWithDNSResolver(t *testing.T) {
 	ctx := context.Background()
 	sk, _ := key.GenerateSecretKey()
