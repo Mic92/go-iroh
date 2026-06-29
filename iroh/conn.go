@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"sync"
 	"time"
 
 	quic "github.com/tmc/go-iroh/internal/qng"
@@ -104,13 +105,33 @@ func (s *ReceiveStream) CancelRead(code uint64) { s.s.CancelRead(quic.StreamErro
 // identity is authenticated by the RFC 7250 handshake and available via
 // [Conn.RemoteID].
 type Conn struct {
-	qc        *quic.Conn
-	remoteID  key.EndpointID
-	alpn      string
-	side      Side
-	stableID  uint64
+	qc       *quic.Conn
+	remoteID key.EndpointID
+	alpn     string
+	side     Side
+	stableID uint64
+
+	// resolveOnce lazily populates remoteID and alpn from the completed
+	// handshake for a 0-RTT accept conn, whose verified identity is not known
+	// until the handshake finishes. It is nil for conns whose identity is set at
+	// construction. RemoteID and ALPN call resolveIdentity before reading.
+	resolveOnce sync.Once
+	resolve     func() (key.EndpointID, string)
+
 	pathState *socket.RemoteStateActor
 	pathConn  *connAdapter
+}
+
+// resolveIdentity populates remoteID and alpn from the completed handshake the
+// first time it is called, for a 0-RTT accept conn. It is a no-op for conns
+// whose identity was set at construction.
+func (c *Conn) resolveIdentity() {
+	if c.resolve == nil {
+		return
+	}
+	c.resolveOnce.Do(func() {
+		c.remoteID, c.alpn = c.resolve()
+	})
 }
 
 // ConnStats is a snapshot of connection statistics.
@@ -271,11 +292,20 @@ func (a *Accepting) Connection(ctx context.Context) (*Conn, error) {
 	return a.ep.finishAccepting(ctx, a.qc)
 }
 
-// RemoteID returns the verified endpoint id of the peer.
-func (c *Conn) RemoteID() key.EndpointID { return c.remoteID }
+// RemoteID returns the verified endpoint id of the peer. For a connection
+// obtained from [Accepting.Into0RTT] it is the zero id until the handshake
+// completes; wait on [Conn.HandshakeComplete] before relying on it.
+func (c *Conn) RemoteID() key.EndpointID {
+	c.resolveIdentity()
+	return c.remoteID
+}
 
-// ALPN returns the negotiated ALPN protocol.
-func (c *Conn) ALPN() string { return c.alpn }
+// ALPN returns the negotiated ALPN protocol. For a connection obtained from
+// [Accepting.Into0RTT] it is empty until the handshake completes.
+func (c *Conn) ALPN() string {
+	c.resolveIdentity()
+	return c.alpn
+}
 
 // Side reports whether this connection was dialed or accepted.
 func (c *Conn) Side() Side { return c.side }
@@ -303,6 +333,7 @@ func (c *Conn) Stats() ConnStats {
 
 // Paths returns a snapshot of the connection's currently open network paths.
 func (c *Conn) Paths() []PathInfo {
+	c.resolveIdentity()
 	if c.pathState != nil && c.pathConn != nil {
 		return pathInfosFromSocket(c.pathState.PathInfos(c.pathConn))
 	}
@@ -315,6 +346,7 @@ func (c *Conn) Paths() []PathInfo {
 // endpoint observes a path change for the peer. The stream ends when ctx is
 // done, the connection closes, or path observation is unavailable.
 func (c *Conn) WatchPaths(ctx context.Context) (<-chan []PathInfo, error) {
+	c.resolveIdentity()
 	if c.pathState == nil || c.pathConn == nil {
 		return nil, errors.New("iroh: path observation not available")
 	}

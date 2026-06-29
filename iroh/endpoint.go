@@ -939,6 +939,10 @@ var ErrHandshakeRejected = errors.New("iroh: handshake rejected by hook")
 // an established [Conn]. It tries the direct IP addresses in addr in order, then
 // (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
 // handshake over a relay mapped address that routes through the relay transport.
+//
+// Connect blocks until the handshake completes and the peer identity is
+// verified. To send 0-RTT early data before the handshake completes, use
+// [Endpoint.ConnectEarly] and [Connecting.Into0RTT].
 func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (*Conn, error) {
 	e.metrics.connectsStarted.Add(1)
 	ok := false
@@ -947,6 +951,54 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 			e.metrics.connectsFailed.Add(1)
 		}
 	}()
+	// Bound the whole connect, including the handshake hooks run by Connection,
+	// by ConnectTimeout. connectEarly sees this deadline and does not re-wrap.
+	if _, has := ctx.Deadline(); !has {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ConnectTimeout)
+		defer cancel()
+	}
+	c, err := e.connectEarly(ctx, addr, alpn)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := c.Connection(ctx)
+	if err != nil {
+		return nil, err
+	}
+	e.metrics.connectsAccepted.Add(1)
+	ok = true
+	return conn, nil
+}
+
+// ConnectEarly begins dialing the endpoint identified by addr for alpn and
+// returns immediately with a [Connecting] handle, without waiting for the
+// handshake. It tries the same dial targets as [Endpoint.Connect].
+//
+// Await [Connecting.Connection] for the verified [Conn] (the same result
+// [Endpoint.Connect] returns), or call [Connecting.Into0RTT] to send 0-RTT early
+// data before the handshake completes when a resumable session is cached.
+func (e *Endpoint) ConnectEarly(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (*Connecting, error) {
+	return e.connectEarly(ctx, addr, alpn)
+}
+
+// connectEarly performs the shared dial setup for Connect and ConnectEarly: it
+// validates the endpoint, runs the BeforeConnect hooks, resolves dial targets,
+// builds the client TLS config, and dials with 0-RTT enabled. It returns a
+// Connecting holding the early QUIC connection, before afterHandshake runs.
+//
+// DialEarly attempts 0-RTT: if the session cache holds a valid ticket for
+// addr.ID (bucketed by its SNI), the QUIC stack restores the session and
+// DialEarly returns before the handshake completes, with the connection ready
+// for 0-RTT early data. Without a ticket, DialEarly returns only once the
+// handshake completes, exactly like Dial.
+//
+// The peer identity is the dialed addr.ID; the RFC 7250 VerifyConnection check
+// enforces it once the handshake completes, so an early connection carries an
+// asserted-but-not-yet-authenticated identity. Callers that sent 0-RTT data wait
+// on [Conn.HandshakeComplete] and check [Conn.Used0RTT] to learn whether the
+// server accepted the early data; on rejection the data must be resent.
+func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (*Connecting, error) {
 	if e.isClosed() {
 		return nil, ErrEndpointClosed
 	}
@@ -974,17 +1026,6 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 		defer cancel()
 	}
 
-	// DialEarly attempts 0-RTT: if the session cache holds a valid ticket for
-	// addr.ID (bucketed by its SNI), the QUIC stack restores the session and
-	// DialEarly returns a Conn ready for 0-RTT early data before the handshake
-	// completes. Data written to such a Conn is sent as 0-RTT. Without a ticket,
-	// DialEarly returns only once the handshake completes, exactly like Dial.
-	//
-	// The peer identity is the dialed addr.ID; the RFC 7250 VerifyConnection
-	// check enforces it once the handshake completes, so a 0-RTT Conn carries an
-	// asserted-but-not-yet-authenticated identity. Callers that sent 0-RTT data
-	// wait on [Conn.HandshakeComplete] and check [Conn.Used0RTT] to learn whether
-	// the server accepted the early data; on rejection the data must be resent.
 	var firstErr error
 	for _, target := range dials {
 		qc, err := e.transport.DialEarly(ctx, target, clientTLS, e.quicConf)
@@ -994,18 +1035,7 @@ func (e *Endpoint) Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn 
 			}
 			continue
 		}
-		conn, err := newConn(qc, addr.ID, alpn, SideClient, e.connStableID(qc))
-		if err != nil {
-			return nil, err
-		}
-		conn.pathState, conn.pathConn = e.registerConn(addr.ID, qc)
-		if err := e.afterHandshake(ctx, conn); err != nil {
-			conn.CloseWithError(0, "rejected by hook")
-			return nil, err
-		}
-		e.metrics.connectsAccepted.Add(1)
-		ok = true
-		return conn, nil
+		return &Connecting{ep: e, qc: qc, remoteID: addr.ID, alpn: alpn}, nil
 	}
 	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, firstErr)
 }
