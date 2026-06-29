@@ -50,6 +50,7 @@ type MagicConn struct {
 	writeDeadline deadline
 
 	recvAddrs map[netip.AddrPort]*net.UDPAddr
+	metrics   Metrics
 
 	endpointMu     sync.RWMutex
 	endpointSender func(key.EndpointID, []byte) bool
@@ -136,6 +137,7 @@ func (m *MagicConn) ReadFrom(p []byte) (int, net.Addr, error) {
 				// quic-go. Drop and keep reading.
 				continue
 			}
+			m.recordRecv(b.info.Remote)
 			n := copy(p, b.data)
 			b.release()
 			return n, addr, nil
@@ -150,6 +152,29 @@ func (m *MagicConn) recvBatchAddr(b recvBatch) (net.Addr, bool) {
 		return m.udpAddr(b.ip), true
 	}
 	return m.recvAddr(b.info)
+}
+
+// Metrics returns a point-in-time copy of magic-socket counters.
+func (m *MagicConn) Metrics() MetricsSnapshot {
+	if m == nil {
+		return MetricsSnapshot{}
+	}
+	return m.metrics.snapshot()
+}
+
+// MetricsSet returns the shared magic-socket counter set.
+func (m *MagicConn) MetricsSet() *Metrics {
+	if m == nil {
+		return nil
+	}
+	return &m.metrics
+}
+
+// RecordRelayHomeChange increments the relay-home change counter.
+func (m *MagicConn) RecordRelayHomeChange() {
+	if m != nil {
+		m.metrics.relayHomeChange.Add(1)
+	}
 }
 
 // recvAddr maps a received datagram's RecvInfo to the net.Addr quic-go sees: the
@@ -203,7 +228,11 @@ func (m *MagicConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if udp, ok := addr.(*net.UDPAddr); ok {
 		ap := udp.AddrPort()
 		if isDefinitelyIP(ap.Addr()) || Classify(ap.Addr()) == KindIP {
-			_, _ = m.transports.ip.send(p, ap)
+			if _, err := m.transports.ip.send(p, ap); err == nil {
+				m.recordIPSent(ap)
+			} else {
+				m.metrics.blackholed.Add(1)
+			}
 			return len(p), nil
 		}
 	}
@@ -221,21 +250,34 @@ func (m *MagicConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 			send := m.endpointSender
 			m.endpointMu.RUnlock()
 			if send != nil {
-				send(id, p)
+				if send(id, p) {
+					m.metrics.endpointIDSent.Add(1)
+				} else {
+					m.metrics.blackholed.Add(1)
+				}
+			} else {
+				m.metrics.blackholed.Add(1)
 			}
+		} else {
+			m.metrics.blackholed.Add(1)
 		}
 		return len(p), nil
 	case KindRelay:
 		if addr, ok := relayAddrForMapped(m.sock, ap.Addr()); ok {
 			m.sendAddr(addr, p)
+		} else {
+			m.metrics.blackholed.Add(1)
 		}
 		return len(p), nil
 	case KindCustom:
 		if c, ok := m.sock.LookupCustom(CustomMappedAddr{a: ap.Addr()}); ok {
 			m.sendAddr(CustomAddr(c), p)
+		} else {
+			m.metrics.blackholed.Add(1)
 		}
 		return len(p), nil
 	default:
+		m.metrics.blackholed.Add(1)
 		return len(p), nil
 	}
 }
@@ -262,26 +304,41 @@ func (m *MagicConn) sendAddr(addr Addr, p []byte) bool {
 	case AddrIP:
 		ap, _ := addr.IP()
 		if !ap.IsValid() || ap.Port() == 0 {
+			m.metrics.blackholed.Add(1)
 			return false
 		}
 		_, err := m.transports.ip.send(p, ap)
-		return err == nil
+		if err == nil {
+			m.recordIPSent(ap)
+			return true
+		}
+		m.metrics.blackholed.Add(1)
+		return false
 	case AddrRelay:
 		if m.transports.relay == nil {
+			m.metrics.blackholed.Add(1)
 			return false
 		}
 		url, eid, _ := addr.Relay()
 		mapped := m.sock.RelayMappedAddrFor(url, eid)
-		return m.transports.relay.Send(mapped, p)
+		if m.transports.relay.Send(mapped, p) {
+			m.metrics.relaySent.Add(1)
+			return true
+		}
+		m.metrics.blackholed.Add(1)
+		return false
 	case AddrCustom:
 		c, _ := addr.Custom()
 		for _, t := range m.transports.custom {
 			if t.Send(c, nil, p) {
+				m.metrics.customSent.Add(1)
 				return true
 			}
 		}
+		m.metrics.blackholed.Add(1)
 		return false
 	default:
+		m.metrics.blackholed.Add(1)
 		return false
 	}
 }
@@ -290,9 +347,35 @@ func (m *MagicConn) sendAddr(addr Addr, p []byte) bool {
 // by RemoteStateActor endpoint-id fanout.
 func (m *MagicConn) SendAddr(addr Addr, p []byte) bool {
 	if m.sock.IsClosed() {
+		m.metrics.blackholed.Add(1)
 		return false
 	}
 	return m.sendAddr(addr, p)
+}
+
+func (m *MagicConn) recordRecv(addr Addr) {
+	m.metrics.recvDatagrams.Add(1)
+	switch addr.Kind() {
+	case AddrIP:
+		ap, _ := addr.IP()
+		if ap.Addr().Is4() {
+			m.metrics.ipv4Recv.Add(1)
+		} else {
+			m.metrics.ipv6Recv.Add(1)
+		}
+	case AddrRelay:
+		m.metrics.relayRecv.Add(1)
+	case AddrCustom:
+		m.metrics.customRecv.Add(1)
+	}
+}
+
+func (m *MagicConn) recordIPSent(ap netip.AddrPort) {
+	if ap.Addr().Is4() {
+		m.metrics.ipv4Sent.Add(1)
+	} else {
+		m.metrics.ipv6Sent.Add(1)
+	}
 }
 
 // LocalAddr returns the bound local address of the underlying UDP socket. It

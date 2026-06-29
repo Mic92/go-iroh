@@ -100,7 +100,7 @@ func TestRemoteMapSingleActorRace(t *testing.T) {
 
 	// A short idle timeout maximizes the spawn/teardown overlap while still
 	// letting each registration win the race often enough to make progress.
-	m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 2*time.Millisecond)
+	m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 2*time.Millisecond, nil)
 	id := testEndpointID(t)
 
 	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
@@ -189,7 +189,7 @@ func TestRemoteMapIdleTeardown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond)
+		m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond, nil)
 		id := testEndpointID(t)
 
 		m.Actor(id) // spawns an actor with no connections
@@ -211,7 +211,7 @@ func TestRemoteMapIdleTeardownWaitsForConnections(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond)
+		m := newRemoteMap(ctx, BiasedRttPathSelector{}, nil, 10*time.Millisecond, nil)
 		id := testEndpointID(t)
 
 		addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
@@ -288,6 +288,46 @@ func TestActorPathEventsAndSelection(t *testing.T) {
 	a := m.Actor(id)
 	if sel, ok := a.SelectedPath(); !ok || sel.String() != addr.String() {
 		t.Errorf("SelectedPath = (%v, %v), want %s", sel, ok, addr)
+	}
+}
+
+func TestRemoteMapMetrics(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var metrics Metrics
+	m := NewRemoteMapWithMetrics(ctx, BiasedRttPathSelector{}, nil, &metrics)
+	id := testEndpointID(t)
+
+	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 4242))
+	c := newFakeConn(addr, 5*time.Millisecond)
+	events := m.AddConnection(id, c)
+	waitPathEvent(t, events, PathEventOpened, addr)
+
+	snap := metrics.snapshot()
+	if snap.PathsDirect != 1 || snap.NumConnsDirect != 1 || snap.NumConnsOpened != 1 || snap.TransportIPPathsAdded != 1 {
+		t.Fatalf("Metrics after open = %+v, want direct open counted", snap)
+	}
+
+	c.Close()
+	waitPathEvent(t, events, PathEventClosed, addr)
+	snap = metrics.snapshot()
+	if snap.NumConnsClosed != 1 || snap.TransportIPPathsRemoved != 1 {
+		t.Fatalf("Metrics after close = %+v, want direct close counted", snap)
+	}
+}
+
+func waitPathEvent(t *testing.T, events <-chan PathEvent, kind PathEventKind, addr Addr) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case ev := <-events:
+			if ev.Kind == kind && ev.Addr.String() == addr.String() {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for %v event for %s", kind, addr)
+		}
 	}
 }
 
@@ -428,7 +468,7 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	resolve := func(ctx context.Context, id key.EndpointID) ([]netaddr.TransportAddr, error) {
 		return resolved, nil
 	}
-	m := newRemoteMap(ctx, BiasedRttPathSelector{}, resolve, time.Second)
+	m := newRemoteMap(ctx, BiasedRttPathSelector{}, resolve, time.Second, nil)
 	id := testEndpointID(t)
 
 	// Keep the actor alive with a connection so it does not idle out mid-test.

@@ -13,6 +13,9 @@ import (
 //
 // The zero Report is a valid empty report.
 type Report struct {
+	// Full reports whether this run used the full probe plan.
+	Full bool
+
 	// UDPv4 reports whether a QAD IPv4 round trip completed and reported an
 	// observed IPv4 address.
 	UDPv4 bool

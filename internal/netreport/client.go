@@ -114,7 +114,7 @@ func (c *Client) GetReport(ctx context.Context, ifState IfStateDetails, doFull b
 	relayMap := c.relayMap
 	c.mu.Unlock()
 
-	report := &Report{}
+	report := &Report{Full: full}
 
 	if !relayMap.IsEmpty() {
 		c.runProbes(ctx, relayMap, report)

@@ -423,7 +423,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	// when the endpoint's recv loop stops. Its resolve hook is backed by the
 	// endpoint's address-lookup services (slice G), passed down as a func value
 	// so internal/socket does not import iroh.
-	ep.remotes = socket.NewRemoteMap(serveCtx, c.pathSelector, ep.resolveFunc())
+	ep.remotes = socket.NewRemoteMapWithMetrics(serveCtx, c.pathSelector, ep.resolveFunc(), magic.MetricsSet())
 	ep.magic.SetEndpointSender(func(id key.EndpointID, p []byte) bool {
 		err := ep.remotes.Actor(id).SendDatagram(p, func(addr socket.Addr, data []byte) bool {
 			return ep.magic.SendAddr(addr, data)
@@ -628,6 +628,9 @@ func (e *Endpoint) applyNetReport(report netreport.Report) bool {
 		current := e.relay.HomeRelayStatus().Current()
 		if current == nil || !current.URL.Equal(report.PreferredRelay) {
 			e.relay.SetHomeRelay(report.PreferredRelay)
+			if e.magic != nil {
+				e.magic.RecordRelayHomeChange()
+			}
 			e.mu.Lock()
 			e.updateAddrWatchLocked()
 			e.mu.Unlock()
@@ -667,9 +670,17 @@ func (e *Endpoint) refreshNetReport(ctx context.Context) error {
 	}
 	report, err := e.netReport(ctx)
 	if report != nil {
-		e.applyNetReport(*report)
+		e.metrics.netReportReports.Add(1)
+		if report.Full {
+			e.metrics.netReportReportsFull.Add(1)
+			e.metrics.netReportPortmapAttempts.Add(1)
+		}
+		if e.applyNetReport(*report) {
+			e.metrics.netReportPortmapExternalAddressUpdated.Add(1)
+		}
 	}
 	if err != nil {
+		e.metrics.netReportFailed.Add(1)
 		return fmt.Errorf("iroh: netreport: %w", err)
 	}
 	return nil

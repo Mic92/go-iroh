@@ -29,6 +29,7 @@ type RemoteMap struct {
 	selector PathSelector
 	resolve  ResolveFunc
 	idle     time.Duration // actor idle timeout; ActorMaxIdleTimeout unless overridden for tests
+	metrics  *Metrics
 
 	mu     sync.Mutex
 	actors map[key.EndpointID]*RemoteStateActor
@@ -39,12 +40,18 @@ type RemoteMap struct {
 // [BiasedRttPathSelector]); resolve is the address-lookup hook (nil disables
 // lookup-driven resolution).
 func NewRemoteMap(ctx context.Context, selector PathSelector, resolve ResolveFunc) *RemoteMap {
-	return newRemoteMap(ctx, selector, resolve, ActorMaxIdleTimeout)
+	return newRemoteMap(ctx, selector, resolve, ActorMaxIdleTimeout, nil)
+}
+
+// NewRemoteMapWithMetrics is like [NewRemoteMap], but records actor path
+// lifecycle counters in metrics.
+func NewRemoteMapWithMetrics(ctx context.Context, selector PathSelector, resolve ResolveFunc, metrics *Metrics) *RemoteMap {
+	return newRemoteMap(ctx, selector, resolve, ActorMaxIdleTimeout, metrics)
 }
 
 // newRemoteMap is the constructor with a configurable actor idle timeout, so
 // tests can drive the idle-teardown race without waiting the full minute.
-func newRemoteMap(ctx context.Context, selector PathSelector, resolve ResolveFunc, idle time.Duration) *RemoteMap {
+func newRemoteMap(ctx context.Context, selector PathSelector, resolve ResolveFunc, idle time.Duration, metrics *Metrics) *RemoteMap {
 	if selector == nil {
 		selector = BiasedRttPathSelector{}
 	}
@@ -53,6 +60,7 @@ func newRemoteMap(ctx context.Context, selector PathSelector, resolve ResolveFun
 		selector: selector,
 		resolve:  resolve,
 		idle:     idle,
+		metrics:  metrics,
 		actors:   make(map[key.EndpointID]*RemoteStateActor),
 	}
 }
@@ -73,7 +81,7 @@ func (m *RemoteMap) actor(id key.EndpointID) *RemoteStateActor {
 			delete(m.actors, id)
 		}
 	}
-	a = newRemoteStateActor(m.ctx, id, m.selector, m.resolve, m.idle, onExit)
+	a = newRemoteStateActor(m.ctx, id, m.selector, m.resolve, m.idle, m.metrics, onExit)
 	m.actors[id] = a
 	return a
 }

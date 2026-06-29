@@ -148,9 +148,10 @@ type resolveMsg struct {
 
 // connState is the actor's per-connection bookkeeping.
 type connState struct {
-	conn  Connection
-	addr  Addr
-	paths []Addr
+	conn      Connection
+	addr      Addr
+	paths     []Addr
+	hasDirect bool
 }
 
 // RemoteStateActor manages all connection and path state for a single remote
@@ -171,6 +172,7 @@ type RemoteStateActor struct {
 	selector PathSelector
 	resolve  ResolveFunc
 	idle     time.Duration
+	metrics  *Metrics
 	watcher  *PathWatcher
 
 	// inbox carries messages from the RemoteMap and from per-connection watcher
@@ -195,7 +197,7 @@ type RemoteStateActor struct {
 // newRemoteStateActor creates and starts an actor for id. The returned actor is
 // already running its loop in a goroutine; it stops when ctx is cancelled or it
 // idles out, calling onExit on the way out.
-func newRemoteStateActor(ctx context.Context, id key.EndpointID, selector PathSelector, resolve ResolveFunc, idle time.Duration, onExit func()) *RemoteStateActor {
+func newRemoteStateActor(ctx context.Context, id key.EndpointID, selector PathSelector, resolve ResolveFunc, idle time.Duration, metrics *Metrics, onExit func()) *RemoteStateActor {
 	if selector == nil {
 		selector = BiasedRttPathSelector{}
 	}
@@ -207,6 +209,7 @@ func newRemoteStateActor(ctx context.Context, id key.EndpointID, selector PathSe
 		selector: selector,
 		resolve:  resolve,
 		idle:     idle,
+		metrics:  metrics,
 		watcher:  NewPathWatcher(),
 		inbox:    make(chan remoteMessage, 16),
 		done:     make(chan struct{}),
@@ -341,7 +344,11 @@ func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
 
 	a.mu.Lock()
 	a.conns[m.conn] = cs
+	if a.metrics != nil {
+		a.metrics.numConnsOpened.Add(1)
+	}
 	a.paths.SetOpen(addr)
+	a.recordPathOpenedLocked(cs, addr)
 	opened := a.syncMultipathPathsLocked(cs, paths)
 	a.paths.Prune()
 	localNAT := append([]netip.AddrPort(nil), a.localNAT...)
@@ -416,11 +423,13 @@ func (a *RemoteStateActor) handleConnClosed(conn Connection) {
 	now := time.Now()
 	closed := []Addr{cs.addr}
 	a.paths.SetClosed(cs.addr, now)
+	a.recordPathClosedLocked(cs.addr)
 	for _, addr := range cs.paths {
 		if a.multipathPathOpenLocked(addr) {
 			continue
 		}
 		a.paths.SetClosed(addr, now)
+		a.recordPathClosedLocked(addr)
 		closed = appendUniqueAddr(closed, addr)
 	}
 	if a.selected != nil && a.selected.String() == cs.addr.String() {
@@ -437,6 +446,42 @@ func (a *RemoteStateActor) handleConnClosed(conn Connection) {
 	a.mu.Unlock()
 	for _, addr := range closed {
 		a.watcher.Send(PathEvent{Kind: PathEventClosed, Addr: addr})
+	}
+}
+
+func (a *RemoteStateActor) recordPathOpenedLocked(cs *connState, addr Addr) {
+	if a.metrics == nil {
+		return
+	}
+	switch addr.Kind() {
+	case AddrIP:
+		a.metrics.pathsDirect.Add(1)
+		a.metrics.transportIPPathsAdded.Add(1)
+		if !cs.hasDirect {
+			cs.hasDirect = true
+			a.metrics.numConnsDirect.Add(1)
+		}
+	case AddrRelay:
+		a.metrics.pathsRelay.Add(1)
+		a.metrics.transportRelayPathsAdded.Add(1)
+	case AddrCustom:
+		a.metrics.pathsCustom.Add(1)
+		a.metrics.transportCustomPathsAdded.Add(1)
+	}
+}
+
+func (a *RemoteStateActor) recordPathClosedLocked(addr Addr) {
+	if a.metrics == nil {
+		return
+	}
+	a.metrics.numConnsClosed.Add(1)
+	switch addr.Kind() {
+	case AddrIP:
+		a.metrics.transportIPPathsRemoved.Add(1)
+	case AddrRelay:
+		a.metrics.transportRelayPathsRemoved.Add(1)
+	case AddrCustom:
+		a.metrics.transportCustomPathsRemoved.Add(1)
 	}
 }
 
@@ -505,6 +550,7 @@ func (a *RemoteStateActor) syncMultipathPathsLocked(cs *connState, paths []PathI
 			continue
 		}
 		a.paths.SetOpen(p.Addr)
+		a.recordPathOpenedLocked(cs, p.Addr)
 		opened = appendUniqueAddr(opened, p.Addr)
 	}
 	return opened
@@ -582,6 +628,9 @@ func (a *RemoteStateActor) reselect() {
 		candidates = appendMultipathCandidates(candidates, seen, snap.paths, snap.rtt)
 	}
 	closed := a.paths.ExpireIdle(now)
+	for _, addr := range closed {
+		a.recordPathClosedLocked(addr)
+	}
 	a.paths.Prune()
 	current := a.selected
 	selected, ok := a.selector.Select(current, candidates)
@@ -700,6 +749,9 @@ func (a *RemoteStateActor) TriggerHolepunch() error {
 	}
 	if target == nil {
 		return ErrExtensionNotNegotiated
+	}
+	if a.metrics != nil {
+		a.metrics.holepunchAttempts.Add(1)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), HolepunchAttemptsInterval)
 	defer cancel()
@@ -915,6 +967,11 @@ func (a *RemoteStateActor) AddNATTraversalAddresses(addrs []netip.AddrPort) erro
 	}
 	if target == nil {
 		return ErrExtensionNotNegotiated
+	}
+	if len(added) != 0 || len(removed) != 0 {
+		if a.metrics != nil {
+			a.metrics.updateDirectAddrs.Add(1)
+		}
 	}
 	for _, addr := range removed {
 		if err := target.RemoveNATTraversalAddress(addr); err != nil {
