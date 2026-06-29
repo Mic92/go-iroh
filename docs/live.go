@@ -117,7 +117,7 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 	}()
 
 	if len(opts.Bootstrap) != 0 {
-		go l.syncPeers(ctx, opts, opts.Bootstrap)
+		go l.syncPeers(ctx, namespace, store, opts, opts.Bootstrap)
 	}
 	go l.runDownloader(ctx, store, opts)
 
@@ -163,10 +163,10 @@ func (l *LiveSync) handleTopicEvent(ctx context.Context, namespace NamespaceID, 
 		if !ok {
 			addr = netaddr.EndpointAddr{ID: ev.Peer}
 		}
-		go l.syncPeers(ctx, opts, []netaddr.EndpointAddr{addr})
+		go l.syncPeers(ctx, namespace, store, opts, []netaddr.EndpointAddr{addr})
 	case gossip.Lagged:
 		// A missed gossip event means we may have missed a Put. Sync known peers.
-		go l.syncPeers(ctx, opts, opts.Bootstrap)
+		go l.syncPeers(ctx, namespace, store, opts, opts.Bootstrap)
 	}
 }
 
@@ -201,11 +201,14 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 		if op.Report.Namespace != namespace {
 			return
 		}
+		if !store.hasNewsForUs(namespace, op.Report.Heads) {
+			return
+		}
 		addr, ok := l.resolvePeer(ctx, opts.Resolver, ev.DeliveredFrom)
 		if !ok {
 			addr = netaddr.EndpointAddr{ID: ev.DeliveredFrom}
 		}
-		go l.syncPeers(ctx, opts, []netaddr.EndpointAddr{addr})
+		go l.syncPeers(ctx, namespace, store, opts, []netaddr.EndpointAddr{addr})
 	}
 }
 
@@ -314,7 +317,7 @@ func downloadBlob(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointA
 	return nil
 }
 
-func (l *LiveSync) syncPeers(ctx context.Context, opts liveSyncOptions, peers []netaddr.EndpointAddr) {
+func (l *LiveSync) syncPeers(ctx context.Context, namespace NamespaceID, store *MemoryStore, opts liveSyncOptions, peers []netaddr.EndpointAddr) {
 	for _, peer := range peers {
 		var outcome SyncOutcome
 		var err error
@@ -326,7 +329,21 @@ func (l *LiveSync) syncPeers(ctx context.Context, opts liveSyncOptions, peers []
 		if opts.OnSync != nil {
 			opts.OnSync(SyncResult{Addr: peer, Outcome: outcome, Err: err})
 		}
+		if err == nil && outcome.NumRecv > 0 {
+			l.broadcastSyncReport(ctx, namespace, store)
+		}
 	}
+}
+
+func (l *LiveSync) broadcastSyncReport(ctx context.Context, namespace NamespaceID, store *MemoryStore) {
+	msg, err := postcard.Marshal(liveOp{Kind: liveOpSyncReport, Report: liveSyncReport{
+		Namespace: namespace,
+		Heads:     store.encodeAuthorHeads(namespace),
+	}})
+	if err != nil {
+		return
+	}
+	_ = l.topic.BroadcastNeighbors(ctx, msg)
 }
 
 func (l *LiveSync) resolvePeer(ctx context.Context, resolver iroh.AddressResolver, id key.EndpointID) (netaddr.EndpointAddr, bool) {

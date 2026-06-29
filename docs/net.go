@@ -1,6 +1,7 @@
 package docs
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -47,6 +48,9 @@ type Handler struct {
 
 // Accept handles one incoming iroh-docs connection.
 func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
+	if h.Store == nil {
+		return fmt.Errorf("docs: nil store")
+	}
 	s, err := conn.AcceptStream(ctx)
 	if err != nil {
 		return fmt.Errorf("docs: accept stream: %w", err)
@@ -62,6 +66,30 @@ func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
 	msg, err := readSyncFrame(s)
 	if err != nil {
 		return fmt.Errorf("docs: read init: %w", err)
+	}
+	if msg.Kind == syncMessageReport {
+		if h.Allow != nil && !h.Allow(msg.Namespace, conn.RemoteID()) {
+			if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageAbort, Reason: AbortNotFound}); err != nil {
+				return fmt.Errorf("docs: write abort: %w", err)
+			}
+			ok = true
+			return nil
+		}
+		local := h.Store.encodeSyncHeads(msg.Namespace)
+		if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageReport, Namespace: msg.Namespace, Report: liveSyncReport{
+			Namespace: msg.Namespace,
+			Heads:     local,
+		}}); err != nil {
+			return fmt.Errorf("docs: write sync report: %w", err)
+		}
+		if msg.Report.Namespace == msg.Namespace && bytes.Equal(msg.Report.Heads, local) {
+			ok = true
+			return nil
+		}
+		msg, err = readSyncFrame(s)
+		if err != nil {
+			return fmt.Errorf("docs: read init: %w", err)
+		}
 	}
 	if msg.Kind != syncMessageInit {
 		return fmt.Errorf("docs: expected init message")
@@ -102,6 +130,27 @@ func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, nam
 	}()
 
 	h := Handler{Store: store, BlobStore: blobStore, Config: config}
+	heads := store.encodeSyncHeads(namespace)
+	if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageReport, Namespace: namespace, Report: liveSyncReport{
+		Namespace: namespace,
+		Heads:     heads,
+	}}); err != nil {
+		return SyncOutcome{}, fmt.Errorf("docs: write sync report: %w", err)
+	}
+	report, err := readSyncFrame(s)
+	if err != nil {
+		return SyncOutcome{}, fmt.Errorf("docs: read sync report: %w", err)
+	}
+	if report.Kind == syncMessageAbort {
+		return SyncOutcome{}, fmt.Errorf("docs: sync aborted: %v", report.Reason)
+	}
+	if report.Kind != syncMessageReport || report.Report.Namespace != namespace {
+		return SyncOutcome{}, fmt.Errorf("docs: expected sync report")
+	}
+	if bytes.Equal(report.Report.Heads, heads) {
+		ok = true
+		return SyncOutcome{}, nil
+	}
 	init := store.InitialMessage()
 	if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageInit, Namespace: namespace, Message: init}); err != nil {
 		return SyncOutcome{}, fmt.Errorf("docs: write init: %w", err)
@@ -184,6 +233,7 @@ const (
 	syncMessageInit syncMessageKind = iota
 	syncMessageSync
 	syncMessageAbort
+	syncMessageReport
 )
 
 type syncWireMessage struct {
@@ -191,6 +241,7 @@ type syncWireMessage struct {
 	Namespace NamespaceID
 	Message   Message
 	Reason    AbortReason
+	Report    liveSyncReport
 }
 
 func (m syncWireMessage) EncodePostcard(e *postcard.Encoder) error {
@@ -205,6 +256,11 @@ func (m syncWireMessage) EncodePostcard(e *postcard.Encoder) error {
 		return e.Encode(m.Message)
 	case syncMessageAbort:
 		return e.Encode(m.Reason)
+	case syncMessageReport:
+		if err := e.Encode(m.Namespace); err != nil {
+			return err
+		}
+		return e.Encode(m.Report)
 	default:
 		return fmt.Errorf("docs: unknown sync message %d", m.Kind)
 	}
@@ -226,6 +282,11 @@ func (m *syncWireMessage) DecodePostcard(d *postcard.Decoder) error {
 		return d.Decode(&m.Message)
 	case syncMessageAbort:
 		return d.Decode(&m.Reason)
+	case syncMessageReport:
+		if err := d.Decode(&m.Namespace); err != nil {
+			return err
+		}
+		return d.Decode(&m.Report)
 	default:
 		return fmt.Errorf("docs: unknown sync message %d", m.Kind)
 	}

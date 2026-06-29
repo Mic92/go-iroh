@@ -14,6 +14,7 @@ type Fingerprint [32]byte
 type SyncConfig struct {
 	MaxSetSize  int
 	SplitFactor int
+	splitHook   func(Range)
 }
 
 // DefaultSyncConfig returns the Rust iroh-docs reconciliation defaults.

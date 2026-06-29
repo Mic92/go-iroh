@@ -192,6 +192,9 @@ func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validat
 			continue
 		}
 		for _, r := range s.splitRange(remote.Range, config.SplitFactor) {
+			if config.splitHook != nil {
+				config.splitHook(r)
+			}
 			chunk := s.GetRange(r)
 			if len(chunk) > config.MaxSetSize {
 				out = append(out, MessagePart{
