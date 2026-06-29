@@ -33,6 +33,28 @@ func ExampleMemoryLookup() {
 	// relays: [https://relay.example/]
 }
 
+// ExampleStaticLookup resolves fixed addressing information built at
+// construction time.
+func ExampleStaticLookup() {
+	sk, _ := key.GenerateSecretKey()
+	id := sk.Public().EndpointID()
+
+	relay, _ := netaddr.ParseRelayURL("https://relay.example/")
+	lookup := iroh.StaticLookupFromAddrs(netaddr.NewEndpointAddr(id).WithRelayURL(relay))
+
+	for item, err := range lookup.Resolve(context.Background(), id) {
+		if err != nil {
+			fmt.Println("error:", err)
+			continue
+		}
+		fmt.Println("provenance:", item.Provenance())
+		fmt.Println("relays:", item.Addr().RelayURLs())
+	}
+	// Output:
+	// provenance: static_lookup
+	// relays: [https://relay.example/]
+}
+
 // ExampleAddressLookupServices combines several lookup services and resolves an
 // endpoint id across all of them, acting on the first usable result.
 func ExampleAddressLookupServices() {

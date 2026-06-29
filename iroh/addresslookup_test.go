@@ -112,6 +112,70 @@ func TestMemoryLookup(t *testing.T) {
 	}
 }
 
+func TestStaticLookup(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	id := sk.Public().EndpointID()
+	relay := relayURL(t, "https://relay.example/")
+	userData, err := dns.NewUserData("room=7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := dns.EndpointInfo{
+		ID:   id,
+		Data: dns.NewEndpointData(netaddr.RelayAddr{URL: relay}).WithUserData(&userData),
+	}
+	lookup := NewStaticLookup(info)
+
+	results := drain(lookup.Resolve(context.Background(), id))
+	if len(results) != 1 || results[0].err != nil {
+		t.Fatalf("Resolve = %+v, want one success", results)
+	}
+	if got := results[0].item.Provenance(); got != StaticProvenance {
+		t.Errorf("provenance = %q, want %q", got, StaticProvenance)
+	}
+	if _, ok := results[0].item.LastUpdated(); !ok {
+		t.Fatal("static item should report last-updated")
+	}
+	if got, ok := results[0].item.UserData(); !ok || got.String() != "room=7" {
+		t.Fatalf("UserData = %v, %v, want room=7, true", got, ok)
+	}
+
+	// Mutating the source data after construction must not affect the lookup.
+	info.Data.ClearRelayURLs()
+	results = drain(lookup.Resolve(context.Background(), id))
+	if len(results[0].item.Addr().RelayURLs()) != 1 {
+		t.Fatalf("StaticLookup changed after source mutation: %v", results[0].item.Addr().RelayURLs())
+	}
+}
+
+func TestStaticLookupFromAddrs(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	id := sk.Public().EndpointID()
+	addr := netaddr.NewEndpointAddr(id).WithIP(netip.MustParseAddrPort("127.0.0.1:1"))
+	lookup := StaticLookupFromAddrs(addr)
+
+	results := drain(lookup.Resolve(context.Background(), id))
+	if len(results) != 1 || results[0].err != nil {
+		t.Fatalf("Resolve = %+v, want one success", results)
+	}
+	if got := results[0].item.Addr().IPAddrs(); len(got) != 1 || got[0] != netip.MustParseAddrPort("127.0.0.1:1") {
+		t.Fatalf("IPAddrs = %v, want [127.0.0.1:1]", got)
+	}
+}
+
+func TestStaticLookupUnknownAndNil(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	id := sk.Public().EndpointID()
+	lookup := NewStaticLookup()
+	if got := lookup.Resolve(context.Background(), id); got != nil {
+		t.Fatal("Resolve unknown returned non-nil sequence")
+	}
+	var nilLookup *StaticLookup
+	if got := nilLookup.Resolve(context.Background(), id); got != nil {
+		t.Fatal("nil StaticLookup Resolve returned non-nil sequence")
+	}
+}
+
 func TestItemLastUpdatedTime(t *testing.T) {
 	sk, _ := key.GenerateSecretKey()
 	info := endpointInfoWithIP(sk.Public().EndpointID(), netip.MustParseAddrPort("127.0.0.1:1"))
