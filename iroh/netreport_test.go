@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/internal/netreport"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func TestNetReportAccessor(t *testing.T) {
@@ -37,6 +38,31 @@ func TestNetReportAccessor(t *testing.T) {
 	again, ok := ep.NetReport()
 	if !ok || again.MappingVariesByDestV4 == nil || !*again.MappingVariesByDestV4 {
 		t.Fatalf("NetReport was mutated through returned pointer: %+v", again)
+	}
+}
+
+func TestNetReportRelayLatenciesClone(t *testing.T) {
+	u, err := netaddr.ParseRelayURL("https://relay.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ep := Endpoint{
+		lastReport: &NetReport{
+			RelayLatencies: map[netaddr.RelayURL]time.Duration{u: 25 * time.Millisecond},
+		},
+	}
+
+	got, ok := ep.NetReport()
+	if !ok {
+		t.Fatal("NetReport = false, want true")
+	}
+	got.RelayLatencies[u] = time.Hour
+	again, ok := ep.NetReport()
+	if !ok {
+		t.Fatal("NetReport after mutation = false, want true")
+	}
+	if again.RelayLatencies[u] != 25*time.Millisecond {
+		t.Fatalf("RelayLatencies alias endpoint state: got %v, want 25ms", again.RelayLatencies[u])
 	}
 }
 

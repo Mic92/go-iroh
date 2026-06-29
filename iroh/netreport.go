@@ -31,6 +31,8 @@ type NetReport struct {
 	// PreferredRelay is the relay with the best recent latency, chosen with
 	// hysteresis. It is the zero RelayURL when no relay responded.
 	PreferredRelay netaddr.RelayURL
+	// RelayLatencies is the lowest latency recorded for each relay.
+	RelayLatencies map[netaddr.RelayURL]time.Duration
 
 	// GlobalV4 is the host's public IPv4 address as seen by a relay.
 	GlobalV4 netip.AddrPort
@@ -52,6 +54,7 @@ func netReportFromInternal(r netreport.Report) NetReport {
 		MappingVariesByDestV4: boolCopy(r.MappingVariesByDestV4),
 		MappingVariesByDestV6: boolCopy(r.MappingVariesByDestV6),
 		PreferredRelay:        r.PreferredRelay,
+		RelayLatencies:        cloneRelayLatencies(r.RelayLatency.Snapshot()),
 		GlobalV4:              r.GlobalV4,
 		GlobalV6:              r.GlobalV6,
 		CaptivePortal:         boolCopy(r.CaptivePortal),
@@ -62,6 +65,7 @@ func (r NetReport) clone() NetReport {
 	r.MappingVariesByDestV4 = boolCopy(r.MappingVariesByDestV4)
 	r.MappingVariesByDestV6 = boolCopy(r.MappingVariesByDestV6)
 	r.CaptivePortal = boolCopy(r.CaptivePortal)
+	r.RelayLatencies = cloneRelayLatencies(r.RelayLatencies)
 	return r
 }
 
@@ -71,4 +75,15 @@ func boolCopy(p *bool) *bool {
 	}
 	v := *p
 	return &v
+}
+
+func cloneRelayLatencies(in map[netaddr.RelayURL]time.Duration) map[netaddr.RelayURL]time.Duration {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[netaddr.RelayURL]time.Duration, len(in))
+	for url, latency := range in {
+		out[url] = latency
+	}
+	return out
 }

@@ -52,6 +52,28 @@ func TestRelayLatenciesGetMinAcrossProbes(t *testing.T) {
 	}
 }
 
+func TestRelayLatenciesSnapshot(t *testing.T) {
+	urlA := mustRelay(t, "https://a.example/")
+	urlB := mustRelay(t, "https://b.example/")
+	var rl RelayLatencies
+	rl.updateRelay(urlA, ms(90), ProbeHTTPS)
+	rl.updateRelay(urlA, ms(40), ProbeQADv4)
+	rl.updateRelay(urlB, ms(70), ProbeQADv6)
+
+	got := rl.Snapshot()
+	if got[urlA] != ms(40) {
+		t.Fatalf("Snapshot()[%s] = %v, want %v", urlA, got[urlA], ms(40))
+	}
+	if got[urlB] != ms(70) {
+		t.Fatalf("Snapshot()[%s] = %v, want %v", urlB, got[urlB], ms(70))
+	}
+	got[urlA] = time.Hour
+	again := rl.Snapshot()
+	if again[urlA] != ms(40) {
+		t.Fatalf("Snapshot aliases internal state: got %v, want %v", again[urlA], ms(40))
+	}
+}
+
 func TestRelayLatenciesMergeMinSemantics(t *testing.T) {
 	url := mustRelay(t, "https://relay.example/")
 	var a, b RelayLatencies

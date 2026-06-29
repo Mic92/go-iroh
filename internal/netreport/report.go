@@ -177,6 +177,21 @@ func (rl *RelayLatencies) get(url netaddr.RelayURL) (time.Duration, bool) {
 	return best, found
 }
 
+// Snapshot returns the lowest latency recorded for each relay.
+func (rl *RelayLatencies) Snapshot() map[netaddr.RelayURL]time.Duration {
+	relays := rl.relays()
+	if len(relays) == 0 {
+		return nil
+	}
+	out := make(map[netaddr.RelayURL]time.Duration, len(relays))
+	for _, url := range relays {
+		if latency, ok := rl.get(url); ok {
+			out[url] = latency
+		}
+	}
+	return out
+}
+
 // isEmpty reports whether no latencies have been recorded.
 func (rl *RelayLatencies) isEmpty() bool {
 	return len(rl.https) == 0 && len(rl.ipv4) == 0 && len(rl.ipv6) == 0
