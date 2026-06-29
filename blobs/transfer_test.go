@@ -60,6 +60,71 @@ func TestBlobTransfer(t *testing.T) {
 	}
 }
 
+func TestBlobRangeTransfer(t *testing.T) {
+	data := vectorData(3*BlockSize + 321)
+	hash := NewHash(data)
+	tests := []struct {
+		name   string
+		ranges ChunkRanges
+		want   []byte
+	}{
+		{name: "prefix", ranges: RangeChunks(0, 2), want: data[:2*ChunkSize]},
+		{name: "suffix resume", ranges: openRangeForTest(2), want: data[2*ChunkSize:]},
+		{name: "last partial chunk", ranges: RangeChunks(48, 50), want: data[48*ChunkSize:]},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, server := newTestBidiStreamPair()
+			errc := make(chan error, 1)
+			go func() {
+				errc <- ServeBlob(context.Background(), server, StoreFunc(func(got Hash) ([]byte, bool) {
+					if got != hash {
+						t.Errorf("requested hash = %s, want %s", got, hash)
+						return nil, false
+					}
+					return append([]byte(nil), data...), true
+				}))
+			}()
+			got, err := GetBlobRangeBytes(context.Background(), client, hash, tt.ranges, uint64(len(data)))
+			if err != nil {
+				t.Fatalf("GetBlobRangeBytes: %v", err)
+			}
+			if !bytes.Equal(got, tt.want) {
+				t.Fatalf("GetBlobRangeBytes returned %d bytes, want %d", len(got), len(tt.want))
+			}
+			if err := <-errc; err != nil {
+				t.Fatalf("ServeBlob: %v", err)
+			}
+		})
+	}
+}
+
+func TestBlobRangeTransferRejectsDisjointRanges(t *testing.T) {
+	data := vectorData(BlockSize)
+	hash := NewHash(data)
+	client, server := newTestBidiStreamPair()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- ServeBlob(context.Background(), server, StoreFunc(func(Hash) ([]byte, bool) {
+			return append([]byte(nil), data...), true
+		}))
+	}()
+	ranges := ChunkRanges{ranges: []ChunkRange{{Start: 0, End: 1}, {Start: 3, End: 4}}}
+	if _, err := client.Write(EncodeGetRequestBytes(GetBlobRanges(hash, ranges))); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errc; !errors.Is(err, ErrUnsupportedRequest) {
+		t.Fatalf("ServeBlob disjoint range error = %v, want %v", err, ErrUnsupportedRequest)
+	}
+}
+
+func openRangeForTest(start uint64) ChunkRanges {
+	return ChunkRanges{open: &start}
+}
+
 func TestGetManyBlobTransfer(t *testing.T) {
 	data := [][]byte{
 		[]byte("first blob"),

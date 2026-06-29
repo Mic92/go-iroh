@@ -126,7 +126,7 @@ func writeGet(s io.Writer, store Store, req GetRequest, encode func([]byte) (Has
 		return writeBlob(s, store, req.Hash, encode)
 	}
 	if !req.Ranges.IsAll() {
-		return ErrUnsupportedRequest
+		return writeBlobRange(s, store, req.Hash, req.Ranges.At(0))
 	}
 	root, ok := store.GetBlob(req.Hash)
 	if !ok {
@@ -143,6 +143,28 @@ func writeGet(s io.Writer, store Store, req GetRequest, encode func([]byte) (Has
 		if err := writeBlob(s, store, hash, encode); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func writeBlobRange(s io.Writer, store Store, hash Hash, ranges ChunkRanges) error {
+	data, ok := store.GetBlob(hash)
+	if !ok {
+		return ErrBlobNotFound
+	}
+	offset, length, ok := singleByteRange(ranges, uint64(len(data)))
+	if !ok {
+		return ErrUnsupportedRequest
+	}
+	got, encoded, err := EncodeBlobRange(data, offset, length)
+	if err != nil {
+		return err
+	}
+	if got != hash {
+		return fmt.Errorf("blobs: stored blob hash mismatch")
+	}
+	if _, err := s.Write(encoded); err != nil {
+		return fmt.Errorf("blobs: write response: %w", err)
 	}
 	return nil
 }
@@ -175,6 +197,33 @@ func writeBlobBytes(s io.Writer, hash Hash, data []byte, encode func([]byte) (Ha
 // verifies the returned BAO body against hash.
 func GetBlobBytes(ctx context.Context, s BidiStream, hash Hash) ([]byte, error) {
 	return getBlob(ctx, s, hash, DecodeBlob)
+}
+
+// GetBlobRangeBytes requests and validates a contiguous chunk range from s.
+//
+// size is the verified full blob size. The returned bytes are the selected
+// range, clamped to size.
+func GetBlobRangeBytes(ctx context.Context, s BidiStream, hash Hash, ranges ChunkRanges, size uint64) ([]byte, error) {
+	offset, length, ok := singleByteRange(ranges, size)
+	if !ok {
+		return nil, ErrUnsupportedRequest
+	}
+	if _, err := s.Write(EncodeGetRequestBytes(GetBlobRanges(hash, ranges))); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("blobs: write request: %w", err)
+	}
+	if err := closeWrite(s); err != nil {
+		return nil, fmt.Errorf("blobs: close request: %w", err)
+	}
+	encoded, err := readAllContext(ctx, s)
+	if err != nil {
+		return nil, fmt.Errorf("blobs: read response: %w", err)
+	}
+	data, err := DecodeBlobRange(hash, encoded, offset, length)
+	if err != nil {
+		return nil, fmt.Errorf("blobs: decode response: %w", err)
+	}
+	return data, nil
 }
 
 // GetManyBlobBytes requests and validates full-range raw blobs from s.
@@ -351,4 +400,47 @@ func readAllContext(ctx context.Context, r io.ReadCloser) ([]byte, error) {
 		}
 		return res.b, ctx.Err()
 	}
+}
+
+func singleByteRange(ranges ChunkRanges, size uint64) (offset, length uint64, ok bool) {
+	ranges = ranges.normalize()
+	if ranges.IsEmpty() {
+		return 0, 0, true
+	}
+	if ranges.IsAll() {
+		return 0, size, true
+	}
+	if start, open := ranges.OpenStart(); open {
+		if start > maxChunkIndex() {
+			return 0, 0, false
+		}
+		offset = start * ChunkSize
+		if offset > size {
+			return 0, 0, false
+		}
+		return offset, size - offset, true
+	}
+	rs := ranges.Ranges()
+	if len(rs) != 1 {
+		return 0, 0, false
+	}
+	if rs[0].Start > maxChunkIndex() || rs[0].End > maxChunkIndex() {
+		return 0, 0, false
+	}
+	offset = rs[0].Start * ChunkSize
+	end := rs[0].End * ChunkSize
+	if offset > size {
+		return 0, 0, false
+	}
+	if end > size {
+		end = size
+	}
+	if end < offset {
+		return 0, 0, false
+	}
+	return offset, end - offset, true
+}
+
+func maxChunkIndex() uint64 {
+	return ^uint64(0) / ChunkSize
 }

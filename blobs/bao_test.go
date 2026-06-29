@@ -86,6 +86,56 @@ func TestBlobDecodeErrors(t *testing.T) {
 	}
 }
 
+func TestBlobRangeRoundTrip(t *testing.T) {
+	data := vectorData(3*BlockSize + 321)
+	tests := []struct {
+		name   string
+		offset uint64
+		length uint64
+	}{
+		{name: "prefix", offset: 0, length: ChunkSize},
+		{name: "middle", offset: ChunkSize + 17, length: 2*ChunkSize + 3},
+		{name: "suffix", offset: 2 * BlockSize, length: uint64(len(data)) - 2*BlockSize},
+		{name: "empty", offset: ChunkSize, length: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hash, encoded, err := EncodeBlobRange(data, tt.offset, tt.length)
+			if err != nil {
+				t.Fatalf("EncodeBlobRange: %v", err)
+			}
+			if hash != NewHash(data) {
+				t.Fatalf("hash = %s, want %s", hash, NewHash(data))
+			}
+			got, err := DecodeBlobRange(hash, encoded, tt.offset, tt.length)
+			if err != nil {
+				t.Fatalf("DecodeBlobRange: %v", err)
+			}
+			want := data[tt.offset:][:tt.length]
+			if !strings.EqualFold(hex.EncodeToString(got), hex.EncodeToString(want)) {
+				t.Fatalf("DecodeBlobRange mismatch")
+			}
+		})
+	}
+}
+
+func TestBlobRangeDecodeErrors(t *testing.T) {
+	data := vectorData(2*BlockSize + 1)
+	hash, encoded, err := EncodeBlobRange(data, ChunkSize, ChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupt := append([]byte(nil), encoded...)
+	corrupt[len(corrupt)-1] ^= 0xff
+	if _, err := DecodeBlobRange(hash, corrupt, ChunkSize, ChunkSize); !errors.Is(err, ErrInvalidBlob) {
+		t.Fatalf("DecodeBlobRange corrupt error = %v", err)
+	}
+	trailing := append(append([]byte(nil), encoded...), 0)
+	if _, err := DecodeBlobRange(hash, trailing, ChunkSize, ChunkSize); !errors.Is(err, ErrInvalidBlob) {
+		t.Fatalf("DecodeBlobRange trailing error = %v", err)
+	}
+}
+
 func TestSingleLeafRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string
