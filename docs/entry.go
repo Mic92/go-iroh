@@ -52,6 +52,11 @@ func (id RecordIdentifier) Author() AuthorID { return id.author }
 // Key returns the entry key.
 func (id RecordIdentifier) Key() []byte { return append([]byte(nil), id.key...) }
 
+// Compare compares id and other by namespace, author, and key.
+func (id RecordIdentifier) Compare(other RecordIdentifier) int {
+	return bytes.Compare(id.bytes(), other.bytes())
+}
+
 func (id RecordIdentifier) bytes() []byte {
 	b := make([]byte, 0, 64+len(id.key))
 	ns := id.namespace.Bytes()
@@ -111,6 +116,17 @@ func EmptyRecord(timestamp uint64) Record {
 // IsEmpty reports whether r is a tombstone.
 func (r Record) IsEmpty() bool { return r.Hash == blobs.EmptyHash }
 
+// Compare compares r and other by timestamp and content hash.
+func (r Record) Compare(other Record) int {
+	if r.Timestamp < other.Timestamp {
+		return -1
+	}
+	if r.Timestamp > other.Timestamp {
+		return 1
+	}
+	return bytes.Compare(r.Hash[:], other.Hash[:])
+}
+
 func (r Record) encode(out []byte) []byte {
 	out = appendUint64BE(out, r.Len)
 	out = append(out, r.Hash[:]...)
@@ -146,6 +162,14 @@ func (e Entry) ContentLen() uint64 { return e.Record.Len }
 // Timestamp returns the entry timestamp.
 func (e Entry) Timestamp() uint64 { return e.Record.Timestamp }
 
+// Compare compares e and other by identifier and record.
+func (e Entry) Compare(other Entry) int {
+	if c := e.ID.Compare(other.ID); c != 0 {
+		return c
+	}
+	return e.Record.Compare(other.Record)
+}
+
 // ValidateEmpty validates the empty-record invariant.
 func (e Entry) ValidateEmpty() error {
 	switch {
@@ -166,7 +190,9 @@ func (e Entry) Encode() []byte {
 
 // EncodePostcard encodes e as Rust Entry.
 func (e Entry) EncodePostcard(enc *postcard.Encoder) error {
-	enc.Encode(e.ID)
+	if err := enc.Encode(e.ID); err != nil {
+		return err
+	}
 	return enc.Encode(e.Record)
 }
 
@@ -268,6 +294,11 @@ func (s SignedEntry) Equal(other SignedEntry) bool {
 	sb, _ := postcard.Marshal(s)
 	ob, _ := postcard.Marshal(other)
 	return bytes.Equal(sb, ob)
+}
+
+// Compare compares s and other by entry.
+func (s SignedEntry) Compare(other SignedEntry) int {
+	return s.Entry.Compare(other.Entry)
 }
 
 func appendUint64BE(b []byte, x uint64) []byte {
