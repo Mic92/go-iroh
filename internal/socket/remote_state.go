@@ -110,6 +110,12 @@ type natTraversalAddressConnection interface {
 	RemoveNATTraversalAddress(netip.AddrPort) error
 }
 
+// RemoteInfo is a snapshot of known addresses for a remote endpoint.
+type RemoteInfo struct {
+	ID    key.EndpointID
+	Addrs []TransportAddrInfo
+}
+
 // ResolveFunc resolves additional transport addresses for a remote endpoint. It
 // is supplied by the iroh package (which owns the address-lookup services) so
 // the socket package does not import iroh. It returns the resolved addresses, or
@@ -717,6 +723,16 @@ func (a *RemoteStateActor) SelectedPath() (Addr, bool) {
 		return Addr{}, false
 	}
 	return *a.selected, true
+}
+
+// RemoteInfo returns a snapshot of known addresses for this remote endpoint.
+func (a *RemoteStateActor) RemoteInfo() RemoteInfo {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return RemoteInfo{
+		ID:    a.id,
+		Addrs: a.paths.RemoteAddrs(),
+	}
 }
 
 // PathInfos returns a snapshot of currently open paths for conn.

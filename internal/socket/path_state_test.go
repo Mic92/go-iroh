@@ -193,6 +193,40 @@ func TestOpenAddrs(t *testing.T) {
 	}
 }
 
+func TestRemoteAddrsUsage(t *testing.T) {
+	p := NewRemotePathState()
+	open := ipPath(1)
+	inactive := ipPath(2)
+	unknown := ipPath(3)
+
+	p.SetOpen(open)
+	p.SetOpen(inactive)
+	p.SetClosed(inactive, time.Now())
+	p.Add(unknown)
+
+	got := p.RemoteAddrs()
+	if len(got) != 3 {
+		t.Fatalf("RemoteAddrs len = %d, want 3: %v", len(got), got)
+	}
+	usage := make(map[string]TransportAddrUsage)
+	for _, info := range got {
+		usage[info.Addr.String()] = info.Usage
+	}
+	for _, addr := range []Addr{open, inactive, unknown} {
+		ta, ok := transportAddrFromAddr(addr)
+		if !ok {
+			t.Fatalf("transportAddrFromAddr(%v) = false", addr)
+		}
+		want := TransportAddrInactive
+		if addr.String() == open.String() {
+			want = TransportAddrActive
+		}
+		if usage[ta.String()] != want {
+			t.Fatalf("usage[%s] = %v, want %v", ta, usage[ta.String()], want)
+		}
+	}
+}
+
 func TestExpireIdleUsesPathTimeouts(t *testing.T) {
 	now := time.Unix(1000, 0)
 	direct := ipPath(1)

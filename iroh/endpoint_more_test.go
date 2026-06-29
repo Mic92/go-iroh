@@ -1257,3 +1257,71 @@ func TestEndpointHomeRelayStatusNoRelay(t *testing.T) {
 		t.Errorf("Online() = %v, want ErrNoRelay", err)
 	}
 }
+
+func TestEndpointRemoteInfo(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-remote-info/0"
+	server, err := Bind(ctx,
+		WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	accepted := make(chan *Conn, 1)
+	go func() {
+		conn, _ := server.Accept(ctx)
+		accepted <- conn
+	}()
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseWithError(0, "")
+	defer (<-accepted).CloseWithError(0, "")
+
+	info, ok := client.RemoteInfo(server.ID())
+	if !ok {
+		t.Fatal("RemoteInfo = false, want true")
+	}
+	if info.ID != server.ID() {
+		t.Fatalf("RemoteInfo ID = %v, want %v", info.ID, server.ID())
+	}
+	if len(info.Addrs) == 0 {
+		t.Fatal("RemoteInfo addrs empty")
+	}
+	var active bool
+	for _, addr := range info.Addrs {
+		if addr.Usage == TransportAddrActive {
+			active = true
+		}
+	}
+	if !active {
+		t.Fatalf("RemoteInfo addrs = %+v, want an active address", info.Addrs)
+	}
+
+	unknown, _ := key.GenerateSecretKey()
+	if _, ok := client.RemoteInfo(unknown.Public().EndpointID()); ok {
+		t.Fatal("RemoteInfo unknown = true, want false")
+	}
+}
+
+func TestEndpointRemoteInfoNil(t *testing.T) {
+	var ep *Endpoint
+	id, _ := key.GenerateSecretKey()
+	if _, ok := ep.RemoteInfo(id.Public().EndpointID()); ok {
+		t.Fatal("nil Endpoint RemoteInfo = true, want false")
+	}
+}

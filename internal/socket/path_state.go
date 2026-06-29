@@ -3,6 +3,8 @@ package socket
 import (
 	"sort"
 	"time"
+
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // Path-state pruning limits. These bound the number of candidate paths an actor
@@ -62,6 +64,23 @@ type PathState struct {
 	closedAt time.Time
 }
 
+// TransportAddrUsage reports whether a remote transport address is currently
+// active.
+type TransportAddrUsage int
+
+const (
+	// TransportAddrInactive means the address is known but not currently used.
+	TransportAddrInactive TransportAddrUsage = iota
+	// TransportAddrActive means the address is currently used.
+	TransportAddrActive
+)
+
+// TransportAddrInfo is a remote transport address plus usage metadata.
+type TransportAddrInfo struct {
+	Addr  netaddr.TransportAddr
+	Usage TransportAddrUsage
+}
+
 // RemotePathState tracks all candidate paths to a single remote endpoint:
 // direct IP, relay, and custom transport addresses, each with a [PathStatus].
 // It is the Go analog of the Rust RemotePathState (path_state.rs).
@@ -119,6 +138,26 @@ func (p *RemotePathState) OpenAddrs() []Addr {
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].String() < out[j].String()
+	})
+	return out
+}
+
+// RemoteAddrs returns all known remote addresses with active/inactive usage.
+func (p *RemotePathState) RemoteAddrs() []TransportAddrInfo {
+	out := make([]TransportAddrInfo, 0, len(p.paths))
+	for _, e := range p.paths {
+		addr, ok := transportAddrFromAddr(e.addr)
+		if !ok {
+			continue
+		}
+		usage := TransportAddrInactive
+		if e.state.Status == PathStatusOpen {
+			usage = TransportAddrActive
+		}
+		out = append(out, TransportAddrInfo{Addr: addr, Usage: usage})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Addr.String() < out[j].Addr.String()
 	})
 	return out
 }
@@ -284,3 +323,16 @@ func (p *RemotePathState) Prune() {
 
 // isRelayAddr reports whether a is a relay path.
 func isRelayAddr(a Addr) bool { return a.Kind() == AddrRelay }
+
+func transportAddrFromAddr(a Addr) (netaddr.TransportAddr, bool) {
+	if ap, ok := a.IP(); ok {
+		return netaddr.IPAddr{Addr: ap}, true
+	}
+	if url, _, ok := a.Relay(); ok {
+		return netaddr.RelayAddr{URL: url}, true
+	}
+	if custom, ok := a.Custom(); ok {
+		return custom, true
+	}
+	return nil, false
+}

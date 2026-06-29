@@ -454,3 +454,43 @@ func TestActorResolveAddsPaths(t *testing.T) {
 		t.Errorf("resolved path %s was not added as a candidate", want)
 	}
 }
+
+func TestRemoteMapRemoteInfoDoesNotSpawn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	id := testEndpointID(t)
+	if _, ok := m.RemoteInfo(id); ok {
+		t.Fatal("RemoteInfo for unknown remote = true, want false")
+	}
+	if got := m.Len(); got != 0 {
+		t.Fatalf("RemoteInfo spawned %d actors, want 0", got)
+	}
+}
+
+func TestRemoteMapRemoteInfo(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	id := testEndpointID(t)
+	addr := IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9))
+	c := newFakeConn(addr, time.Millisecond)
+	defer c.Close()
+	m.AddConnection(id, c)
+
+	info, ok := m.RemoteInfo(id)
+	if !ok {
+		t.Fatal("RemoteInfo = false, want true")
+	}
+	if info.ID != id {
+		t.Fatalf("RemoteInfo ID = %v, want %v", info.ID, id)
+	}
+	if len(info.Addrs) != 1 {
+		t.Fatalf("RemoteInfo addrs = %v, want one", info.Addrs)
+	}
+	if info.Addrs[0].Usage != TransportAddrActive {
+		t.Fatalf("RemoteInfo usage = %v, want active", info.Addrs[0].Usage)
+	}
+}

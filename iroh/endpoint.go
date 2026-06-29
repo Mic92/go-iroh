@@ -636,6 +636,19 @@ func (e *Endpoint) NetReport() (NetReport, bool) {
 	return e.lastReport.clone(), true
 }
 
+// RemoteInfo returns a snapshot of known addressing information for remote.
+// It returns false if the endpoint has no recent state for remote.
+func (e *Endpoint) RemoteInfo(remote key.EndpointID) (RemoteInfo, bool) {
+	if e == nil || e.remotes == nil {
+		return RemoteInfo{}, false
+	}
+	info, ok := e.remotes.RemoteInfo(remote)
+	if !ok {
+		return RemoteInfo{}, false
+	}
+	return remoteInfoFromSocket(info), true
+}
+
 func (e *Endpoint) refreshNetReport(ctx context.Context) error {
 	if e.netReport == nil {
 		return nil

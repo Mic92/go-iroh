@@ -52,6 +52,50 @@ func ExampleEndpoint_HomeRelayStatus() {
 	}
 }
 
+// ExampleEndpoint_RemoteInfo prints whether a direct loopback peer has an
+// active known address.
+func ExampleEndpoint_RemoteInfo() {
+	ctx := context.Background()
+	const alpn = "iroh/remote-info/1"
+
+	server, err := iroh.Bind(ctx,
+		iroh.WithALPNs(alpn),
+		iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+	)
+	if err != nil {
+		fmt.Println("bind server:", err)
+		return
+	}
+	defer server.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		fmt.Println("bind client:", err)
+		return
+	}
+	defer client.Shutdown(ctx)
+
+	accepted := make(chan *iroh.Conn, 1)
+	go func() {
+		conn, _ := server.Accept(ctx)
+		accepted <- conn
+	}()
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, alpn)
+	if err != nil {
+		fmt.Println("connect:", err)
+		return
+	}
+	defer conn.CloseWithError(0, "")
+	defer (<-accepted).CloseWithError(0, "")
+
+	info, ok := client.RemoteInfo(server.ID())
+	fmt.Println(ok, info.ID == server.ID(), len(info.Addrs) > 0)
+	// Output:
+	// true true true
+}
+
 func echo(ctx context.Context, conn *iroh.Conn) error {
 	s, err := conn.AcceptStream(ctx)
 	if err != nil {

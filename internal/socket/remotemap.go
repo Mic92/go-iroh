@@ -107,6 +107,24 @@ func (m *RemoteMap) Len() int {
 	return len(m.actors)
 }
 
+// RemoteInfo returns a snapshot for id if a running actor exists. It does not
+// spawn a new actor.
+func (m *RemoteMap) RemoteInfo(id key.EndpointID) (RemoteInfo, bool) {
+	m.mu.Lock()
+	a, ok := m.actors[id]
+	m.mu.Unlock()
+	if !ok {
+		return RemoteInfo{}, false
+	}
+	select {
+	case <-a.donec():
+		m.dropIfStopped(id, a)
+		return RemoteInfo{}, false
+	default:
+	}
+	return a.RemoteInfo(), true
+}
+
 // AddConnection registers conn with the actor for remote, spawning the actor if
 // needed, and returns the connection's path-event channel. Registering a
 // connection resets the actor's idle timer, so this can race the idle teardown
