@@ -321,6 +321,8 @@ type IHave struct {
 	Round Round
 }
 
+const iHavePostcardMaxSize = 32 + 3
+
 // Graft asks an eager peer to send a payload.
 type Graft struct {
 	ID    *MessageID

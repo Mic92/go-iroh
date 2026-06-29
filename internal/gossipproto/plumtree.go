@@ -401,13 +401,19 @@ func (s *PlumtreeState) onGraft(sender PeerID, graft Graft, out *[]PlumtreeOutEv
 }
 
 func (s *PlumtreeState) onDispatchTimer(out *[]PlumtreeOutEvent) {
+	chunkLen := (s.maxPayloadSize - 3) / iHavePostcardMaxSize
+	if chunkLen < 1 {
+		chunkLen = 1
+	}
 	for peer, ihaves := range s.lazyQueue {
-		if len(ihaves) > 0 {
+		for len(ihaves) > 0 {
+			n := min(chunkLen, len(ihaves))
 			*out = append(*out, PlumtreeOutEvent{
 				Kind:    PlumtreeSendMessage,
 				To:      peer,
-				Message: PlumtreeMessage{Kind: PlumtreeIHave, IHave: append([]IHave(nil), ihaves...)},
+				Message: PlumtreeMessage{Kind: PlumtreeIHave, IHave: append([]IHave(nil), ihaves[:n]...)},
 			})
+			ihaves = ihaves[n:]
 		}
 		delete(s.lazyQueue, peer)
 	}

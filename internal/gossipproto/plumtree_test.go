@@ -200,6 +200,42 @@ func TestPlumtreeStateIHaveSchedulesAndGrafts(t *testing.T) {
 	}
 }
 
+func TestPlumtreeStateDispatchChunksIHave(t *testing.T) {
+	me := PeerID(seq32(1))
+	peer := PeerID(seq32(2))
+	config := DefaultPlumtreeConfig()
+	config.MaxPayloadSize = 3 + 2*iHavePostcardMaxSize
+	state := NewPlumtreeState(me, config)
+	state.lazyQueue[peer] = []IHave{
+		{ID: MessageID(seq32(10)), Round: 1},
+		{ID: MessageID(seq32(11)), Round: 2},
+		{ID: MessageID(seq32(12)), Round: 3},
+		{ID: MessageID(seq32(13)), Round: 4},
+		{ID: MessageID(seq32(14)), Round: 5},
+	}
+	state.dispatchTimerScheduled = true
+
+	var got []PlumtreeOutEvent
+	state.onDispatchTimer(&got)
+	if len(got) != 3 {
+		t.Fatalf("dispatch emitted %d events, want 3: %#v", len(got), got)
+	}
+	lengths := []int{
+		len(got[0].Message.IHave),
+		len(got[1].Message.IHave),
+		len(got[2].Message.IHave),
+	}
+	if !reflect.DeepEqual(lengths, []int{2, 2, 1}) {
+		t.Fatalf("IHave chunk lengths = %v, want [2 2 1]", lengths)
+	}
+	if len(state.lazyQueue) != 0 {
+		t.Fatalf("lazyQueue len = %d, want 0", len(state.lazyQueue))
+	}
+	if state.dispatchTimerScheduled {
+		t.Fatal("dispatchTimerScheduled still true")
+	}
+}
+
 func TestPlumtreeStateGraftRepliesFromCache(t *testing.T) {
 	now := time.Unix(1, 0)
 	me := PeerID(seq32(1))
