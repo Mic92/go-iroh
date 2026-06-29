@@ -446,9 +446,14 @@ func (c *Conn) quicWriteCryptoData(level QUICEncryptionLevel, data []byte) {
 }
 
 func (c *Conn) quicResumeSession(session *SessionState) error {
+	// The QUICResumeSession handler mutates SessionState.EarlyData to report
+	// whether 0-RTT was accepted. Resumed sessions are shared with the client
+	// session cache, which a concurrent connection may be reading (loadSession),
+	// so resume against a shallow copy to keep the cached state immutable.
+	state := *session
 	c.quic.events = append(c.quic.events, QUICEvent{
 		Kind:         QUICResumeSession,
-		SessionState: session,
+		SessionState: &state,
 	})
 	c.quic.waitingForDrain = true
 	for c.quic.waitingForDrain {
