@@ -19,6 +19,18 @@ const (
 // ErrFrameTooLarge reports a frame that exceeds the configured maximum size.
 var ErrFrameTooLarge = errors.New("gossipproto: frame too large")
 
+// NormalizeMaxMessageSize returns the configured gossip frame size, enforcing
+// the Rust minimum. A non-positive value selects the Rust default.
+func NormalizeMaxMessageSize(n int) int {
+	if n <= 0 {
+		return DefaultMaxMessageSize
+	}
+	if n < MinMaxMessageSize {
+		return MinMaxMessageSize
+	}
+	return n
+}
+
 // StreamHeader is the first frame written on each gossip unidirectional stream.
 type StreamHeader struct {
 	Topic TopicID
@@ -26,11 +38,12 @@ type StreamHeader struct {
 
 // WriteFrame writes v as one Rust-compatible gossip frame.
 func WriteFrame(w io.Writer, v any, maxSize int) error {
+	maxSize = NormalizeMaxMessageSize(maxSize)
 	b, err := postcard.Marshal(v)
 	if err != nil {
 		return fmt.Errorf("gossipproto: marshal frame: %w", err)
 	}
-	if maxSize > 0 && len(b) >= maxSize {
+	if len(b) >= maxSize {
 		return fmt.Errorf("%w: %d >= %d", ErrFrameTooLarge, len(b), maxSize)
 	}
 	var hdr [4]byte
@@ -46,12 +59,13 @@ func WriteFrame(w io.Writer, v any, maxSize int) error {
 
 // ReadFrame reads one Rust-compatible gossip frame into v.
 func ReadFrame(r io.Reader, v any, maxSize int) error {
+	maxSize = NormalizeMaxMessageSize(maxSize)
 	var hdr [4]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return fmt.Errorf("gossipproto: read frame length: %w", err)
 	}
 	n := int(binary.BigEndian.Uint32(hdr[:]))
-	if maxSize > 0 && n > maxSize {
+	if n > maxSize {
 		return fmt.Errorf("%w: %d > %d", ErrFrameTooLarge, n, maxSize)
 	}
 	b := make([]byte, n)

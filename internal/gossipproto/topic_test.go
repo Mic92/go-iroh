@@ -140,6 +140,27 @@ func TestStateDisconnectPeerOnlyAfterLastTopic(t *testing.T) {
 	}
 }
 
+func TestStateThreadsMaxPayloadSizeToPlumtree(t *testing.T) {
+	me := PeerID(seq32(1))
+	topic := TopicID(seq32(2))
+	state := NewState(me, nil, Config{MaxMessageSize: 1})
+	state.Handle(InEvent{
+		Kind:  CommandEvent,
+		Topic: topic,
+		Command: TopicCommand{
+			Kind: TopicCommandJoin,
+		},
+	})
+	st := state.topics[topic]
+	if st == nil {
+		t.Fatal("topic state was not created")
+	}
+	want := MaxPayloadSize(MinMaxMessageSize)
+	if got := st.gossip.MaxPayloadSize(); got != want {
+		t.Fatalf("MaxPayloadSize = %d, want %d", got, want)
+	}
+}
+
 func hasDisconnect(events []OutEvent, peer PeerID) bool {
 	for _, ev := range events {
 		if ev.Kind == DisconnectPeer && ev.To == peer {

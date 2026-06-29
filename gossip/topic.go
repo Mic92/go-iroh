@@ -60,7 +60,7 @@ type GossipOption func(*Gossip)
 func WithMaxMessageSize(n int) GossipOption {
 	return func(g *Gossip) {
 		if n > 0 {
-			g.maxMessageSize = n
+			g.maxMessageSize = gossipproto.NormalizeMaxMessageSize(n)
 		}
 	}
 }
@@ -95,7 +95,9 @@ func NewGossip(ep *iroh.Endpoint, opts ...GossipOption) *Gossip {
 		opt(g)
 	}
 	if ep != nil {
-		g.state = gossipproto.NewState(peerIDFromEndpoint(ep.ID()), nil, gossipproto.DefaultConfig())
+		config := gossipproto.DefaultConfig()
+		config.MaxMessageSize = g.maxMessageSize
+		g.state = gossipproto.NewState(peerIDFromEndpoint(ep.ID()), nil, config)
 	}
 	return g
 }

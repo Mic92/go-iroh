@@ -94,10 +94,7 @@ func (h *Handler) readStream(ctx context.Context, from key.EndpointID, r io.Read
 }
 
 func (h *Handler) maxMessageSize() int {
-	if h.MaxMessageSize > 0 {
-		return h.MaxMessageSize
-	}
-	return gossipproto.DefaultMaxMessageSize
+	return gossipproto.NormalizeMaxMessageSize(h.MaxMessageSize)
 }
 
 // Sender writes gossip messages to an iroh connection.
@@ -111,12 +108,9 @@ type Sender struct {
 
 // NewSender returns a sender for conn.
 func NewSender(conn *iroh.Conn, maxMessageSize int) *Sender {
-	if maxMessageSize <= 0 {
-		maxMessageSize = gossipproto.DefaultMaxMessageSize
-	}
 	return &Sender{
 		conn:    conn,
-		maxSize: maxMessageSize,
+		maxSize: gossipproto.NormalizeMaxMessageSize(maxMessageSize),
 		streams: map[TopicID]*iroh.SendStream{},
 	}
 }

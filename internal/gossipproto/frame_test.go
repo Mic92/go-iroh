@@ -51,19 +51,51 @@ func TestFrameRoundTrip(t *testing.T) {
 
 func TestFrameTooLarge(t *testing.T) {
 	var buf bytes.Buffer
-	err := WriteFrame(&buf, StreamHeader{}, 32)
+	err := WriteFrame(&buf, make([]byte, MinMaxMessageSize), MinMaxMessageSize)
 	if !errors.Is(err, ErrFrameTooLarge) {
 		t.Fatalf("WriteFrame err = %v, want ErrFrameTooLarge", err)
 	}
 
 	var raw bytes.Buffer
 	var hdr [4]byte
-	binary.BigEndian.PutUint32(hdr[:], 32)
+	binary.BigEndian.PutUint32(hdr[:], MinMaxMessageSize+1)
 	raw.Write(hdr[:])
-	raw.Write(make([]byte, 32))
-	err = ReadFrame(&raw, &StreamHeader{}, 31)
+	raw.Write(make([]byte, MinMaxMessageSize+1))
+	err = ReadFrame(&raw, &StreamHeader{}, MinMaxMessageSize)
 	if !errors.Is(err, ErrFrameTooLarge) {
 		t.Fatalf("ReadFrame err = %v, want ErrFrameTooLarge", err)
+	}
+}
+
+func TestNormalizeMaxMessageSize(t *testing.T) {
+	tests := []struct {
+		name string
+		in   int
+		want int
+	}{
+		{name: "zero", in: 0, want: DefaultMaxMessageSize},
+		{name: "negative", in: -1, want: DefaultMaxMessageSize},
+		{name: "below minimum", in: MinMaxMessageSize - 1, want: MinMaxMessageSize},
+		{name: "minimum", in: MinMaxMessageSize, want: MinMaxMessageSize},
+		{name: "larger", in: 8192, want: 8192},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeMaxMessageSize(tt.in); got != tt.want {
+				t.Fatalf("NormalizeMaxMessageSize(%d) = %d, want %d", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFrameUsesMinimumMaxMessageSize(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteFrame(&buf, StreamHeader{}, 1); err != nil {
+		t.Fatalf("WriteFrame below minimum: %v", err)
+	}
+	var got StreamHeader
+	if err := ReadFrame(&buf, &got, 1); err != nil {
+		t.Fatalf("ReadFrame below minimum: %v", err)
 	}
 }
 

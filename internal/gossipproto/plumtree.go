@@ -30,6 +30,7 @@ type PlumtreeConfig struct {
 	MessageCacheRetention time.Duration
 	MessageIDRetention    time.Duration
 	CacheEvictInterval    time.Duration
+	MaxPayloadSize        int
 }
 
 // DefaultPlumtreeConfig returns the Rust iroh-gossip PlumTree defaults.
@@ -42,8 +43,22 @@ func DefaultPlumtreeConfig() PlumtreeConfig {
 		MessageCacheRetention: 30 * time.Second,
 		MessageIDRetention:    90 * time.Second,
 		CacheEvictInterval:    time.Second,
+		MaxPayloadSize:        DefaultMaxPayloadSize(),
 	}
 }
+
+// MaxPayloadSize returns the largest PlumTree payload that fits in
+// maxMessageSize with the Go gossip stream frame shape.
+func MaxPayloadSize(maxMessageSize int) int {
+	n := NormalizeMaxMessageSize(maxMessageSize) - plumtreePayloadHeaderSize()
+	if n < 0 {
+		return 0
+	}
+	return n
+}
+
+// DefaultMaxPayloadSize returns the Rust-default PlumTree payload budget.
+func DefaultMaxPayloadSize() int { return MaxPayloadSize(DefaultMaxMessageSize) }
 
 // PlumtreeStats are counters tracked by the PlumTree state machine.
 type PlumtreeStats struct {
@@ -141,7 +156,8 @@ type PlumtreeState struct {
 	dispatchTimerScheduled bool
 	init                   bool
 
-	stats PlumtreeStats
+	stats          PlumtreeStats
+	maxPayloadSize int
 }
 
 type graftTarget struct {
@@ -159,6 +175,9 @@ func NewPlumtreeState(me PeerID, config PlumtreeConfig) *PlumtreeState {
 	if config == (PlumtreeConfig{}) {
 		config = DefaultPlumtreeConfig()
 	}
+	if config.MaxPayloadSize <= 0 {
+		config.MaxPayloadSize = DefaultMaxPayloadSize()
+	}
 	return &PlumtreeState{
 		me:                     me,
 		config:                 config,
@@ -170,6 +189,7 @@ func NewPlumtreeState(me PeerID, config PlumtreeConfig) *PlumtreeState {
 		cache:                  map[MessageID]cachedGossip{},
 		graftTimerScheduled:    map[MessageID]struct{}{},
 		dispatchTimerScheduled: false,
+		maxPayloadSize:         config.MaxPayloadSize,
 	}
 }
 
@@ -177,6 +197,9 @@ func NewPlumtreeState(me PeerID, config PlumtreeConfig) *PlumtreeState {
 func (s *PlumtreeState) Stats() PlumtreeStats {
 	return s.stats
 }
+
+// MaxPayloadSize returns the largest application payload configured for s.
+func (s *PlumtreeState) MaxPayloadSize() int { return s.maxPayloadSize }
 
 // Handle applies ev and returns protocol outputs for the caller to process.
 func (s *PlumtreeState) Handle(ev PlumtreeInEvent) []PlumtreeOutEvent {

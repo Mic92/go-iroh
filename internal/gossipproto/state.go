@@ -4,12 +4,16 @@ import "time"
 
 // Config configures the gossip protocol state machine.
 type Config struct {
-	Topic TopicConfig
+	Topic          TopicConfig
+	MaxMessageSize int
 }
 
 // DefaultConfig returns Rust iroh-gossip protocol defaults.
 func DefaultConfig() Config {
-	return Config{Topic: DefaultTopicConfig()}
+	return Config{
+		Topic:          DefaultTopicConfig(),
+		MaxMessageSize: DefaultMaxMessageSize,
+	}
 }
 
 // InEvent is an input to the top-level gossip protocol state machine.
@@ -79,6 +83,8 @@ func NewState(me PeerID, data PeerData, config Config) *State {
 	if config == (Config{}) {
 		config = DefaultConfig()
 	}
+	config.MaxMessageSize = NormalizeMaxMessageSize(config.MaxMessageSize)
+	config.Topic.Broadcast.MaxPayloadSize = MaxPayloadSize(config.MaxMessageSize)
 	return &State{
 		me:         me,
 		meData:     clonePeerData(data),
