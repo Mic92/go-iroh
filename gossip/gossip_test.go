@@ -2,16 +2,31 @@ package gossip_test
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/gossip"
 	"github.com/tmc/go-iroh/internal/gossipproto"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
+
+func ExampleDiscovery() {
+	sk, _ := key.GenerateSecretKey()
+	discovery := gossip.New(sk.Public().EndpointID())
+
+	var services iroh.AddressLookupServices
+	services.AddPublisher(discovery)
+	services.AddResolver(discovery)
+
+	fmt.Println(discovery != nil)
+	// Output:
+	// true
+}
 
 func TestSenderHandlerLoopback(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -125,7 +140,7 @@ func TestGossipTopicLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind server: %v", err)
 	}
-	serverGossip := gossip.New(server)
+	serverGossip := gossip.NewGossip(server)
 	serverRouter, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
 		gossip.ALPN: serverGossip.Handler(),
 	}, nil)
@@ -138,7 +153,7 @@ func TestGossipTopicLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bind client: %v", err)
 	}
-	clientGossip := gossip.New(client)
+	clientGossip := gossip.NewGossip(client)
 	clientRouter, err := iroh.NewRouter(client, map[string]iroh.ProtocolHandler{
 		gossip.ALPN: clientGossip.Handler(),
 	}, nil)
@@ -189,6 +204,88 @@ func TestGossipTopicLoopback(t *testing.T) {
 		}
 		return
 	}
+}
+
+func TestDiscoveryLoopback(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var topic gossip.TopicID
+	copy(topic[:], "discovery")
+
+	server, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind server: %v", err)
+	}
+	serverGossip := gossip.NewGossip(server)
+	serverRouter, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: serverGossip.Handler(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new server router: %v", err)
+	}
+	defer serverRouter.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind client: %v", err)
+	}
+	clientGossip := gossip.NewGossip(client)
+	clientRouter, err := iroh.NewRouter(client, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: clientGossip.Handler(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new client router: %v", err)
+	}
+	defer clientRouter.Shutdown(ctx)
+
+	serverAddr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	serverDiscovery := gossip.New(server.ID(), gossip.WithGossip(serverGossip, topic, nil))
+	clientDiscovery := gossip.New(client.ID(), gossip.WithGossip(clientGossip, topic, []netaddr.EndpointAddr{serverAddr}))
+
+	startErr := make(chan error, 2)
+	go func() { startErr <- serverDiscovery.Start(ctx) }()
+	go func() { startErr <- clientDiscovery.Start(ctx) }()
+
+	userData, err := dns.NewUserData("server")
+	if err != nil {
+		t.Fatalf("user data: %v", err)
+	}
+	data := dns.NewEndpointData(netaddr.IPAddr{Addr: server.LocalAddr()}).WithUserData(&userData)
+	tick := time.NewTicker(25 * time.Millisecond)
+	defer tick.Stop()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				serverDiscovery.Publish(data)
+			}
+		}
+	}()
+
+	for item, err := range clientDiscovery.Resolve(ctx, server.ID()) {
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if item.Provenance() != gossip.Provenance {
+			t.Fatalf("provenance = %q, want %q", item.Provenance(), gossip.Provenance)
+		}
+		gotUserData, ok := item.UserData()
+		if !ok || gotUserData.String() != "server" {
+			t.Fatalf("user data = %q, %v; want server, true", gotUserData.String(), ok)
+		}
+		if got := item.EndpointInfo().Data.IPAddrs(); len(got) != 1 || got[0] != server.LocalAddr() {
+			t.Fatalf("ip addrs = %v, want %v", got, server.LocalAddr())
+		}
+		cancel()
+		<-done
+		return
+	}
+	t.Fatal("resolve produced no items")
 }
 
 func nextEvent(ctx context.Context, t *testing.T, topic *gossip.Topic) gossip.Event {

@@ -49,12 +49,12 @@ type Event struct {
 	Scope         DeliveryScope
 }
 
-// Option configures a Gossip instance.
-type Option func(*Gossip)
+// GossipOption configures a Gossip instance.
+type GossipOption func(*Gossip)
 
 // WithMaxMessageSize sets the maximum postcard frame body size. Non-positive
 // values use the Rust default.
-func WithMaxMessageSize(n int) Option {
+func WithMaxMessageSize(n int) GossipOption {
 	return func(g *Gossip) {
 		if n > 0 {
 			g.maxMessageSize = n
@@ -78,8 +78,8 @@ type Gossip struct {
 	closed      bool
 }
 
-// New returns a Gossip instance for ep.
-func New(ep *iroh.Endpoint, opts ...Option) *Gossip {
+// NewGossip returns a Gossip instance for ep.
+func NewGossip(ep *iroh.Endpoint, opts ...GossipOption) *Gossip {
 	g := &Gossip{
 		ep:             ep,
 		maxMessageSize: gossipproto.DefaultMaxMessageSize,
