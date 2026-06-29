@@ -14,7 +14,13 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-const defaultTopicEventCap = 256
+const defaultTopicEventCap = 2048
+
+// JoinOptions configures a topic subscription.
+type JoinOptions struct {
+	Bootstrap            []netaddr.EndpointAddr
+	SubscriptionCapacity int
+}
 
 // EventKind identifies a topic event.
 type EventKind uint8
@@ -187,13 +193,24 @@ func (g *Gossip) Accept(ctx context.Context, conn *iroh.Conn) error {
 // Subscribe joins topic and returns a local handle for publishing and receiving
 // events. Bootstrap peers are dialed as needed.
 func (g *Gossip) Subscribe(ctx context.Context, topic TopicID, bootstrap []netaddr.EndpointAddr) (*Topic, error) {
+	return g.SubscribeWithOpts(ctx, topic, JoinOptions{Bootstrap: bootstrap})
+}
+
+// SubscribeWithOpts joins topic with opts and returns a local handle for
+// publishing and receiving events.
+func (g *Gossip) SubscribeWithOpts(ctx context.Context, topic TopicID, opts JoinOptions) (*Topic, error) {
 	if g == nil || g.ep == nil || g.state == nil {
 		return nil, errors.New("gossip: nil Gossip")
 	}
+	capacity := opts.SubscriptionCapacity
+	if capacity <= 0 {
+		capacity = defaultTopicEventCap
+	}
+	bootstrap := opts.Bootstrap
 	t := &Topic{
 		g:      g,
 		id:     topic,
-		events: make(chan Event, defaultTopicEventCap),
+		events: make(chan Event, capacity),
 	}
 	peers := make([]PeerID, 0, len(bootstrap))
 	for _, addr := range bootstrap {
@@ -235,7 +252,7 @@ func (g *Gossip) Subscribe(ctx context.Context, topic TopicID, bootstrap []netad
 
 // SubscribeAndJoin subscribes to topic and waits until it has a direct neighbor.
 func (g *Gossip) SubscribeAndJoin(ctx context.Context, topic TopicID, bootstrap []netaddr.EndpointAddr) (*Topic, error) {
-	t, err := g.Subscribe(ctx, topic, bootstrap)
+	t, err := g.SubscribeWithOpts(ctx, topic, JoinOptions{Bootstrap: bootstrap})
 	if err != nil {
 		return nil, err
 	}
@@ -278,11 +295,10 @@ func (g *Gossip) command(ctx context.Context, topic TopicID, cmd gossipproto.Top
 
 func (g *Gossip) closeTopic(t *Topic) error {
 	g.mu.Lock()
-	if t.closed {
-		g.mu.Unlock()
-		return nil
+	alreadyClosed := t.isClosed()
+	if !alreadyClosed {
+		t.closeEvents()
 	}
-	t.closeEvents()
 	delete(g.topics[t.id], t)
 	empty := len(g.topics[t.id]) == 0
 	if empty {
@@ -640,7 +656,17 @@ func (t *Topic) sendEvent(ev Event) {
 		select {
 		case t.events <- Event{Kind: Lagged}:
 		default:
+			select {
+			case <-t.events:
+			default:
+			}
+			select {
+			case t.events <- Event{Kind: Lagged}:
+			default:
+			}
 		}
+		t.closed = true
+		close(t.events)
 	}
 }
 
