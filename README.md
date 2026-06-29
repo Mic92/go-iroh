@@ -1,28 +1,50 @@
 # go-iroh
 
-`go-iroh` is a Go implementation of the iroh connectivity layer. It provides
-peer-to-peer QUIC endpoints identified by ed25519 public keys, with direct
-paths, relay fallback, QUIC Retry, multipath, QAD observed addresses, and QNT
-NAT traversal support.
+`go-iroh` is a Go implementation of iroh. It provides peer-to-peer QUIC
+endpoints identified by ed25519 public keys, with direct paths, relay fallback,
+QUIC Retry, multipath, QAD observed addresses, and QNT NAT traversal support,
+plus Rust-compatible ports of the iroh protocol stack: blobs, gossip, and docs.
 
 The module is a clean-room Go port targeting wire compatibility with upstream
 Rust iroh. It is not affiliated with the n0 team.
 
 ## Packages
 
+Connectivity layer:
+
 | Package | Purpose |
 |---|---|
+| `iroh` | Endpoint, Conn, Router, address lookup |
 | `key` | endpoint IDs, Ed25519 keys, signatures |
 | `netaddr` | endpoint addresses, transport addresses, relay URLs |
 | `dns` | pkarr TXT encoding and stdlib/DoH/DoT lookupers |
+| `pkarr` | pkarr signed DNS packet codec |
 | `relay` | public relay maps and relay configuration |
+| `metrics` | small OpenMetrics registry |
 | `watch` | small generic watch values |
-| `iroh` | Endpoint, Conn, Router, address lookup, metrics |
+
+Protocols (Rust-compatible ports):
+
+| Package | Purpose |
+|---|---|
+| `blobs` | content-addressed blob tickets, identifiers, and BAO transfer |
+| `gossip` | iroh-gossip pub/sub mesh (HyParView membership, PlumTree broadcast) |
+| `docs` | iroh-docs multi-writer key-value documents and range sync |
+| `endpointticket` | Rust-compatible endpoint ticket codec |
+| `postcard` | Rust-compatible postcard wire codec (shared with sibling modules) |
+| `http3` | adapts iroh connections for HTTP/3 implementations |
+
+Commands:
+
+| Command | Purpose |
+|---|---|
+| `cmd/iroh` | utility for iroh identities and addresses (keys, endpoint info) |
 | `cmd/iroh-relay` | minimal local relay server |
 | `cmd/iroh-dns-server` | minimal pkarr HTTP server |
 
 The transport internals live under `internal/`: relay protocol/client/server,
-net reports, socket path management, RFC 7250 TLS, and `qng`, the quic-go fork
+net reports, socket path management, RFC 7250 TLS, the postcard and pkarr
+implementations, the gossip proto state machine, and `qng`, the quic-go fork
 used for iroh/noq compatibility.
 
 ## Install
@@ -114,13 +136,26 @@ IROH_RUST_REPO=/path/to/n0-computer/iroh \
 go test ./iroh -run TestLiveRustTransferFetchPingDirectPath -count=1 -v
 ```
 
+The gossip stack has its own opt-in live gate that builds a Rust `iroh-gossip`
+helper (from `gossip/testdata/rust-gossip-interop`) and exchanges membership and
+broadcast with it over `/iroh-gossip/1`. It requires `cargo`:
+
+```sh
+GO_IROH_LIVE_RUST_GOSSIP=1 go test ./gossip -run TestLiveRustGossipInterop -count=1 -v
+```
+
 ## Status
+
+The connectivity layer is a wire-compatible iroh endpoint. The protocol packages
+(`blobs`, `gossip`, `docs`) port the corresponding Rust crates, sharing the
+`postcard` and `pkarr` wire codecs; `gossip` carries the full HyParView and
+PlumTree state machine with a postcard discovery channel.
 
 The normal local suite covers the public packages, qng transport extensions, and
 local relay/direct behavior. The opt-in Rust gates cover live echo, Rust
-`transfer` provider/upload, direct-path selection, and qlog evidence for QNT
-frames when the host environment provides the required binaries and network
-topology.
+`transfer` provider/upload, direct-path selection, qlog evidence for QNT frames,
+and Go↔Rust gossip membership and broadcast, when the host environment provides
+the required binaries and network topology.
 
 GOOS=js/GOARCH=wasm builds compile. Browser runtime support is limited by the
 platform: the relay WebSocket client has a js-specific dial path, but direct UDP
