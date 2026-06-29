@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"slices"
 	"sync"
+
+	"github.com/tmc/go-iroh/key"
 )
 
 // InsertOutcome reports the result of a store insert.
@@ -22,6 +24,8 @@ func (o InsertOutcome) Removed() int { return o.removed }
 type MemoryStore struct {
 	mu      sync.RWMutex
 	entries map[string]SignedEntry
+	events  *storeWatcher
+	seq     uint64
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -47,6 +51,17 @@ func (s *MemoryStore) GetExact(namespace NamespaceID, author AuthorID, key []byt
 		return SignedEntry{}, false
 	}
 	return entry, true
+}
+
+// Subscribe returns a subscription to successful store insert events. Events
+// sent before Subscribe are not replayed.
+func (s *MemoryStore) Subscribe() (<-chan StoreEvent, func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.events == nil {
+		s.events = newStoreWatcher()
+	}
+	return s.events.Subscribe()
 }
 
 // Entries returns the store entries in document order.
@@ -141,7 +156,8 @@ func (s *MemoryStore) ProcessMessage(config SyncConfig, message Message, validat
 			if !validate(value.Entry, value.Status) {
 				continue
 			}
-			if outcome := s.Put(value.Entry); outcome.Inserted() && onInsert != nil {
+			origin := InsertOrigin{Kind: InsertOriginRemote, ContentStatus: value.Status}
+			if outcome := s.PutWithOrigin(value.Entry, origin); outcome.Inserted() && onInsert != nil {
 				onInsert(value.Entry, value.Status)
 			}
 		}
@@ -221,8 +237,12 @@ func (s *MemoryStore) entriesLocked() []SignedEntry {
 
 // Put inserts entry if it is newer than all matching parent entries.
 func (s *MemoryStore) Put(entry SignedEntry) InsertOutcome {
+	return s.PutWithOrigin(entry, InsertOrigin{Kind: InsertOriginLocal})
+}
+
+// PutWithOrigin inserts entry with origin metadata for subscribers.
+func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) InsertOutcome {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.entries == nil {
 		s.entries = make(map[string]SignedEntry)
@@ -231,6 +251,7 @@ func (s *MemoryStore) Put(entry SignedEntry) InsertOutcome {
 	key := id.bytes()
 	for _, existing := range s.entries {
 		if hasEntryPrefix(id, existing.Entry.ID) && entry.Entry.Record.Compare(existing.Entry.Record) <= 0 {
+			s.mu.Unlock()
 			return InsertOutcome{}
 		}
 	}
@@ -242,7 +263,39 @@ func (s *MemoryStore) Put(entry SignedEntry) InsertOutcome {
 		}
 	}
 	s.entries[string(key)] = entry
+	s.seq++
+	event := StoreEvent{
+		Kind:          storeEventKind(origin.Kind),
+		Sequence:      s.seq,
+		Entry:         entry,
+		Removed:       removed,
+		From:          origin.From,
+		ContentStatus: origin.ContentStatus,
+	}
+	events := s.events
+	s.mu.Unlock()
+
+	if events != nil {
+		events.Send(event)
+	}
 	return InsertOutcome{inserted: true, removed: removed}
+}
+
+// InsertOriginKind tags the origin of a store insert.
+type InsertOriginKind uint8
+
+const (
+	// InsertOriginLocal means the entry was inserted locally.
+	InsertOriginLocal InsertOriginKind = iota
+	// InsertOriginRemote means the entry came from a peer.
+	InsertOriginRemote
+)
+
+// InsertOrigin describes where an inserted entry came from.
+type InsertOrigin struct {
+	Kind          InsertOriginKind
+	From          key.EndpointID
+	ContentStatus ContentStatus
 }
 
 func hasEntryPrefix(id, prefix RecordIdentifier) bool {

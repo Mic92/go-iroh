@@ -8,6 +8,8 @@ func TestProcessMessageStoresIncomingRangeItem(t *testing.T) {
 	entry := testSignedEntry(namespace, author, "k", testRecord("k", 1, 1))
 	store := NewMemoryStore()
 	var inserted []SignedEntry
+	events, cancel := store.Subscribe()
+	defer cancel()
 
 	resp, ok := store.ProcessMessage(DefaultSyncConfig(), Message{Parts: []MessagePart{{
 		Kind: MessagePartRangeItem,
@@ -27,6 +29,10 @@ func TestProcessMessageStoresIncomingRangeItem(t *testing.T) {
 	}
 	if _, ok := store.GetExact(namespace.ID(), author.ID(), []byte("k"), false); !ok {
 		t.Fatal("inserted entry missing")
+	}
+	event := readStoreEvent(t, events)
+	if event.Kind != StoreEventInsertRemote || event.ContentStatus != ContentComplete || !event.Entry.Equal(entry) {
+		t.Fatalf("store event = %#v, want remote insert", event)
 	}
 }
 

@@ -1,9 +1,12 @@
 package docs
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/tmc/go-iroh/blobs"
+	"github.com/tmc/go-iroh/key"
 )
 
 func TestMemoryStorePut(t *testing.T) {
@@ -83,6 +86,124 @@ func TestMemoryStoreParentBlocksChild(t *testing.T) {
 	if store.Len() != 1 {
 		t.Fatalf("Len = %d, want 1", store.Len())
 	}
+}
+
+func TestMemoryStoreWatchInsert(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	store := NewMemoryStore()
+	events, cancel := store.Subscribe()
+	defer cancel()
+
+	entry := testSignedEntry(namespace, author, "k", testRecord("one", 1, 1))
+	store.Put(entry)
+	event := readStoreEvent(t, events)
+	if event.Kind != StoreEventInsertLocal || event.Sequence != 1 || !event.Entry.Equal(entry) || event.Removed != 0 {
+		t.Fatalf("event = %#v, want sequence 1 inserted entry", event)
+	}
+}
+
+func TestMemoryStoreWatchSkipsStaleInsert(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	store := NewMemoryStore()
+	newer := testSignedEntry(namespace, author, "k", testRecord("new", 1, 2))
+	older := testSignedEntry(namespace, author, "k", testRecord("old", 1, 1))
+	store.Put(newer)
+
+	events, cancel := store.Subscribe()
+	defer cancel()
+	store.Put(older)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	select {
+	case event := <-events:
+		t.Fatalf("event after stale insert = %#v, want none", event)
+	case <-ctx.Done():
+	}
+}
+
+func TestMemoryStoreSubscribeDoesNotReplay(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	store := NewMemoryStore()
+	entry := testSignedEntry(namespace, author, "k", testRecord("one", 1, 1))
+	store.Put(entry)
+
+	events, cancel := store.Subscribe()
+	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	select {
+	case event := <-events:
+		t.Fatalf("late subscriber replayed %#v, want none", event)
+	case <-ctx.Done():
+	}
+}
+
+func TestMemoryStorePutWithOrigin(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	store := NewMemoryStore()
+	events, cancel := store.Subscribe()
+	defer cancel()
+
+	entry := testSignedEntry(namespace, author, "k", testRecord("one", 1, 1))
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin := InsertOrigin{
+		Kind:          InsertOriginRemote,
+		From:          sk.Public().EndpointID(),
+		ContentStatus: ContentMissing,
+	}
+	store.PutWithOrigin(entry, origin)
+
+	event := readStoreEvent(t, events)
+	if event.Kind != StoreEventInsertRemote || !event.From.Equal(origin.From) || event.ContentStatus != ContentMissing {
+		t.Fatalf("event = %#v, want remote origin", event)
+	}
+}
+
+func TestMemoryStoreSubscribeLagged(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	store := NewMemoryStore()
+	events, cancel := store.Subscribe()
+	defer cancel()
+
+	for i := 0; i < storeBroadcastCapacity*4; i++ {
+		store.Put(testSignedEntry(namespace, author, string(rune('a'+i)), testRecord("one", 1, uint64(i+1))))
+	}
+
+	for i := 0; i < storeBroadcastCapacity*4; i++ {
+		event := readStoreEvent(t, events)
+		if event.Kind == StoreEventLagged {
+			if event.Missed == 0 {
+				t.Fatal("lagged event missed 0")
+			}
+			return
+		}
+	}
+	t.Fatal("subscriber did not receive lagged event")
+}
+
+func readStoreEvent(t *testing.T, events <-chan StoreEvent) StoreEvent {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	select {
+	case event, ok := <-events:
+		if !ok {
+			t.Fatal("events channel closed")
+		}
+		return event
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	return StoreEvent{}
 }
 
 func testSignedEntry(namespace NamespaceSecret, author Author, key string, record Record) SignedEntry {
