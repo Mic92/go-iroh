@@ -1,0 +1,271 @@
+package docs
+
+import (
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+
+	"github.com/tmc/go-iroh/blobs"
+	"github.com/tmc/go-iroh/internal/postcard"
+	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
+)
+
+const maxSyncMessageSize = 1024 * 1024 * 1024
+
+// AbortReason is the reason an accepting peer declined a sync request.
+type AbortReason uint64
+
+const (
+	// AbortNotFound means the namespace is not available.
+	AbortNotFound AbortReason = iota
+	// AbortAlreadySyncing means the namespace is already syncing.
+	AbortAlreadySyncing
+	// AbortInternalServerError means the accepting peer hit an internal error.
+	AbortInternalServerError
+)
+
+// SyncOutcome counts entries exchanged during one sync stream.
+type SyncOutcome struct {
+	NumSent int
+	NumRecv int
+}
+
+// Handler handles incoming iroh-docs sync streams.
+type Handler struct {
+	Store         *MemoryStore
+	BlobStore     blobs.Store
+	Config        SyncConfig
+	Allow         func(NamespaceID, key.EndpointID) bool
+	Validate      func(SignedEntry, ContentStatus) bool
+	OnInsert      func(SignedEntry, ContentStatus)
+	ContentStatus func(SignedEntry) ContentStatus
+}
+
+// Accept handles one incoming iroh-docs connection.
+func (h *Handler) Accept(ctx context.Context, conn *iroh.Conn) error {
+	s, err := conn.AcceptStream(ctx)
+	if err != nil {
+		return fmt.Errorf("docs: accept stream: %w", err)
+	}
+	defer s.Close()
+	ok := false
+	defer func() {
+		if !ok {
+			s.CancelRead(0)
+		}
+	}()
+
+	msg, err := readSyncFrame(s)
+	if err != nil {
+		return fmt.Errorf("docs: read init: %w", err)
+	}
+	if msg.Kind != syncMessageInit {
+		return fmt.Errorf("docs: expected init message")
+	}
+	if h.Allow != nil && !h.Allow(msg.Namespace, conn.RemoteID()) {
+		if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageAbort, Reason: AbortNotFound}); err != nil {
+			return fmt.Errorf("docs: write abort: %w", err)
+		}
+		ok = true
+		return nil
+	}
+	_, err = h.run(ctx, s, msg.Message, true)
+	if err == nil {
+		ok = true
+	}
+	return err
+}
+
+// Sync connects to addr and syncs store with the remote peer.
+func Sync(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, namespace NamespaceID, store *MemoryStore, blobStore blobs.Store, config SyncConfig) (SyncOutcome, error) {
+	if store == nil {
+		return SyncOutcome{}, fmt.Errorf("docs: nil store")
+	}
+	conn, err := ep.Connect(ctx, addr, ALPN)
+	if err != nil {
+		return SyncOutcome{}, fmt.Errorf("docs: connect: %w", err)
+	}
+	s, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return SyncOutcome{}, fmt.Errorf("docs: open stream: %w", err)
+	}
+	defer s.Close()
+	ok := false
+	defer func() {
+		if !ok {
+			s.CancelRead(0)
+		}
+	}()
+
+	h := Handler{Store: store, BlobStore: blobStore, Config: config}
+	init := store.InitialMessage()
+	if err := writeSyncFrame(s, syncWireMessage{Kind: syncMessageInit, Namespace: namespace, Message: init}); err != nil {
+		return SyncOutcome{}, fmt.Errorf("docs: write init: %w", err)
+	}
+	out, err := h.run(ctx, s, Message{}, false)
+	if err == nil {
+		ok = true
+	}
+	return out, err
+}
+
+func (h *Handler) run(ctx context.Context, rw io.ReadWriter, initial Message, acceptSide bool) (SyncOutcome, error) {
+	if h.Store == nil {
+		return SyncOutcome{}, fmt.Errorf("docs: nil store")
+	}
+	contentStatus := h.contentStatus()
+	validate := h.Validate
+	if validate == nil {
+		validate = func(entry SignedEntry, _ ContentStatus) bool { return entry.Verify() == nil }
+	}
+	var out SyncOutcome
+	next := initial
+	haveNext := acceptSide
+	for {
+		if haveNext {
+			reply, ok := h.Store.ProcessMessage(h.Config, next, validate, h.OnInsert, contentStatus)
+			out.NumRecv += next.ValueCount()
+			if !ok {
+				return out, nil
+			}
+			out.NumSent += reply.ValueCount()
+			if err := writeSyncFrame(rw, syncWireMessage{Kind: syncMessageSync, Message: reply}); err != nil {
+				return out, fmt.Errorf("docs: write sync: %w", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return out, ctx.Err()
+		default:
+		}
+		msg, err := readSyncFrame(rw)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return out, nil
+			}
+			return out, fmt.Errorf("docs: read sync: %w", err)
+		}
+		switch msg.Kind {
+		case syncMessageSync:
+			next, haveNext = msg.Message, true
+		case syncMessageAbort:
+			return out, fmt.Errorf("docs: sync aborted: %v", msg.Reason)
+		case syncMessageInit:
+			return out, fmt.Errorf("docs: unexpected init message")
+		default:
+			return out, fmt.Errorf("docs: unknown sync message %d", msg.Kind)
+		}
+	}
+}
+
+func (h *Handler) contentStatus() func(SignedEntry) ContentStatus {
+	if h.ContentStatus != nil {
+		return h.ContentStatus
+	}
+	return func(entry SignedEntry) ContentStatus {
+		switch blobs.Status(h.BlobStore, entry.Entry.ContentHash()).State {
+		case blobs.BlobComplete:
+			return ContentComplete
+		case blobs.BlobPartial:
+			return ContentIncomplete
+		default:
+			return ContentMissing
+		}
+	}
+}
+
+type syncMessageKind uint64
+
+const (
+	syncMessageInit syncMessageKind = iota
+	syncMessageSync
+	syncMessageAbort
+)
+
+type syncWireMessage struct {
+	Kind      syncMessageKind
+	Namespace NamespaceID
+	Message   Message
+	Reason    AbortReason
+}
+
+func (m syncWireMessage) EncodePostcard(e *postcard.Encoder) error {
+	e.Uint(uint64(m.Kind))
+	switch m.Kind {
+	case syncMessageInit:
+		if err := e.Encode(m.Namespace); err != nil {
+			return err
+		}
+		return e.Encode(m.Message)
+	case syncMessageSync:
+		return e.Encode(m.Message)
+	case syncMessageAbort:
+		return e.Encode(m.Reason)
+	default:
+		return fmt.Errorf("docs: unknown sync message %d", m.Kind)
+	}
+}
+
+func (m *syncWireMessage) DecodePostcard(d *postcard.Decoder) error {
+	kind, err := d.Uint()
+	if err != nil {
+		return err
+	}
+	m.Kind = syncMessageKind(kind)
+	switch m.Kind {
+	case syncMessageInit:
+		if err := d.Decode(&m.Namespace); err != nil {
+			return err
+		}
+		return d.Decode(&m.Message)
+	case syncMessageSync:
+		return d.Decode(&m.Message)
+	case syncMessageAbort:
+		return d.Decode(&m.Reason)
+	default:
+		return fmt.Errorf("docs: unknown sync message %d", m.Kind)
+	}
+}
+
+func writeSyncFrame(w io.Writer, msg syncWireMessage) error {
+	b, err := postcard.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal frame: %w", err)
+	}
+	if len(b) > maxSyncMessageSize {
+		return fmt.Errorf("frame too large: %d > %d", len(b), maxSyncMessageSize)
+	}
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(b)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return fmt.Errorf("write frame length: %w", err)
+	}
+	if _, err := w.Write(b); err != nil {
+		return fmt.Errorf("write frame body: %w", err)
+	}
+	return nil
+}
+
+func readSyncFrame(r io.Reader) (syncWireMessage, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return syncWireMessage{}, err
+	}
+	n := int(binary.BigEndian.Uint32(hdr[:]))
+	if n > maxSyncMessageSize {
+		return syncWireMessage{}, fmt.Errorf("frame too large: %d > %d", n, maxSyncMessageSize)
+	}
+	b := make([]byte, n)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return syncWireMessage{}, err
+	}
+	var msg syncWireMessage
+	if err := postcard.Unmarshal(b, &msg); err != nil {
+		return syncWireMessage{}, err
+	}
+	return msg, nil
+}
