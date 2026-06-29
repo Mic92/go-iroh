@@ -1,6 +1,9 @@
-// Package blobs defines Rust-compatible iroh blob tickets and blob identifiers.
+// Package blobs defines Rust-compatible iroh blob tickets, blob identifiers,
+// and transfer helpers.
 //
 // A blob ticket combines a provider endpoint address with a BLAKE3 hash and the
 // blob format to request. Its string form is the "blob" kind prefix followed by
 // RFC 4648 base32 without padding, matching Rust's iroh-blobs ticket format.
+// The transfer helpers implement the raw full-blob subset of the iroh-blobs
+// provider protocol.
 package blobs
