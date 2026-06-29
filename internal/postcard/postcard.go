@@ -93,6 +93,9 @@ func (e *Encoder) BytesValue(b []byte) {
 	e.b = append(e.b, b...)
 }
 
+// RawBytes appends b without a length prefix.
+func (e *Encoder) RawBytes(b []byte) { e.b = append(e.b, b...) }
+
 // String appends s as a postcard string.
 func (e *Encoder) String(s string) { e.BytesValue([]byte(s)) }
 
@@ -242,6 +245,16 @@ func (d *Decoder) Bool() (bool, error) {
 
 // BytesValue decodes a postcard byte sequence.
 func (d *Decoder) BytesValue() ([]byte, error) { return d.bytes() }
+
+// RawBytes decodes n bytes without a length prefix.
+func (d *Decoder) RawBytes(n int) ([]byte, error) {
+	if n < 0 || d.off+n > len(d.b) {
+		return nil, errShort
+	}
+	b := d.b[d.off : d.off+n]
+	d.off += n
+	return b, nil
+}
 
 // String decodes a postcard string.
 func (d *Decoder) String() (string, error) {

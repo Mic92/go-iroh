@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/tmc/go-iroh/internal/postcard"
 	"github.com/tmc/go-iroh/key"
 )
 
@@ -44,6 +45,27 @@ func (a Author) String() string {
 	return hex.EncodeToString(b[:])
 }
 
+// EncodePostcard encodes a as Rust Author.
+func (a Author) EncodePostcard(e *postcard.Encoder) error {
+	b := a.Bytes()
+	e.BytesValue(b[:])
+	return nil
+}
+
+// DecodePostcard decodes a as Rust Author.
+func (a *Author) DecodePostcard(d *postcard.Decoder) error {
+	b, err := d.BytesValue()
+	if err != nil {
+		return err
+	}
+	sk, err := key.SecretKeyFromSlice(b)
+	if err != nil {
+		return err
+	}
+	*a = Author{key: sk}
+	return nil
+}
+
 // AuthorID identifies an Author.
 type AuthorID struct {
 	id key.EndpointID
@@ -71,6 +93,25 @@ func (id AuthorID) Verify(msg []byte, sig key.Signature) error {
 
 // String returns the lowercase hex public key.
 func (id AuthorID) String() string { return id.id.String() }
+
+// EncodePostcard encodes id as Rust AuthorId.
+func (id AuthorID) EncodePostcard(e *postcard.Encoder) error {
+	b := id.Bytes()
+	e.RawBytes(b[:])
+	return nil
+}
+
+// DecodePostcard decodes id as Rust AuthorId.
+func (id *AuthorID) DecodePostcard(d *postcard.Decoder) error {
+	b, err := d.RawBytes(32)
+	if err != nil {
+		return err
+	}
+	var raw [32]byte
+	copy(raw[:], b)
+	*id, err = NewAuthorID(raw)
+	return err
+}
 
 // NamespaceSecret is a secret namespace key. Holders can write document
 // entries in the namespace.
@@ -105,6 +146,27 @@ func (s NamespaceSecret) Sign(msg []byte) key.Signature { return s.key.Sign(msg)
 func (s NamespaceSecret) String() string {
 	b := s.Bytes()
 	return hex.EncodeToString(b[:])
+}
+
+// EncodePostcard encodes s as Rust NamespaceSecret.
+func (s NamespaceSecret) EncodePostcard(e *postcard.Encoder) error {
+	b := s.Bytes()
+	e.BytesValue(b[:])
+	return nil
+}
+
+// DecodePostcard decodes s as Rust NamespaceSecret.
+func (s *NamespaceSecret) DecodePostcard(d *postcard.Decoder) error {
+	b, err := d.BytesValue()
+	if err != nil {
+		return err
+	}
+	sk, err := key.SecretKeyFromSlice(b)
+	if err != nil {
+		return err
+	}
+	*s = NamespaceSecret{key: sk}
+	return nil
 }
 
 // NamespaceID identifies a document namespace.
@@ -144,6 +206,25 @@ func (id NamespaceID) Verify(msg []byte, sig key.Signature) error {
 
 // String returns the lowercase hex public key.
 func (id NamespaceID) String() string { return id.id.String() }
+
+// EncodePostcard encodes id as Rust NamespaceId.
+func (id NamespaceID) EncodePostcard(e *postcard.Encoder) error {
+	b := id.Bytes()
+	e.RawBytes(b[:])
+	return nil
+}
+
+// DecodePostcard decodes id as Rust NamespaceId.
+func (id *NamespaceID) DecodePostcard(d *postcard.Decoder) error {
+	b, err := d.RawBytes(32)
+	if err != nil {
+		return err
+	}
+	var raw [32]byte
+	copy(raw[:], b)
+	*id, err = NewNamespaceID(raw)
+	return err
+}
 
 // CapabilityKind identifies a document namespace capability.
 type CapabilityKind uint8
