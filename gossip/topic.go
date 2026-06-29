@@ -87,6 +87,7 @@ type Gossip struct {
 	neighbors   map[TopicID]map[PeerID]struct{}
 	peerAddrs   map[PeerID]netaddr.EndpointAddr
 	peerSenders map[PeerID]*Sender
+	metrics     gossipMetrics
 	closed      bool
 }
 
@@ -114,6 +115,14 @@ func NewGossip(ep *iroh.Endpoint, opts ...GossipOption) *Gossip {
 // Handler returns the protocol handler for registering this Gossip with an
 // iroh Router.
 func (g *Gossip) Handler() iroh.ProtocolHandler { return g }
+
+// Metrics returns a point-in-time snapshot of gossip counters.
+func (g *Gossip) Metrics() Metrics {
+	if g == nil {
+		return Metrics{}
+	}
+	return g.metrics.snapshot()
+}
 
 // Shutdown closes topic subscriptions and open topic send streams.
 func (g *Gossip) Shutdown(ctx context.Context) {
@@ -160,6 +169,7 @@ func (g *Gossip) Accept(ctx context.Context, conn *iroh.Conn) error {
 		return errors.New("gossip: nil Gossip")
 	}
 	from := peerIDFromEndpoint(conn.RemoteID())
+	g.metrics.actorTickEndpoint.Add(1)
 	g.mu.Lock()
 	if g.closed {
 		g.mu.Unlock()
@@ -264,6 +274,8 @@ func (g *Gossip) SubscribeAndJoin(ctx context.Context, topic TopicID, bootstrap 
 }
 
 func (g *Gossip) receive(ctx context.Context, from key.EndpointID, msg Message) error {
+	g.metrics.actorTickRx.Add(1)
+	g.metrics.recordRecv(gossipproto.TopicMessage(msg.Message))
 	g.mu.Lock()
 	out := g.handleLocked(gossipproto.InEvent{
 		Kind:    gossipproto.RecvMessage,
@@ -277,6 +289,7 @@ func (g *Gossip) receive(ctx context.Context, from key.EndpointID, msg Message) 
 }
 
 func (g *Gossip) command(ctx context.Context, topic TopicID, cmd gossipproto.TopicCommand) error {
+	g.metrics.actorTickInEventRx.Add(1)
 	g.mu.Lock()
 	if g.closed {
 		g.mu.Unlock()
@@ -329,8 +342,10 @@ func (g *Gossip) handleLocked(in gossipproto.InEvent) []gossipproto.OutEvent {
 
 func (g *Gossip) dispatch(ctx context.Context, events []gossipproto.OutEvent) {
 	for _, ev := range events {
+		g.metrics.actorTickMain.Add(1)
 		switch ev.Kind {
 		case gossipproto.SendMessage:
+			g.metrics.recordSend(ev.Message.Message)
 			if err := g.send(ctx, ev.To, ev.Message); err != nil {
 				g.mu.Lock()
 				out := g.handleLocked(gossipproto.InEvent{
@@ -378,10 +393,13 @@ func (g *Gossip) send(ctx context.Context, peer PeerID, msg gossipproto.Message)
 }
 
 func (g *Gossip) connect(ctx context.Context, peer PeerID, addr netaddr.EndpointAddr) error {
+	g.metrics.actorTickDialer.Add(1)
 	conn, err := g.ep.Connect(ctx, addr, ALPN)
 	if err != nil {
+		g.metrics.actorTickDialerFailure.Add(1)
 		return fmt.Errorf("gossip: connect peer: %w", err)
 	}
+	g.metrics.actorTickDialerSuccess.Add(1)
 	g.mu.Lock()
 	g.peerSenders[peer] = NewSender(conn, g.maxMessageSize)
 	g.mu.Unlock()
@@ -398,11 +416,13 @@ func (g *Gossip) emit(topic TopicID, ev gossipproto.TopicEvent) {
 	}
 	g.mu.Lock()
 	if ev.Kind == gossipproto.TopicNeighborUp {
+		g.metrics.neighborUp.Add(1)
 		if g.neighbors[topic] == nil {
 			g.neighbors[topic] = make(map[PeerID]struct{})
 		}
 		g.neighbors[topic][ev.Peer] = struct{}{}
 	} else if ev.Kind == gossipproto.TopicNeighborDown {
+		g.metrics.neighborDown.Add(1)
 		delete(g.neighbors[topic], ev.Peer)
 	}
 	subs := make([]*Topic, 0, len(g.topics[topic]))
@@ -440,6 +460,7 @@ func (g *Gossip) schedule(after time.Duration, timer gossipproto.Timer) {
 		after = 0
 	}
 	time.AfterFunc(after, func() {
+		g.metrics.actorTickTimers.Add(1)
 		g.mu.Lock()
 		if g.closed {
 			g.mu.Unlock()

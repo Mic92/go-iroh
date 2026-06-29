@@ -274,6 +274,17 @@ func TestGossipTopicSplitAndSubscribeAndJoin(t *testing.T) {
 		if string(ev.Content) != "split hello" {
 			t.Fatalf("content = %q, want split hello", ev.Content)
 		}
+		cm := clientGossip.Metrics()
+		if cm.MsgsDataSent == 0 || cm.NeighborUp == 0 {
+			t.Fatalf("client metrics = %+v, want data sent and neighbor up", cm)
+		}
+		sm := serverGossip.Metrics()
+		if sm.MsgsDataRecv == 0 || sm.NeighborUp == 0 {
+			t.Fatalf("server metrics = %+v, want data recv and neighbor up", sm)
+		}
+		if got := cm.Snapshot()["msgs_data_sent"]; got == 0 {
+			t.Fatalf("snapshot msgs_data_sent = %d, want non-zero", got)
+		}
 		return
 	}
 }
