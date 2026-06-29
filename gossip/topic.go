@@ -47,6 +47,9 @@ type Event struct {
 	Content       []byte
 	DeliveredFrom key.EndpointID
 	Scope         DeliveryScope
+	// Round is the PlumTree delivery round for DeliverySwarm messages.
+	// It is zero for direct-neighbor delivery.
+	Round uint16
 }
 
 // GossipOption configures a Gossip instance.
@@ -535,6 +538,7 @@ func publicEvent(ev gossipproto.TopicEvent) (Event, bool) {
 			Content:       append([]byte(nil), ev.Content...),
 			DeliveredFrom: from,
 			Scope:         publicScope(ev.Scope),
+			Round:         uint16(ev.Scope.Round),
 		}, true
 	default:
 		return Event{}, false
