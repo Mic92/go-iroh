@@ -51,11 +51,11 @@ var (
 
 // ServeBlob serves one full-range raw blob request on s.
 //
-// The client must send a full [RequestGet] / [GetBlob] request, then close its
-// send side. ServeBlob writes the full-range BAO response and closes its send
-// side.
+// The client must send a full [RequestGet] request, then close its send side.
+// ServeBlob writes the full-range BAO response, or the hash-sequence root and
+// children for [GetAll], and closes its send side.
 func ServeBlob(ctx context.Context, s BidiStream, store Store) error {
-	return serveBlob(ctx, s, store, EncodeBlob)
+	return serveBlob(ctx, s, store, EncodeBlob, true)
 }
 
 // ServeSingleLeaf serves one single-leaf raw blob request on s.
@@ -64,10 +64,10 @@ func ServeBlob(ctx context.Context, s BidiStream, store Store) error {
 // send side. ServeSingleLeaf writes the single-leaf BAO response and closes its
 // send side. Blobs larger than [MaxSingleLeafSize] are rejected.
 func ServeSingleLeaf(ctx context.Context, s BidiStream, store Store) error {
-	return serveBlob(ctx, s, store, EncodeSingleLeaf)
+	return serveBlob(ctx, s, store, EncodeSingleLeaf, false)
 }
 
-func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byte) (Hash, []byte, error)) error {
+func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byte) (Hash, []byte, error), hashSeq bool) error {
 	if store == nil {
 		return errors.New("blobs: nil blob store")
 	}
@@ -83,11 +83,15 @@ func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byt
 	}
 	switch req.Type {
 	case RequestGet:
-		if req.Get == nil || !req.Get.Ranges.IsBlob() {
+		if req.Get == nil {
 			_ = s.Close()
 			return ErrUnsupportedRequest
 		}
-		if err := writeBlob(s, store, req.Get.Hash, encode); err != nil {
+		if !hashSeq && !req.Get.Ranges.IsBlob() {
+			_ = s.Close()
+			return ErrUnsupportedRequest
+		}
+		if err := writeGet(s, store, *req.Get, encode); err != nil {
 			_ = s.Close()
 			return err
 		}
@@ -117,11 +121,41 @@ func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byt
 	return closeWrite(s)
 }
 
+func writeGet(s io.Writer, store Store, req GetRequest, encode func([]byte) (Hash, []byte, error)) error {
+	if req.Ranges.IsBlob() {
+		return writeBlob(s, store, req.Hash, encode)
+	}
+	if !req.Ranges.IsAll() {
+		return ErrUnsupportedRequest
+	}
+	root, ok := store.GetBlob(req.Hash)
+	if !ok {
+		return ErrBlobNotFound
+	}
+	seq, err := ParseHashSequence(root)
+	if err != nil {
+		return fmt.Errorf("blobs: parse hash sequence: %w", err)
+	}
+	if err := writeBlobBytes(s, req.Hash, root, encode); err != nil {
+		return err
+	}
+	for _, hash := range seq.hashes {
+		if err := writeBlob(s, store, hash, encode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func writeBlob(s io.Writer, store Store, hash Hash, encode func([]byte) (Hash, []byte, error)) error {
 	data, ok := store.GetBlob(hash)
 	if !ok {
 		return ErrBlobNotFound
 	}
+	return writeBlobBytes(s, hash, data, encode)
+}
+
+func writeBlobBytes(s io.Writer, hash Hash, data []byte, encode func([]byte) (Hash, []byte, error)) error {
 	got, encoded, err := encode(data)
 	if err != nil {
 		return err
@@ -193,6 +227,69 @@ func GetManyBlobBytes(ctx context.Context, s BidiStream, hashes []Hash) ([][]byt
 			return nil, ctx.Err()
 		}
 		return nil, ctx.Err()
+	}
+}
+
+// GetHashSequenceBytes requests a hash sequence and all of its child blobs from s.
+func GetHashSequenceBytes(ctx context.Context, s BidiStream, root Hash) (HashSequence, [][]byte, error) {
+	if _, err := s.Write(EncodeGetRequestBytes(GetAll(root))); err != nil {
+		_ = s.Close()
+		return HashSequence{}, nil, fmt.Errorf("blobs: write request: %w", err)
+	}
+	if err := closeWrite(s); err != nil {
+		return HashSequence{}, nil, fmt.Errorf("blobs: close request: %w", err)
+	}
+
+	type result struct {
+		seq  HashSequence
+		data [][]byte
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		rootBytes, err := DecodeBlobReader(root, s)
+		if err != nil {
+			done <- result{err: fmt.Errorf("blobs: decode response: %w", err)}
+			return
+		}
+		seq, err := ParseHashSequence(rootBytes)
+		if err != nil {
+			done <- result{err: fmt.Errorf("blobs: parse hash sequence: %w", err)}
+			return
+		}
+		data := make([][]byte, 0, seq.Len())
+		for _, hash := range seq.hashes {
+			b, err := DecodeBlobReader(hash, s)
+			if err != nil {
+				done <- result{err: fmt.Errorf("blobs: decode response: %w", err)}
+				return
+			}
+			data = append(data, b)
+		}
+		extra, err := io.ReadAll(s)
+		if err != nil {
+			done <- result{err: fmt.Errorf("blobs: read response: %w", err)}
+			return
+		}
+		if len(extra) != 0 {
+			done <- result{err: fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, len(extra))}
+			return
+		}
+		done <- result{seq: seq, data: data}
+	}()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case res := <-done:
+		return res.seq, res.data, res.err
+	case <-ctx.Done():
+		_ = s.Close()
+		res := <-done
+		if res.err != nil {
+			return HashSequence{}, nil, ctx.Err()
+		}
+		return HashSequence{}, nil, ctx.Err()
 	}
 }
 

@@ -99,6 +99,57 @@ func TestGetManyBlobTransfer(t *testing.T) {
 	}
 }
 
+func TestGetHashSequenceBytes(t *testing.T) {
+	data := [][]byte{
+		[]byte("first child"),
+		vectorData(BlockSize + 1),
+		[]byte("third child"),
+	}
+	var hashes []Hash
+	blobs := make(map[Hash][]byte)
+	for _, b := range data {
+		hash := NewHash(b)
+		hashes = append(hashes, hash)
+		blobs[hash] = append([]byte(nil), b...)
+	}
+	seq := NewHashSequence(hashes)
+	root := NewHash(seq.Bytes())
+	blobs[root] = seq.Bytes()
+
+	client, server := newTestBidiStreamPair()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- ServeBlob(context.Background(), server, StoreFunc(func(hash Hash) ([]byte, bool) {
+			b, ok := blobs[hash]
+			return append([]byte(nil), b...), ok
+		}))
+	}()
+	gotSeq, got, err := GetHashSequenceBytes(context.Background(), client, root)
+	if err != nil {
+		t.Fatalf("GetHashSequenceBytes: %v", err)
+	}
+	if gotSeq.Len() != len(hashes) {
+		t.Fatalf("hash seq len = %d, want %d", gotSeq.Len(), len(hashes))
+	}
+	for i, want := range hashes {
+		h, ok := gotSeq.At(i)
+		if !ok || h != want {
+			t.Fatalf("hash %d = %s, %v, want %s, true", i, h, ok, want)
+		}
+	}
+	if len(got) != len(data) {
+		t.Fatalf("GetHashSequenceBytes returned %d blobs, want %d", len(got), len(data))
+	}
+	for i := range data {
+		if !bytes.Equal(got[i], data[i]) {
+			t.Fatalf("blob %d length = %d, want %d", i, len(got[i]), len(data[i]))
+		}
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
+	}
+}
+
 func TestServeSingleLeafErrors(t *testing.T) {
 	hash := NewHash([]byte("missing"))
 	client, server := newTestBidiStreamPair()
