@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 
 	"lukechampine.com/blake3/bao"
 )
@@ -31,6 +32,7 @@ type Outboard interface {
 
 // BytesMap is an in-memory [Map] for complete raw blobs.
 type BytesMap struct {
+	mu      sync.RWMutex
 	entries map[Hash]*BytesEntry
 }
 
@@ -54,6 +56,8 @@ func (m *BytesMap) Add(data []byte) (Hash, error) {
 	if err != nil {
 		return Hash{}, err
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.entries == nil {
 		m.entries = make(map[Hash]*BytesEntry)
 	}
@@ -69,6 +73,8 @@ func (m *BytesMap) Get(ctx context.Context, hash Hash) (MapEntry, bool, error) {
 	if m == nil {
 		return nil, false, nil
 	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	entry, ok := m.entries[hash]
 	return entry, ok, nil
 }
@@ -76,6 +82,11 @@ func (m *BytesMap) Get(ctx context.Context, hash Hash) (MapEntry, bool, error) {
 // Store returns a [Store] view over m.
 func (m *BytesMap) Store() Store {
 	return MapStore{Map: m}
+}
+
+// GetBlob returns the full blob bytes for hash if m contains it.
+func (m *BytesMap) GetBlob(hash Hash) ([]byte, bool) {
+	return MapStore{Map: m}.GetBlob(hash)
 }
 
 // BytesEntry is a complete in-memory raw blob entry.

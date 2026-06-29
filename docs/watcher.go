@@ -3,6 +3,7 @@ package docs
 import (
 	"sync"
 
+	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/key"
 )
 
@@ -18,6 +19,8 @@ const (
 	StoreEventInsertRemote
 	// StoreEventLagged reports that a subscriber missed events.
 	StoreEventLagged
+	// StoreEventContentReady reports that entry content is now locally available.
+	StoreEventContentReady
 )
 
 func storeEventKind(kind InsertOriginKind) StoreEventKind {
@@ -35,6 +38,8 @@ type StoreEvent struct {
 	Sequence uint64
 	// Entry is the inserted entry. It is zero for StoreEventLagged.
 	Entry SignedEntry
+	// Hash is the content hash for StoreEventContentReady.
+	Hash blobs.Hash
 	// Removed is the number of older descendant entries removed by the insert.
 	Removed int
 	// From is the peer an inserted entry came from. It is zero for local inserts.

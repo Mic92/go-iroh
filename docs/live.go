@@ -29,8 +29,11 @@ type LiveSyncOptions struct {
 
 type liveSyncOptions struct {
 	LiveSyncOptions
-	syncPeer func(context.Context, netaddr.EndpointAddr) (SyncOutcome, error)
+	syncPeer     func(context.Context, netaddr.EndpointAddr) (SyncOutcome, error)
+	downloadBlob func(context.Context, netaddr.EndpointAddr, blobs.Hash) error
 }
+
+const liveDownloadQueueSize = 16
 
 // LiveSync keeps a document store synchronized over an iroh-gossip topic.
 type LiveSync struct {
@@ -38,6 +41,8 @@ type LiveSync struct {
 	done        chan struct{}
 	topic       *gossip.Topic
 	cancelStore func()
+	downloads   chan liveDownload
+	pending     map[blobs.Hash]struct{}
 }
 
 // StartLiveSync starts live synchronization for namespace.
@@ -63,6 +68,9 @@ func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, nam
 	cfg.syncPeer = func(ctx context.Context, addr netaddr.EndpointAddr) (SyncOutcome, error) {
 		return Sync(ctx, ep, addr, namespace, store, opts.BlobStore, opts.Config)
 	}
+	cfg.downloadBlob = func(ctx context.Context, addr netaddr.EndpointAddr, hash blobs.Hash) error {
+		return downloadBlob(ctx, ep, addr, opts.BlobStore, hash)
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	events, cancelStore := store.Subscribe()
 	l := &LiveSync{
@@ -70,6 +78,8 @@ func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, nam
 		done:        make(chan struct{}),
 		topic:       topic,
 		cancelStore: cancelStore,
+		downloads:   make(chan liveDownload, liveDownloadQueueSize),
+		pending:     make(map[blobs.Hash]struct{}),
 	}
 	go l.run(ctx, namespace, store, cfg, events)
 	return l, nil
@@ -109,6 +119,7 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 	if len(opts.Bootstrap) != 0 {
 		go l.syncPeers(ctx, opts, opts.Bootstrap)
 	}
+	go l.runDownloader(ctx, store, opts)
 
 	for {
 		select {
@@ -118,7 +129,7 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 			if !ok {
 				return
 			}
-			l.handleStoreEvent(ctx, ev)
+			l.handleStoreEvent(ctx, opts, ev)
 		case ev, ok := <-topicEvents:
 			if !ok {
 				return
@@ -128,7 +139,7 @@ func (l *LiveSync) run(ctx context.Context, namespace NamespaceID, store *Memory
 	}
 }
 
-func (l *LiveSync) handleStoreEvent(ctx context.Context, ev StoreEvent) {
+func (l *LiveSync) handleStoreEvent(ctx context.Context, opts liveSyncOptions, ev StoreEvent) {
 	if ev.Kind != StoreEventInsertLocal {
 		return
 	}
@@ -137,6 +148,10 @@ func (l *LiveSync) handleStoreEvent(ctx context.Context, ev StoreEvent) {
 		return
 	}
 	_ = l.topic.Broadcast(ctx, msg)
+	hash := ev.Entry.Entry.ContentHash()
+	if blobs.Status(opts.BlobStore, hash).IsComplete() {
+		l.broadcastContentReady(ctx, hash)
+	}
 }
 
 func (l *LiveSync) handleTopicEvent(ctx context.Context, namespace NamespaceID, store *MemoryStore, opts liveSyncOptions, ev gossip.Event) {
@@ -165,15 +180,23 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 		if op.Entry.Entry.Namespace() != namespace || op.Entry.Verify() != nil {
 			return
 		}
+		hash := op.Entry.Entry.ContentHash()
 		status := ContentMissing
-		if ev.Scope == gossip.DeliveryNeighbors || (ev.Scope == gossip.DeliverySwarm && ev.Round == 0) {
+		if blobs.Status(opts.BlobStore, hash).IsComplete() {
 			status = ContentComplete
 		}
-		store.PutWithOrigin(op.Entry, InsertOrigin{
+		outcome := store.PutWithOrigin(op.Entry, InsertOrigin{
 			Kind:          InsertOriginRemote,
 			From:          ev.DeliveredFrom,
 			ContentStatus: status,
 		})
+		if outcome.Inserted() && status != ContentComplete {
+			l.queueDownload(ctx, opts, hash, ev.DeliveredFrom)
+		}
+	case liveOpContentReady:
+		if op.Hash != blobs.EmptyHash {
+			l.queueDownload(ctx, opts, op.Hash, ev.DeliveredFrom)
+		}
 	case liveOpSyncReport:
 		if op.Report.Namespace != namespace {
 			return
@@ -184,6 +207,111 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 		}
 		go l.syncPeers(ctx, opts, []netaddr.EndpointAddr{addr})
 	}
+}
+
+func (l *LiveSync) broadcastContentReady(ctx context.Context, hash blobs.Hash) {
+	msg, err := postcard.Marshal(liveOp{Kind: liveOpContentReady, Hash: hash})
+	if err != nil {
+		return
+	}
+	_ = l.topic.Broadcast(ctx, msg)
+}
+
+func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash blobs.Hash, peer key.EndpointID) {
+	if l.downloads == nil || hash == blobs.EmptyHash || blobs.Status(opts.BlobStore, hash).IsComplete() {
+		return
+	}
+	addr, ok := l.downloadAddr(ctx, opts, peer)
+	if !ok {
+		return
+	}
+	if l.pending == nil {
+		l.pending = make(map[blobs.Hash]struct{})
+	}
+	if _, ok := l.pending[hash]; ok {
+		return
+	}
+	l.pending[hash] = struct{}{}
+	select {
+	case l.downloads <- liveDownload{Hash: hash, Addr: addr}:
+	case <-ctx.Done():
+	default:
+		delete(l.pending, hash)
+	}
+}
+
+func (l *LiveSync) downloadAddr(ctx context.Context, opts liveSyncOptions, id key.EndpointID) (netaddr.EndpointAddr, bool) {
+	if addr, ok := l.resolvePeer(ctx, opts.Resolver, id); ok {
+		return addr, true
+	}
+	for _, addr := range opts.Bootstrap {
+		if addr.ID.Equal(id) {
+			return addr, true
+		}
+	}
+	return netaddr.EndpointAddr{}, false
+}
+
+func (l *LiveSync) runDownloader(ctx context.Context, store *MemoryStore, opts liveSyncOptions) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case req := <-l.downloads:
+			if blobs.Status(opts.BlobStore, req.Hash).IsComplete() {
+				store.contentReady(req.Hash)
+				continue
+			}
+			if opts.downloadBlob == nil {
+				continue
+			}
+			if err := opts.downloadBlob(ctx, req.Addr, req.Hash); err != nil {
+				continue
+			}
+			store.contentReady(req.Hash)
+			l.broadcastContentReady(ctx, req.Hash)
+		}
+	}
+}
+
+type liveDownload struct {
+	Hash blobs.Hash
+	Addr netaddr.EndpointAddr
+}
+
+type blobAdder interface {
+	Add([]byte) (blobs.Hash, error)
+}
+
+func downloadBlob(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, store blobs.Store, hash blobs.Hash) error {
+	if ep == nil {
+		return errors.New("docs: nil endpoint")
+	}
+	add, ok := store.(blobAdder)
+	if !ok {
+		return errors.New("docs: blob store cannot add content")
+	}
+	conn, err := ep.Connect(ctx, addr, blobs.ALPN)
+	if err != nil {
+		return fmt.Errorf("docs: connect blob provider: %w", err)
+	}
+	defer conn.CloseWithError(0, "")
+	s, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return fmt.Errorf("docs: open blob stream: %w", err)
+	}
+	data, err := blobs.GetBlobBytes(ctx, s, hash)
+	if err != nil {
+		return fmt.Errorf("docs: get blob: %w", err)
+	}
+	got, err := add.Add(data)
+	if err != nil {
+		return fmt.Errorf("docs: store blob: %w", err)
+	}
+	if got != hash {
+		return fmt.Errorf("docs: stored blob hash mismatch")
+	}
+	return nil
 }
 
 func (l *LiveSync) syncPeers(ctx context.Context, opts liveSyncOptions, peers []netaddr.EndpointAddr) {

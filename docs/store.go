@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/key"
 )
 
@@ -252,6 +253,21 @@ func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) Inse
 		events.Send(event)
 	}
 	return outcome
+}
+
+func (s *MemoryStore) contentReady(hash blobs.Hash) {
+	s.mu.Lock()
+	s.seq++
+	event := StoreEvent{
+		Kind:     StoreEventContentReady,
+		Sequence: s.seq,
+		Hash:     hash,
+	}
+	events := s.events
+	s.mu.Unlock()
+	if events != nil {
+		events.Send(event)
+	}
 }
 
 func (s *MemoryStore) putEntry(entry SignedEntry, origin InsertOrigin, notify bool) (InsertOutcome, StoreEvent, *storeWatcher) {
