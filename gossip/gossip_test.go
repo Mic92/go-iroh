@@ -113,3 +113,110 @@ func TestSenderHandlerLoopback(t *testing.T) {
 		}
 	}
 }
+
+func TestGossipTopicLoopback(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	var topic gossip.TopicID
+	copy(topic[:], "topic")
+
+	server, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind server: %v", err)
+	}
+	serverGossip := gossip.New(server)
+	serverRouter, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: serverGossip.Handler(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new server router: %v", err)
+	}
+	defer serverRouter.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind client: %v", err)
+	}
+	clientGossip := gossip.New(client)
+	clientRouter, err := iroh.NewRouter(client, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: clientGossip.Handler(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new client router: %v", err)
+	}
+	defer clientRouter.Shutdown(ctx)
+
+	serverTopic, err := serverGossip.Subscribe(ctx, topic, nil)
+	if err != nil {
+		t.Fatalf("server subscribe: %v", err)
+	}
+	defer serverTopic.Close()
+
+	serverAddr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	clientTopic, err := clientGossip.Subscribe(ctx, topic, []netaddr.EndpointAddr{serverAddr})
+	if err != nil {
+		t.Fatalf("client subscribe: %v", err)
+	}
+	defer clientTopic.Close()
+
+	if ev := nextEvent(ctx, t, clientTopic); ev.Kind != gossip.NeighborUp {
+		t.Fatalf("client first event = %+v, want NeighborUp", ev)
+	}
+	if ev := nextEvent(ctx, t, serverTopic); ev.Kind != gossip.NeighborUp {
+		t.Fatalf("server first event = %+v, want NeighborUp", ev)
+	}
+
+	if err := clientTopic.Broadcast(ctx, []byte("hello")); err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	for {
+		ev := nextEvent(ctx, t, serverTopic)
+		if ev.Kind != gossip.Received {
+			continue
+		}
+		if string(ev.Content) != "hello" {
+			t.Fatalf("content = %q, want hello", ev.Content)
+		}
+		if !ev.DeliveredFrom.Equal(client.ID()) {
+			t.Fatalf("delivered from = %s, want %s", ev.DeliveredFrom, client.ID())
+		}
+		if err := clientTopic.Close(); err != nil {
+			t.Fatalf("close topic: %v", err)
+		}
+		if err := clientTopic.Broadcast(ctx, []byte("after close")); err == nil {
+			t.Fatal("broadcast after close succeeded")
+		}
+		return
+	}
+}
+
+func nextEvent(ctx context.Context, t *testing.T, topic *gossip.Topic) gossip.Event {
+	t.Helper()
+	type result struct {
+		event gossip.Event
+		err   error
+		ok    bool
+	}
+	done := make(chan result, 1)
+	go func() {
+		for ev, err := range topic.Events() {
+			done <- result{event: ev, err: err, ok: true}
+			return
+		}
+		done <- result{}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("event: %v", res.err)
+		}
+		if !res.ok {
+			t.Fatal("event stream closed")
+		}
+		return res.event
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	return gossip.Event{}
+}
