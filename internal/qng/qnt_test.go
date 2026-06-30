@@ -944,8 +944,11 @@ func TestQNTPathSnapshotReportsRoute(t *testing.T) {
 	if len(req.paths) != 1 {
 		t.Fatalf("paths len = %d, want 1; paths=%v", len(req.paths), req.paths)
 	}
-	if req.paths[0].ID != protocol.PathID(1) || !req.paths[0].Validated || req.paths[0].RemoteAddr != addr || !req.paths[0].HasRTT {
+	if req.paths[0].ID != protocol.PathID(1) || !req.paths[0].Validated || req.paths[0].RemoteAddr != addr {
 		t.Fatalf("path = %+v, want id 1 validated route %v", req.paths[0], addr)
+	}
+	if req.paths[0].HasRTT || req.paths[0].SmoothedRTT != 0 {
+		t.Fatalf("path RTT = %v, HasRTT = %v; want zero, false before measurement", req.paths[0].SmoothedRTT, req.paths[0].HasRTT)
 	}
 	if !req.paths[0].HasBytesInFlight {
 		t.Fatalf("path HasBytesInFlight = false, want true: %+v", req.paths[0])

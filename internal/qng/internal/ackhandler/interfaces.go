@@ -105,6 +105,8 @@ type PathDebugStats struct {
 	LostBytes uint64
 	// SmoothedRTT is pid's application-data RTT estimate.
 	SmoothedRTT time.Duration
+	// HasRTT reports whether SmoothedRTT is based on a real RTT measurement.
+	HasRTT bool
 	// DistinctController is true when pid's congestion controller and RTT
 	// estimator are both distinct from path 0's and from the connection-level
 	// objects (the Stage 4 risk-#4 gate). It is always false for PathIDZero,

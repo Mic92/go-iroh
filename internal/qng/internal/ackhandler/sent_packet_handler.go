@@ -686,6 +686,7 @@ func (h *sentPacketHandler) PathDebugStats(pid protocol.PathID) (PathDebugStats,
 		LostPackets:      path.lostPacketCount,
 		LostBytes:        path.lostByteCount,
 		SmoothedRTT:      path.rttStats.SmoothedRTT(),
+		HasRTT:           path.rttStats.HasMeasurement(),
 	}
 	if pid != protocol.PathIDZero {
 		path0 := h.getAppDataPath(protocol.PathIDZero)

@@ -323,8 +323,10 @@ func (c *Conn) processPathSnapshotRequests() {
 						RemoteAddr: st.qntRoute,
 					}
 					if stats, ok := c.sentPacketHandler.PathDebugStats(pid); ok {
-						info.SmoothedRTT = stats.SmoothedRTT
-						info.HasRTT = true
+						if stats.HasRTT {
+							info.SmoothedRTT = stats.SmoothedRTT
+							info.HasRTT = true
+						}
 						info.BytesInFlight = stats.BytesInFlight
 						info.HasBytesInFlight = true
 						info.BytesSent = stats.BytesSent

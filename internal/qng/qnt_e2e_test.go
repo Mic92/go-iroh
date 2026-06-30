@@ -70,6 +70,10 @@ func TestQNTGoToGoRoutePathCarriesData(t *testing.T) {
 	if string(got) != msg {
 		t.Fatalf("server received %q over QNT route, want %q", got, msg)
 	}
+	path = waitForQNTPathRTT(t, ctx, clientConn, path.ID)
+	if path.SmoothedRTT <= 0 {
+		t.Fatalf("path SmoothedRTT = %v, want measured RTT", path.SmoothedRTT)
+	}
 }
 
 func canonicalTestAddr(t *testing.T, s string) netip.AddrPort {
@@ -111,6 +115,23 @@ func waitForQNTRoutePath(t *testing.T, ctx context.Context, c *Conn, want netip.
 		select {
 		case <-ctx.Done():
 			t.Fatalf("timed out waiting for validated QNT route path %v; last paths=%v qnt=%s closeCause=%v", want, paths, qntDebugState(c), context.Cause(c.Context()))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func waitForQNTPathRTT(t *testing.T, ctx context.Context, c *Conn, id protocol.PathID) PathInfo {
+	t.Helper()
+	for {
+		paths := c.Paths()
+		for _, p := range paths {
+			if p.ID == id && p.HasRTT {
+				return p
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for RTT on path %d; last paths=%v", id, paths)
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
