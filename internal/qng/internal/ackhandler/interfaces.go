@@ -37,6 +37,7 @@ type SentPacketHandler interface {
 	// back a path open that failed before becoming visible to the connection.
 	RemovePath(pid protocol.PathID)
 	ReceivedPacket(protocol.EncryptionLevel, monotime.Time)
+	ReceivedPacketForPath(pid protocol.PathID, size protocol.ByteCount, rcvTime monotime.Time)
 	ReceivedBytes(_ protocol.ByteCount, rcvTime monotime.Time)
 	DropPackets(_ protocol.EncryptionLevel, rcvTime monotime.Time)
 	ResetForRetry(rcvTime monotime.Time)
@@ -90,6 +91,10 @@ type PathDebugStats struct {
 	LargestAcked protocol.PacketNumber
 	// BytesInFlight is pid's current application-data bytes in flight.
 	BytesInFlight protocol.ByteCount
+	// BytesSent is the cumulative application-data bytes sent on pid.
+	BytesSent uint64
+	// BytesReceived is the cumulative application-data bytes received on pid.
+	BytesReceived uint64
 	// CongestionWindow is pid's current congestion window.
 	CongestionWindow protocol.ByteCount
 	// LostPackets is the number of application-data packets declared lost on

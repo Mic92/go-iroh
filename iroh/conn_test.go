@@ -234,6 +234,10 @@ func TestPathInfosFromSocketCarriesCongestionStats(t *testing.T) {
 		HasRTT:              true,
 		BytesInFlight:       123,
 		HasBytesInFlight:    true,
+		BytesSent:           234,
+		HasBytesSent:        true,
+		BytesReceived:       345,
+		HasBytesReceived:    true,
 		CongestionWindow:    456,
 		HasCongestionWindow: true,
 		LostPackets:         7,
@@ -246,6 +250,12 @@ func TestPathInfosFromSocketCarriesCongestionStats(t *testing.T) {
 	p := paths[0]
 	if p.BytesInFlight != 123 || !p.HasBytesInFlight {
 		t.Fatalf("BytesInFlight = %d, HasBytesInFlight = %v; want 123, true", p.BytesInFlight, p.HasBytesInFlight)
+	}
+	if p.BytesSent != 234 || !p.HasBytesSent {
+		t.Fatalf("BytesSent = %d, HasBytesSent = %v; want 234, true", p.BytesSent, p.HasBytesSent)
+	}
+	if p.BytesReceived != 345 || !p.HasBytesReceived {
+		t.Fatalf("BytesReceived = %d, HasBytesReceived = %v; want 345, true", p.BytesReceived, p.HasBytesReceived)
 	}
 	if p.CongestionWindow != 456 || !p.HasCongestionWindow {
 		t.Fatalf("CongestionWindow = %d, HasCongestionWindow = %v; want 456, true", p.CongestionWindow, p.HasCongestionWindow)
@@ -260,6 +270,12 @@ func TestPathInfosFromSocketCarriesCongestionStats(t *testing.T) {
 	}
 	if paths[0].HasBytesInFlight || paths[0].BytesInFlight != 0 {
 		t.Fatalf("guarded BytesInFlight = %d, HasBytesInFlight = %v; want zero, false", paths[0].BytesInFlight, paths[0].HasBytesInFlight)
+	}
+	if paths[0].HasBytesSent || paths[0].BytesSent != 0 {
+		t.Fatalf("guarded BytesSent = %d, HasBytesSent = %v; want zero, false", paths[0].BytesSent, paths[0].HasBytesSent)
+	}
+	if paths[0].HasBytesReceived || paths[0].BytesReceived != 0 {
+		t.Fatalf("guarded BytesReceived = %d, HasBytesReceived = %v; want zero, false", paths[0].BytesReceived, paths[0].HasBytesReceived)
 	}
 	if paths[0].HasCongestionWindow || paths[0].CongestionWindow != 0 {
 		t.Fatalf("guarded CongestionWindow = %d, HasCongestionWindow = %v; want zero, false", paths[0].CongestionWindow, paths[0].HasCongestionWindow)

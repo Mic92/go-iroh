@@ -184,6 +184,16 @@ type PathInfo struct {
 	BytesInFlight uint64
 	// HasBytesInFlight reports whether BytesInFlight was observed for this path.
 	HasBytesInFlight bool
+	// BytesSent is the cumulative application-data bytes sent on this path,
+	// when HasBytesSent is true.
+	BytesSent uint64
+	// HasBytesSent reports whether BytesSent was observed for this path.
+	HasBytesSent bool
+	// BytesReceived is the cumulative application-data bytes received on this
+	// path, when HasBytesReceived is true.
+	BytesReceived uint64
+	// HasBytesReceived reports whether BytesReceived was observed for this path.
+	HasBytesReceived bool
 	// CongestionWindow is the path's current congestion window, when
 	// HasCongestionWindow is true.
 	CongestionWindow uint64
@@ -422,6 +432,10 @@ func pathInfosFromSocket(paths []socket.PathInfo) []PathInfo {
 			HasRTT:              p.HasRTT,
 			BytesInFlight:       p.BytesInFlight,
 			HasBytesInFlight:    p.HasBytesInFlight,
+			BytesSent:           p.BytesSent,
+			HasBytesSent:        p.HasBytesSent,
+			BytesReceived:       p.BytesReceived,
+			HasBytesReceived:    p.HasBytesReceived,
 			CongestionWindow:    p.CongestionWindow,
 			HasCongestionWindow: p.HasCongestionWindow,
 			LostPackets:         p.LostPackets,
@@ -648,6 +662,14 @@ func (a *connAdapter) Paths() []socket.PathInfo {
 		if p.HasBytesInFlight {
 			paths[i].BytesInFlight = uint64(p.BytesInFlight)
 			paths[i].HasBytesInFlight = true
+		}
+		if p.HasBytesSent {
+			paths[i].BytesSent = p.BytesSent
+			paths[i].HasBytesSent = true
+		}
+		if p.HasBytesReceived {
+			paths[i].BytesReceived = p.BytesReceived
+			paths[i].HasBytesReceived = true
 		}
 		if p.HasCongestionWindow {
 			paths[i].CongestionWindow = uint64(p.CongestionWindow)

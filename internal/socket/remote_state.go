@@ -102,6 +102,18 @@ type PathInfo struct {
 	// HasBytesInFlight reports whether BytesInFlight was observed from qng
 	// per-path state.
 	HasBytesInFlight bool
+	// BytesSent is the cumulative application-data bytes sent on this path,
+	// when HasBytesSent is true.
+	BytesSent uint64
+	// HasBytesSent reports whether BytesSent was observed from qng per-path
+	// state.
+	HasBytesSent bool
+	// BytesReceived is the cumulative application-data bytes received on this
+	// path, when HasBytesReceived is true.
+	BytesReceived uint64
+	// HasBytesReceived reports whether BytesReceived was observed from qng
+	// per-path state.
+	HasBytesReceived bool
 	// CongestionWindow is the path's current congestion window, when
 	// HasCongestionWindow is true.
 	CongestionWindow uint64
@@ -846,6 +858,10 @@ func (a *RemoteStateActor) PathInfos(conn Connection) []PathInfo {
 				infos[i].HasRTT = p.HasRTT
 				infos[i].BytesInFlight = p.BytesInFlight
 				infos[i].HasBytesInFlight = p.HasBytesInFlight
+				infos[i].BytesSent = p.BytesSent
+				infos[i].HasBytesSent = p.HasBytesSent
+				infos[i].BytesReceived = p.BytesReceived
+				infos[i].HasBytesReceived = p.HasBytesReceived
 				infos[i].CongestionWindow = p.CongestionWindow
 				infos[i].HasCongestionWindow = p.HasCongestionWindow
 				infos[i].LostPackets = p.LostPackets

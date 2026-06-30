@@ -94,6 +94,8 @@ type appDataPath struct {
 	rttStats        *utils.RTTStats
 	congestion      congestion.SendAlgorithmWithDebugInfos
 	bytesInFlight   protocol.ByteCount
+	bytesSent       uint64
+	bytesReceived   uint64
 	lostPacketCount uint64
 	lostByteCount   uint64
 
@@ -415,6 +417,13 @@ func (h *sentPacketHandler) ReceivedPacket(l protocol.EncryptionLevel, t monotim
 	}
 }
 
+func (h *sentPacketHandler) ReceivedPacketForPath(pid protocol.PathID, size protocol.ByteCount, t monotime.Time) {
+	h.ReceivedPacket(protocol.Encryption1RTT, t)
+	if path := h.getAppDataPath(pid); path != nil {
+		path.bytesReceived += uint64(size)
+	}
+}
+
 func (h *sentPacketHandler) packetsInFlight() int {
 	var packetsInFlight int
 	for _, p := range h.appDataPaths {
@@ -476,6 +485,7 @@ func (h *sentPacketHandler) SentPacketOneStream(
 
 	isAckEliciting := p.IsAckEliciting()
 	pathData := h.getAppDataPath(protocol.PathIDZero)
+	pathData.bytesSent += uint64(size)
 	if isAckEliciting {
 		pnSpace.lastAckElicitingPacketTime = t
 		pathData.bytesInFlight += size
@@ -569,6 +579,9 @@ func (h *sentPacketHandler) sentPacket(
 	// bytes-in-flight against its own controller.
 	pathData := h.getAppDataPath(pid)
 	appData := h.getAppDataPath(protocol.PathIDZero)
+	if encLevel == protocol.Encryption1RTT || encLevel == protocol.Encryption0RTT {
+		pathData.bytesSent += uint64(size)
+	}
 	if isAckEliciting {
 		pnSpace.lastAckElicitingPacketTime = t
 		if encLevel == protocol.Encryption1RTT {
@@ -667,6 +680,8 @@ func (h *sentPacketHandler) PathDebugStats(pid protocol.PathID) (PathDebugStats,
 		LargestSent:      path.space.largestSent,
 		LargestAcked:     path.space.largestAcked,
 		BytesInFlight:    path.bytesInFlight,
+		BytesSent:        path.bytesSent,
+		BytesReceived:    path.bytesReceived,
 		CongestionWindow: path.congestion.GetCongestionWindow(),
 		LostPackets:      path.lostPacketCount,
 		LostBytes:        path.lostByteCount,

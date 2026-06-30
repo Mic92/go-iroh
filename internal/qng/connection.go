@@ -1454,7 +1454,7 @@ func (c *Conn) handleShortHeaderPacket(
 			})
 		}
 	}
-	isNonProbing, pathChallenge, err := c.handleUnpackedShortHeaderPacket(destConnID, pn, data, packetSourceAddrPort(p.remoteAddr), p.ecn, p.rcvTime, log)
+	isNonProbing, pathChallenge, err := c.handleUnpackedShortHeaderPacket(destConnID, pn, data, protocol.ByteCount(p.Size()), packetSourceAddrPort(p.remoteAddr), p.ecn, p.rcvTime, log)
 	if err != nil {
 		return false, err
 	}
@@ -1970,6 +1970,7 @@ func (c *Conn) handleUnpackedShortHeaderPacket(
 	destConnID protocol.ConnectionID,
 	pn protocol.PacketNumber,
 	data []byte,
+	packetSize protocol.ByteCount,
 	source netip.AddrPort,
 	ecn protocol.ECN,
 	rcvTime monotime.Time,
@@ -1996,7 +1997,7 @@ func (c *Conn) handleUnpackedShortHeaderPacket(
 	if err != nil {
 		return false, nil, err
 	}
-	c.sentPacketHandler.ReceivedPacket(protocol.Encryption1RTT, rcvTime)
+	c.sentPacketHandler.ReceivedPacketForPath(pid, packetSize, rcvTime)
 	if pid == protocol.PathIDZero {
 		if err := c.receivedPacketHandler.ReceivedPacket(pn, ecn, protocol.Encryption1RTT, rcvTime, isAckEliciting); err != nil {
 			return false, nil, err

@@ -950,6 +950,12 @@ func TestQNTPathSnapshotReportsRoute(t *testing.T) {
 	if !req.paths[0].HasBytesInFlight {
 		t.Fatalf("path HasBytesInFlight = false, want true: %+v", req.paths[0])
 	}
+	if !req.paths[0].HasBytesSent {
+		t.Fatalf("path HasBytesSent = false, want true: %+v", req.paths[0])
+	}
+	if !req.paths[0].HasBytesReceived {
+		t.Fatalf("path HasBytesReceived = false, want true: %+v", req.paths[0])
+	}
 	if !req.paths[0].HasCongestionWindow || req.paths[0].CongestionWindow == 0 {
 		t.Fatalf("path CongestionWindow = %d, HasCongestionWindow = %v; want non-zero observed cwnd", req.paths[0].CongestionWindow, req.paths[0].HasCongestionWindow)
 	}

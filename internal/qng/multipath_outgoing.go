@@ -254,6 +254,16 @@ type PathInfo struct {
 	BytesInFlight protocol.ByteCount
 	// HasBytesInFlight reports whether BytesInFlight was observed for this path.
 	HasBytesInFlight bool
+	// BytesSent is the cumulative application-data bytes sent on this path,
+	// when HasBytesSent is true.
+	BytesSent uint64
+	// HasBytesSent reports whether BytesSent was observed for this path.
+	HasBytesSent bool
+	// BytesReceived is the cumulative application-data bytes received on this
+	// path, when HasBytesReceived is true.
+	BytesReceived uint64
+	// HasBytesReceived reports whether BytesReceived was observed for this path.
+	HasBytesReceived bool
 	// CongestionWindow is the path's current congestion window, when
 	// HasCongestionWindow is true.
 	CongestionWindow protocol.ByteCount
@@ -317,6 +327,10 @@ func (c *Conn) processPathSnapshotRequests() {
 						info.HasRTT = true
 						info.BytesInFlight = stats.BytesInFlight
 						info.HasBytesInFlight = true
+						info.BytesSent = stats.BytesSent
+						info.HasBytesSent = true
+						info.BytesReceived = stats.BytesReceived
+						info.HasBytesReceived = true
 						info.CongestionWindow = stats.CongestionWindow
 						info.HasCongestionWindow = true
 						info.LostPackets = stats.LostPackets

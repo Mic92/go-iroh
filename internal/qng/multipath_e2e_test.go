@@ -400,6 +400,12 @@ func TestMultipathTwoPathE2E(t *testing.T) {
 		if stats.CongestionWindow == 0 {
 			t.Errorf("%s: path 1 CongestionWindow = 0, want non-zero cwnd", ep.name)
 		}
+		if ep.name == "client" && stats.BytesSent == 0 {
+			t.Errorf("%s: path 1 BytesSent = 0, want path traffic recorded", ep.name)
+		}
+		if ep.name == "server" && stats.BytesReceived == 0 {
+			t.Errorf("%s: path 1 BytesReceived = 0, want path traffic recorded", ep.name)
+		}
 	}
 }
 
