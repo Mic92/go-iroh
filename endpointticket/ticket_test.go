@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -130,6 +131,23 @@ func TestShortTicket(t *testing.T) {
 	want := netaddr.NewEndpointAddr(id, netaddr.RelayAddr{URL: relay})
 	assertEndpointAddrEqual(t, short, want)
 	assertEndpointAddrEqual(t, New(addr).Short().Addr(), want)
+}
+
+func TestTicketRoundTripManyAddrs(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrs := make([]netaddr.TransportAddr, 2000)
+	for i := range addrs {
+		addrs[i] = netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:" + strconv.Itoa(10000+i))}
+	}
+	addr := netaddr.NewEndpointAddr(id, addrs...)
+	got, err := Decode(Encode(addr))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	assertEndpointAddrEqual(t, got, addr)
 }
 
 func TestStructuredParseErrors(t *testing.T) {

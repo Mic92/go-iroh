@@ -17,7 +17,10 @@ const (
 	ticketWireVariant = 0
 	capabilityWrite   = 0
 	capabilityRead    = 1
-	maxTicketNodes    = 1024
+
+	// maxTicketNodes bounds ticket node allocations. It is a DoS guard, not a
+	// wire-compatibility limit.
+	maxTicketNodes = endpointticket.MaxAddrs
 )
 
 var base32NoPad = base32.StdEncoding.WithPadding(base32.NoPadding)

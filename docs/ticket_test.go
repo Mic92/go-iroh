@@ -123,6 +123,33 @@ func TestDocTicketShort(t *testing.T) {
 	assertEndpointAddrEqual(t, decoded.Nodes()[0], wantAddr)
 }
 
+func TestDocTicketRoundTripManyNodes(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := NewReadCapability(NamespaceID{id: sk.Public().EndpointID()})
+	nodes := make([]netaddr.EndpointAddr, 2000)
+	for i := range nodes {
+		var seed [32]byte
+		seed[0] = byte(i)
+		seed[1] = byte(i >> 8)
+		id := key.NewSecretKey(seed).Public().EndpointID()
+		nodes[i] = netaddr.NewEndpointAddr(id)
+	}
+	ticket := NewTicket(capability, nodes)
+	got, err := DecodeString(ticket.String())
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	if len(got.Nodes()) != len(nodes) {
+		t.Fatalf("nodes len = %d, want %d", len(got.Nodes()), len(nodes))
+	}
+	for i := range nodes {
+		assertEndpointAddrEqual(t, got.Nodes()[i], nodes[i])
+	}
+}
+
 func TestDocTicketErrors(t *testing.T) {
 	if _, err := DecodeString("blobabc"); !errors.Is(err, &endpointticket.ParseError{Kind: endpointticket.ParseErrorKindKind}) {
 		t.Fatalf("missing prefix error = %v", err)

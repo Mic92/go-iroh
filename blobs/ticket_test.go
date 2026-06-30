@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -73,6 +74,23 @@ func TestTicketRoundTrip(t *testing.T) {
 	if !strings.Contains(hex.EncodeToString(ticket.EncodeBytes()), "01007f000001d209") {
 		t.Fatalf("direct address wire = %x, want postcard BTreeSet SocketAddr encoding", ticket.EncodeBytes())
 	}
+}
+
+func TestTicketRoundTripManyAddrs(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addrs := make([]netaddr.TransportAddr, 2000)
+	for i := range addrs {
+		addrs[i] = netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:" + strconv.Itoa(10000+i))}
+	}
+	ticket := NewTicket(netaddr.NewEndpointAddr(id, addrs...), NewHash([]byte("many addrs")), Raw)
+	got, err := DecodeString(ticket.String())
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	assertTicketEqual(t, got, ticket)
 }
 
 func TestTicketShort(t *testing.T) {

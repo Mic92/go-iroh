@@ -17,7 +17,10 @@ const (
 	// Kind is the string prefix for endpoint tickets.
 	Kind         = "endpoint"
 	wireVariant1 = 0
-	maxAddrs     = 1024
+
+	// MaxAddrs is the maximum number of addresses accepted in a ticket.
+	// It is a memory-exhaustion guard, not a wire-compatibility limit.
+	MaxAddrs = 65536
 )
 
 var base32NoPad = base32.StdEncoding.WithPadding(base32.NoPadding)
@@ -264,7 +267,7 @@ func DecodeBytes(b []byte) (Ticket, error) {
 	if err != nil {
 		return Ticket{}, wrapDecodeErr(err)
 	}
-	if n > maxAddrs {
+	if n > MaxAddrs {
 		return Ticket{}, &ParseError{Kind: ParseErrorKindVerify, Message: fmt.Sprintf("too many addresses %d", n)}
 	}
 	addrs := make([]netaddr.TransportAddr, 0, n)

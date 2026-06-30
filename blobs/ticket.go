@@ -15,7 +15,10 @@ const (
 	// TicketKind is the string prefix for blob tickets.
 	TicketKind  = "blob"
 	wireVariant = 0
-	maxAddrs    = 1024
+
+	// maxAddrs bounds ticket address allocations. It is a DoS guard, not a
+	// wire-compatibility limit.
+	maxAddrs = endpointticket.MaxAddrs
 )
 
 // Ticket is an iroh-blobs ticket.
