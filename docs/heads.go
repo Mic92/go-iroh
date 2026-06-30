@@ -50,6 +50,20 @@ func (s *MemoryStore) encodeAuthorHeads(namespace NamespaceID) []byte {
 	return b
 }
 
+func (s *MemoryStore) encodeAuthorHeadsLimited(namespace NamespaceID, limit int, fits func([]byte) bool) []byte {
+	heads := s.authorHeads(namespace)
+	for n := len(heads); n >= 0; n-- {
+		b, err := postcard.Marshal(heads[:n])
+		if err != nil {
+			return nil
+		}
+		if len(b) <= limit && (fits == nil || fits(b)) {
+			return b
+		}
+	}
+	return nil
+}
+
 func (s *MemoryStore) encodeSyncHeads(namespace NamespaceID) []byte {
 	b, err := postcard.Marshal(s.syncHeads(namespace))
 	if err != nil {

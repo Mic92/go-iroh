@@ -112,6 +112,14 @@ func NewGossip(ep *iroh.Endpoint, opts ...GossipOption) *Gossip {
 	return g
 }
 
+// MaxMessageSize returns the normalized gossip frame body size.
+func (g *Gossip) MaxMessageSize() int {
+	if g == nil {
+		return gossipproto.DefaultMaxMessageSize
+	}
+	return gossipproto.NormalizeMaxMessageSize(g.maxMessageSize)
+}
+
 // Handler returns the protocol handler for registering this Gossip with an
 // iroh Router.
 func (g *Gossip) Handler() iroh.ProtocolHandler { return g }

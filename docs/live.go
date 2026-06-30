@@ -7,6 +7,7 @@ import (
 
 	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/gossip"
+	"github.com/tmc/go-iroh/internal/gossipproto"
 	"github.com/tmc/go-iroh/internal/postcard"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
@@ -29,8 +30,9 @@ type LiveSyncOptions struct {
 
 type liveSyncOptions struct {
 	LiveSyncOptions
-	syncPeer     func(context.Context, netaddr.EndpointAddr) (SyncOutcome, error)
-	downloadBlob func(context.Context, netaddr.EndpointAddr, blobs.Hash) error
+	syncPeer             func(context.Context, netaddr.EndpointAddr) (SyncOutcome, error)
+	downloadBlob         func(context.Context, netaddr.EndpointAddr, blobs.Hash) error
+	maxGossipPayloadSize int
 }
 
 const liveDownloadQueueSize = 16
@@ -65,6 +67,7 @@ func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, nam
 		return nil, fmt.Errorf("docs: subscribe gossip: %w", err)
 	}
 	cfg := liveSyncOptions{LiveSyncOptions: opts}
+	cfg.maxGossipPayloadSize = gossipproto.MaxPayloadSize(g.MaxMessageSize())
 	cfg.syncPeer = func(ctx context.Context, addr netaddr.EndpointAddr) (SyncOutcome, error) {
 		return Sync(ctx, ep, addr, namespace, store, opts.BlobStore, opts.Config)
 	}
@@ -330,20 +333,32 @@ func (l *LiveSync) syncPeers(ctx context.Context, namespace NamespaceID, store *
 			opts.OnSync(SyncResult{Addr: peer, Outcome: outcome, Err: err})
 		}
 		if err == nil && outcome.NumRecv > 0 {
-			l.broadcastSyncReport(ctx, namespace, store)
+			l.broadcastSyncReport(ctx, namespace, store, opts)
 		}
 	}
 }
 
-func (l *LiveSync) broadcastSyncReport(ctx context.Context, namespace NamespaceID, store *MemoryStore) {
-	msg, err := postcard.Marshal(liveOp{Kind: liveOpSyncReport, Report: liveSyncReport{
-		Namespace: namespace,
-		Heads:     store.encodeAuthorHeads(namespace),
-	}})
+func (l *LiveSync) broadcastSyncReport(ctx context.Context, namespace NamespaceID, store *MemoryStore, opts liveSyncOptions) {
+	limit := opts.maxGossipPayloadSize
+	if limit <= 0 {
+		limit = gossipproto.DefaultMaxPayloadSize()
+	}
+	heads := store.encodeAuthorHeadsLimited(namespace, limit, func(heads []byte) bool {
+		msg, err := marshalSyncReport(namespace, heads)
+		return err == nil && len(msg) <= limit
+	})
+	msg, err := marshalSyncReport(namespace, heads)
 	if err != nil {
 		return
 	}
 	_ = l.topic.BroadcastNeighbors(ctx, msg)
+}
+
+func marshalSyncReport(namespace NamespaceID, heads []byte) ([]byte, error) {
+	return postcard.Marshal(liveOp{Kind: liveOpSyncReport, Report: liveSyncReport{
+		Namespace: namespace,
+		Heads:     heads,
+	}})
 }
 
 func (l *LiveSync) resolvePeer(ctx context.Context, resolver iroh.AddressResolver, id key.EndpointID) (netaddr.EndpointAddr, bool) {

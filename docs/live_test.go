@@ -8,6 +8,7 @@ import (
 
 	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/gossip"
+	"github.com/tmc/go-iroh/internal/gossipproto"
 	"github.com/tmc/go-iroh/internal/postcard"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
@@ -245,5 +246,77 @@ func TestLiveSyncReportTriggersSync(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+}
+
+func TestLiveSyncReportAuthorHeadsLimited(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	store := NewMemoryStore()
+	for i := 0; i < 40; i++ {
+		var seed [32]byte
+		seed[0] = byte(i + 1)
+		author := NewAuthor(seed)
+		entry := testSignedEntry(namespace, author, "k", testRecord("one", 1, uint64(i+1)))
+		store.Put(entry)
+	}
+
+	all := store.encodeAuthorHeads(namespace.ID())
+	allMsg, err := marshalSyncReport(namespace.ID(), all)
+	if err != nil {
+		t.Fatalf("marshal full report: %v", err)
+	}
+	limit := len(allMsg) - 200
+	if limit <= 0 {
+		t.Fatalf("test limit %d is not positive", limit)
+	}
+	heads := store.encodeAuthorHeadsLimited(namespace.ID(), limit, func(heads []byte) bool {
+		msg, err := marshalSyncReport(namespace.ID(), heads)
+		return err == nil && len(msg) <= limit
+	})
+	msg, err := marshalSyncReport(namespace.ID(), heads)
+	if err != nil {
+		t.Fatalf("marshal limited report: %v", err)
+	}
+	if len(msg) > limit {
+		t.Fatalf("limited report size = %d, want <= %d", len(msg), limit)
+	}
+
+	var got []authorHead
+	if err := postcard.Unmarshal(heads, &got); err != nil {
+		t.Fatalf("unmarshal heads: %v", err)
+	}
+	if len(got) == 0 || len(got) >= 40 {
+		t.Fatalf("limited heads len = %d, want between 1 and 39", len(got))
+	}
+	for i, head := range got {
+		want := uint64(40 - i)
+		if head.Timestamp != want {
+			t.Fatalf("head %d timestamp = %d, want newest timestamp %d", i, head.Timestamp, want)
+		}
+	}
+}
+
+func TestLiveSyncReportFitsGossipPayloadBudget(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	store := NewMemoryStore()
+	for i := 0; i < 120; i++ {
+		var seed [32]byte
+		seed[0] = byte(i + 1)
+		seed[1] = byte(i / 255)
+		author := NewAuthor(seed)
+		store.Put(testSignedEntry(namespace, author, "k", testRecord("one", 1, uint64(i+1))))
+	}
+
+	limit := gossipproto.MaxPayloadSize(gossipproto.MinMaxMessageSize)
+	heads := store.encodeAuthorHeadsLimited(namespace.ID(), limit, func(heads []byte) bool {
+		msg, err := marshalSyncReport(namespace.ID(), heads)
+		return err == nil && len(msg) <= limit
+	})
+	msg, err := marshalSyncReport(namespace.ID(), heads)
+	if err != nil {
+		t.Fatalf("marshal sync report: %v", err)
+	}
+	if len(msg) > limit {
+		t.Fatalf("sync report size = %d, want <= %d", len(msg), limit)
 	}
 }
