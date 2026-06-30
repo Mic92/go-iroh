@@ -149,6 +149,12 @@ type RemoteInfo struct {
 	Addrs []TransportAddrInfo
 }
 
+// ResolvedAddr is a transport address plus lookup provenance.
+type ResolvedAddr struct {
+	Addr       netaddr.TransportAddr
+	Provenance string
+}
+
 // ResolveFunc resolves additional transport addresses for a remote endpoint. It
 // is supplied by the iroh package (which owns the address-lookup services) so
 // the socket package does not import iroh. It returns the resolved addresses, or
@@ -156,7 +162,7 @@ type RemoteInfo struct {
 //
 // It is the hook for the Rust RemoteStateActor::resolve_remote path
 // (remote_state.rs:843), wired in slice G's address lookup.
-type ResolveFunc func(ctx context.Context, id key.EndpointID) ([]netaddr.TransportAddr, error)
+type ResolveFunc func(ctx context.Context, id key.EndpointID) ([]ResolvedAddr, error)
 
 // remoteMessage is the actor inbox message. Exactly one field is set.
 type remoteMessage struct {
@@ -432,9 +438,9 @@ func (a *RemoteStateActor) handleResolve(ctx context.Context, m *resolveMsg) {
 		return
 	}
 	a.mu.Lock()
-	for _, ta := range addrs {
-		if pa, ok := transportToAddr(ta, a.id); ok {
-			a.paths.Add(pa)
+	for _, resolved := range addrs {
+		if pa, ok := transportToAddr(resolved.Addr, a.id); ok {
+			a.paths.AddWithProvenance(pa, resolved.Provenance)
 		}
 	}
 	a.paths.Prune()

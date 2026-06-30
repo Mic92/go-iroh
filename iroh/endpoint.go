@@ -1285,15 +1285,20 @@ func (e *Endpoint) resolveFunc() socket.ResolveFunc {
 	if lookup == nil {
 		return nil
 	}
-	return func(ctx context.Context, id key.EndpointID) ([]netaddr.TransportAddr, error) {
-		var addrs []netaddr.TransportAddr
+	return func(ctx context.Context, id key.EndpointID) ([]socket.ResolvedAddr, error) {
+		var addrs []socket.ResolvedAddr
 		var lastErr error
 		for item, err := range lookup.Resolve(ctx, id) {
 			if err != nil {
 				lastErr = err
 				continue
 			}
-			addrs = append(addrs, item.Addr().Addrs()...)
+			for _, addr := range item.Addr().Addrs() {
+				addrs = append(addrs, socket.ResolvedAddr{
+					Addr:       addr,
+					Provenance: item.Provenance(),
+				})
+			}
 		}
 		if len(addrs) == 0 && lastErr != nil {
 			return nil, lastErr

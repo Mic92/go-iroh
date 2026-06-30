@@ -462,10 +462,10 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	resolved := []netaddr.TransportAddr{
-		netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 7)},
+	resolved := []ResolvedAddr{
+		{Addr: netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 7)}, Provenance: "test_lookup"},
 	}
-	resolve := func(ctx context.Context, id key.EndpointID) ([]netaddr.TransportAddr, error) {
+	resolve := func(ctx context.Context, id key.EndpointID) ([]ResolvedAddr, error) {
 		return resolved, nil
 	}
 	m := newRemoteMap(ctx, BiasedRttPathSelector{}, resolve, time.Second, nil)
@@ -492,6 +492,22 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	a.mu.Unlock()
 	if !known {
 		t.Errorf("resolved path %s was not added as a candidate", want)
+	}
+	info, ok := m.RemoteInfo(id)
+	if !ok {
+		t.Fatal("RemoteInfo = false, want true")
+	}
+	var found bool
+	for _, addr := range info.Addrs {
+		if addr.Addr.String() == resolved[0].Addr.String() {
+			found = true
+			if addr.Provenance != "test_lookup" {
+				t.Fatalf("provenance = %q, want test_lookup", addr.Provenance)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("RemoteInfo addrs = %+v, want resolved addr", info.Addrs)
 	}
 }
 

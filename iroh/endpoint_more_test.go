@@ -415,8 +415,11 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	}
 	var found bool
 	for _, a := range addrs {
-		if ipa, ok := a.(netaddr.IPAddr); ok && ipa.Addr == ip {
+		if ipa, ok := a.Addr.(netaddr.IPAddr); ok && ipa.Addr == ip {
 			found = true
+			if a.Provenance != MemoryProvenance {
+				t.Fatalf("resolved provenance = %q, want %q", a.Provenance, MemoryProvenance)
+			}
 		}
 	}
 	if !found {

@@ -18,8 +18,9 @@ const (
 
 // TransportAddrInfo is a remote transport address plus usage metadata.
 type TransportAddrInfo struct {
-	Addr  netaddr.TransportAddr
-	Usage TransportAddrUsage
+	Addr       netaddr.TransportAddr
+	Usage      TransportAddrUsage
+	Provenance string
 }
 
 // RemoteInfo is a snapshot of known addressing information for a remote
@@ -33,8 +34,9 @@ func remoteInfoFromSocket(info socket.RemoteInfo) RemoteInfo {
 	addrs := make([]TransportAddrInfo, 0, len(info.Addrs))
 	for _, a := range info.Addrs {
 		addrs = append(addrs, TransportAddrInfo{
-			Addr:  a.Addr,
-			Usage: transportAddrUsageFromSocket(a.Usage),
+			Addr:       a.Addr,
+			Usage:      transportAddrUsageFromSocket(a.Usage),
+			Provenance: a.Provenance,
 		})
 	}
 	return RemoteInfo{ID: info.ID, Addrs: addrs}

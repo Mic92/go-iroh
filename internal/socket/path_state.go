@@ -77,8 +77,9 @@ const (
 
 // TransportAddrInfo is a remote transport address plus usage metadata.
 type TransportAddrInfo struct {
-	Addr  netaddr.TransportAddr
-	Usage TransportAddrUsage
+	Addr       netaddr.TransportAddr
+	Usage      TransportAddrUsage
+	Provenance string
 }
 
 // RemotePathState tracks all candidate paths to a single remote endpoint:
@@ -101,8 +102,9 @@ type RemotePathState struct {
 // by Addr.String() because [Addr] is not directly comparable (it embeds a
 // non-comparable netaddr.CustomAddr).
 type pathEntry struct {
-	addr  Addr
-	state PathState
+	addr       Addr
+	state      PathState
+	provenance string
 }
 
 // NewRemotePathState returns an empty path-state tracker.
@@ -154,7 +156,7 @@ func (p *RemotePathState) RemoteAddrs() []TransportAddrInfo {
 		if e.state.Status == PathStatusOpen {
 			usage = TransportAddrActive
 		}
-		out = append(out, TransportAddrInfo{Addr: addr, Usage: usage})
+		out = append(out, TransportAddrInfo{Addr: addr, Usage: usage, Provenance: e.provenance})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Addr.String() < out[j].Addr.String()
@@ -174,11 +176,20 @@ func (p *RemotePathState) Status(addr Addr) (PathStatus, bool) {
 // Add records a candidate path with [PathStatusUnknown] if it is not already
 // known. A path already present keeps its current status.
 func (p *RemotePathState) Add(addr Addr) {
+	p.AddWithProvenance(addr, "")
+}
+
+// AddWithProvenance records a candidate path with lookup provenance.
+func (p *RemotePathState) AddWithProvenance(addr Addr, provenance string) {
 	k := pathKey(addr)
-	if _, ok := p.paths[k]; ok {
+	if e, ok := p.paths[k]; ok {
+		if e.provenance == "" && provenance != "" {
+			e.provenance = provenance
+			p.paths[k] = e
+		}
 		return
 	}
-	p.paths[k] = pathEntry{addr: addr, state: PathState{Status: PathStatusUnknown}}
+	p.paths[k] = pathEntry{addr: addr, state: PathState{Status: PathStatusUnknown}, provenance: provenance}
 }
 
 // SetOpen marks addr as open, adding it if unknown. It mirrors the Rust
@@ -191,7 +202,11 @@ func (p *RemotePathState) SetOpen(addr Addr) {
 // tests and by the actor heartbeat, which already has a shared timestamp for
 // all observed paths.
 func (p *RemotePathState) SetOpenAt(addr Addr, now time.Time) {
-	p.paths[pathKey(addr)] = pathEntry{addr: addr, state: PathState{Status: PathStatusOpen, lastActive: now}}
+	k := pathKey(addr)
+	e := p.paths[k]
+	e.addr = addr
+	e.state = PathState{Status: PathStatusOpen, lastActive: now}
+	p.paths[k] = e
 }
 
 // SetClosed transitions addr toward an inactive/unusable status, recording the
@@ -221,6 +236,7 @@ func (p *RemotePathState) SetUnusable(addr Addr) {
 	if !ok {
 		e = pathEntry{addr: addr}
 	}
+	e.addr = addr
 	e.state.Status = PathStatusUnusable
 	p.paths[k] = e
 }
