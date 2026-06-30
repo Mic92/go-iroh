@@ -2,9 +2,14 @@ package metrics
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"expvar"
 	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -105,5 +110,47 @@ func TestRegistryRejectsInvalidSource(t *testing.T) {
 	r := NewRegistry()
 	if err := r.Register("bad", "not a source"); err == nil {
 		t.Fatal("Register accepted invalid source")
+	}
+}
+
+func TestHandlerServesMetrics(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register("endpoint", source{"connects_started": 2}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rr := httptest.NewRecorder()
+	Handler(r).ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if got := rr.Header().Get("Content-Type"); got != openMetricsContentType {
+		t.Fatalf("Content-Type = %q, want %q", got, openMetricsContentType)
+	}
+	if !strings.Contains(rr.Body.String(), "endpoint_connects_started_total 2\n") {
+		t.Fatalf("body = %q", rr.Body.String())
+	}
+}
+
+func TestMetricsServerShutdown(t *testing.T) {
+	r := NewRegistry()
+	if err := r.Register("endpoint", source{"connects_started": 2}); err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := NewServer("", r)
+	done := make(chan error, 1)
+	go func() {
+		done <- s.Serve(l)
+	}()
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	err = <-done
+	if err != http.ErrServerClosed {
+		t.Fatalf("Serve returned %v, want ErrServerClosed", err)
 	}
 }
