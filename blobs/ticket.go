@@ -101,6 +101,11 @@ func Register(r *endpointticket.Registry) error {
 // Addr returns the provider endpoint address.
 func (t Ticket) Addr() netaddr.EndpointAddr { return t.addr }
 
+// Short returns a ticket containing only the endpoint id and relay URLs.
+func (t Ticket) Short() Ticket {
+	return NewTicket(endpointticket.ShortAddr(t.addr), t.hash, t.format)
+}
+
 // Hash returns the blob hash.
 func (t Ticket) Hash() Hash { return t.hash }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/base32"
 	"encoding/hex"
 	"errors"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -83,6 +84,45 @@ func TestDocTicketRegistry(t *testing.T) {
 	}
 }
 
+func TestDocTicketShort(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	relay, err := netaddr.ParseRelayURL("https://relay.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := NewReadCapability(NamespaceID{id: id})
+	ticket := NewTicket(capability, []netaddr.EndpointAddr{
+		netaddr.NewEndpointAddr(id,
+			netaddr.RelayAddr{URL: relay},
+			netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
+			netaddr.NewCustomAddr(7, []byte("local")),
+		),
+	})
+
+	short := ticket.Short()
+	if short.Capability().Kind() != CapabilityRead {
+		t.Fatalf("capability kind = %v, want read", short.Capability().Kind())
+	}
+	if short.Capability().NamespaceID().String() != capability.NamespaceID().String() {
+		t.Fatalf("namespace = %s, want %s", short.Capability().NamespaceID(), capability.NamespaceID())
+	}
+	wantAddr := netaddr.NewEndpointAddr(id, netaddr.RelayAddr{URL: relay})
+	assertEndpointAddrEqual(t, short.Nodes()[0], wantAddr)
+
+	decoded, err := DecodeString(short.String())
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	if decoded.Capability().NamespaceID().String() != capability.NamespaceID().String() {
+		t.Fatalf("decoded namespace = %s, want %s", decoded.Capability().NamespaceID(), capability.NamespaceID())
+	}
+	assertEndpointAddrEqual(t, decoded.Nodes()[0], wantAddr)
+}
+
 func TestDocTicketErrors(t *testing.T) {
 	if _, err := DecodeString("blobabc"); !errors.Is(err, &endpointticket.ParseError{Kind: endpointticket.ParseErrorKindKind}) {
 		t.Fatalf("missing prefix error = %v", err)
@@ -92,5 +132,22 @@ func TestDocTicketErrors(t *testing.T) {
 	}
 	if _, err := DecodeBytes([]byte{0, 1}); !errors.Is(err, endpointticket.ErrDecode) {
 		t.Fatalf("decode error = %v", err)
+	}
+}
+
+func assertEndpointAddrEqual(t *testing.T, got, want netaddr.EndpointAddr) {
+	t.Helper()
+	if !got.ID.Equal(want.ID) {
+		t.Fatalf("id = %s, want %s", got.ID, want.ID)
+	}
+	gotAddrs := got.Addrs()
+	wantAddrs := want.Addrs()
+	if len(gotAddrs) != len(wantAddrs) {
+		t.Fatalf("addrs = %v, want %v", gotAddrs, wantAddrs)
+	}
+	for i := range gotAddrs {
+		if gotAddrs[i].Compare(wantAddrs[i]) != 0 {
+			t.Fatalf("addr[%d] = %v, want %v", i, gotAddrs[i], wantAddrs[i])
+		}
 	}
 }

@@ -75,6 +75,39 @@ func TestTicketRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTicketShort(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := netaddr.ParseRelayURL("https://relay.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := NewHash([]byte("short blob"))
+	ticket := NewTicket(
+		netaddr.NewEndpointAddr(id,
+			netaddr.RelayAddr{URL: relay},
+			netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1234")},
+			netaddr.NewCustomAddr(7, []byte("local")),
+		),
+		hash,
+		HashSeq,
+	)
+
+	short := ticket.Short()
+	want := NewTicket(netaddr.NewEndpointAddr(id, netaddr.RelayAddr{URL: relay}), hash, HashSeq)
+	assertTicketEqual(t, short, want)
+	if !short.Recursive() {
+		t.Fatal("Recursive = false, want true")
+	}
+	got, err := DecodeString(short.String())
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	assertTicketEqual(t, got, want)
+}
+
 func TestRegister(t *testing.T) {
 	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
 	if err != nil {

@@ -108,6 +108,15 @@ func (t DocTicket) Nodes() []netaddr.EndpointAddr {
 	return append([]netaddr.EndpointAddr(nil), t.nodes...)
 }
 
+// Short returns a ticket containing only endpoint ids and relay URLs.
+func (t DocTicket) Short() DocTicket {
+	nodes := make([]netaddr.EndpointAddr, len(t.nodes))
+	for i, addr := range t.nodes {
+		nodes[i] = endpointticket.ShortAddr(addr)
+	}
+	return NewTicket(t.capability, nodes)
+}
+
 // Kind returns the ticket kind prefix.
 func (t DocTicket) Kind() string { return TicketKind }
 
