@@ -77,6 +77,7 @@ func TestVerifySourceAddressRetriesBeforeConnectionConstruction(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
+	closeAccepted := make(chan struct{})
 	go func() {
 		conn, err := ln.Accept(ctx)
 		if err != nil {
@@ -85,6 +86,12 @@ func TestVerifySourceAddressRetriesBeforeConnectionConstruction(t *testing.T) {
 		}
 		if !conn.RemoteAddrValidated() {
 			t.Error("accepted connection RemoteAddrValidated = false, want true")
+		}
+		select {
+		case <-closeAccepted:
+		case <-ctx.Done():
+			done <- ctx.Err()
+			return
 		}
 		_ = conn.CloseWithError(0, "")
 		done <- nil
@@ -99,7 +106,8 @@ func TestVerifySourceAddressRetriesBeforeConnectionConstruction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = clientConn.CloseWithError(0, "")
+	defer clientConn.CloseWithError(0, "")
+	close(closeAccepted)
 
 	if err := <-done; err != nil {
 		t.Fatal(err)
