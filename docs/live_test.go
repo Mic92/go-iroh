@@ -93,6 +93,84 @@ func TestLiveSyncReceivedSwarmPutMarksMissing(t *testing.T) {
 	}
 }
 
+func TestLiveSyncDownloadPolicySkipsRemotePut(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	hash := blobs.NewHash([]byte("secret content"))
+	entry := testSignedEntry(namespace, author, "private/k", NewRecord(hash, 14, 1))
+	msg, err := postcard.Marshal(liveOp{Kind: liveOpPut, Entry: entry})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	from, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatalf("GenerateSecretKey: %v", err)
+	}
+	addr := netaddr.NewEndpointAddr(from.Public().EndpointID())
+	blobStore, err := blobs.NewBytesMap()
+	if err != nil {
+		t.Fatalf("NewBytesMap: %v", err)
+	}
+
+	l := LiveSync{downloads: make(chan liveDownload, 1)}
+	l.handleReceived(context.Background(), namespace.ID(), NewMemoryStore(), liveSyncOptions{
+		LiveSyncOptions: LiveSyncOptions{
+			BlobStore:      blobStore,
+			Resolver:       iroh.StaticLookupFromAddrs(addr),
+			DownloadPolicy: DownloadPolicy{ExcludePrefixes: []string{"private/"}},
+		},
+	}, gossip.Event{
+		Kind:          gossip.Received,
+		Content:       msg,
+		DeliveredFrom: from.Public().EndpointID(),
+	})
+	select {
+	case req := <-l.downloads:
+		t.Fatalf("queued download for excluded key: %+v", req)
+	default:
+	}
+}
+
+func TestLiveSyncDownloadPolicySkipsContentReady(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	hash := blobs.NewHash([]byte("secret content"))
+	entry := testSignedEntry(namespace, author, "private/k", NewRecord(hash, 14, 1))
+	msg, err := postcard.Marshal(liveOp{Kind: liveOpContentReady, Hash: hash})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	from, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatalf("GenerateSecretKey: %v", err)
+	}
+	addr := netaddr.NewEndpointAddr(from.Public().EndpointID())
+	blobStore, err := blobs.NewBytesMap()
+	if err != nil {
+		t.Fatalf("NewBytesMap: %v", err)
+	}
+	store := NewMemoryStore()
+	store.PutWithOrigin(entry, InsertOrigin{Kind: InsertOriginRemote, ContentStatus: ContentMissing})
+
+	l := LiveSync{downloads: make(chan liveDownload, 1)}
+	l.handleReceived(context.Background(), namespace.ID(), store, liveSyncOptions{
+		LiveSyncOptions: LiveSyncOptions{
+			BlobStore:      blobStore,
+			Resolver:       iroh.StaticLookupFromAddrs(addr),
+			DownloadPolicy: DownloadPolicy{ExcludePrefixes: []string{"private/"}},
+		},
+	}, gossip.Event{
+		Kind:          gossip.Received,
+		Content:       msg,
+		DeliveredFrom: from.Public().EndpointID(),
+	})
+	select {
+	case req := <-l.downloads:
+		t.Fatalf("queued download for excluded content-ready key: %+v", req)
+	default:
+	}
+}
+
 func TestLiveSyncDownloadsRemoteContent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()

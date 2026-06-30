@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
+	"strings"
 
 	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/gossip"
@@ -24,8 +26,52 @@ type LiveSyncOptions struct {
 	BlobStore blobs.Store
 	// Config configures range reconciliation.
 	Config SyncConfig
+	// DownloadPolicy selects which entry content live sync downloads. The zero
+	// value downloads every key.
+	DownloadPolicy DownloadPolicy
 	// OnSync, if non-nil, is called after each sync attempt.
 	OnSync func(SyncResult)
+}
+
+// DownloadPolicy selects document entry keys for live-sync content downloads.
+type DownloadPolicy struct {
+	// IncludePrefixes, when non-empty, allows only keys with one of these prefixes.
+	IncludePrefixes []string
+	// ExcludePrefixes rejects keys with one of these prefixes.
+	ExcludePrefixes []string
+	// IncludeGlobs, when non-empty, allows only keys matching one of these globs.
+	IncludeGlobs []string
+	// ExcludeGlobs rejects keys matching one of these globs.
+	ExcludeGlobs []string
+}
+
+func (p DownloadPolicy) allow(key []byte) bool {
+	s := string(key)
+	if len(p.IncludePrefixes) != 0 && !matchPrefix(s, p.IncludePrefixes) {
+		return false
+	}
+	if len(p.IncludeGlobs) != 0 && !matchGlob(s, p.IncludeGlobs) {
+		return false
+	}
+	return !matchPrefix(s, p.ExcludePrefixes) && !matchGlob(s, p.ExcludeGlobs)
+}
+
+func matchPrefix(s string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchGlob(s string, globs []string) bool {
+	for _, glob := range globs {
+		if ok, _ := path.Match(glob, s); ok {
+			return true
+		}
+	}
+	return false
 }
 
 type liveSyncOptions struct {
@@ -194,11 +240,11 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 			ContentStatus: status,
 		})
 		if outcome.Inserted() && status != ContentComplete {
-			l.queueDownload(ctx, opts, hash, ev.DeliveredFrom)
+			l.queueDownload(ctx, opts, hash, op.Entry.Entry.Key(), ev.DeliveredFrom)
 		}
 	case liveOpContentReady:
-		if op.Hash != blobs.EmptyHash {
-			l.queueDownload(ctx, opts, op.Hash, ev.DeliveredFrom)
+		if op.Hash != blobs.EmptyHash && store.downloadAllowed(namespace, op.Hash, opts.DownloadPolicy) {
+			l.queueDownload(ctx, opts, op.Hash, nil, ev.DeliveredFrom)
 		}
 	case liveOpSyncReport:
 		if op.Report.Namespace != namespace {
@@ -223,8 +269,11 @@ func (l *LiveSync) broadcastContentReady(ctx context.Context, hash blobs.Hash) {
 	_ = l.topic.Broadcast(ctx, msg)
 }
 
-func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash blobs.Hash, peer key.EndpointID) {
+func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash blobs.Hash, entryKey []byte, peer key.EndpointID) {
 	if l.downloads == nil || hash == blobs.EmptyHash || blobs.Status(opts.BlobStore, hash).IsComplete() {
+		return
+	}
+	if entryKey != nil && !opts.DownloadPolicy.allow(entryKey) {
 		return
 	}
 	addr, ok := l.downloadAddr(ctx, opts, peer)
@@ -256,6 +305,17 @@ func (l *LiveSync) downloadAddr(ctx context.Context, opts liveSyncOptions, id ke
 		}
 	}
 	return netaddr.EndpointAddr{}, false
+}
+
+func (s *MemoryStore) downloadAllowed(namespace NamespaceID, hash blobs.Hash, policy DownloadPolicy) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, entry := range s.entries {
+		if entry.Entry.Namespace() == namespace && entry.Entry.ContentHash() == hash && policy.allow(entry.Entry.Key()) {
+			return true
+		}
+	}
+	return false
 }
 
 func (l *LiveSync) runDownloader(ctx context.Context, store *MemoryStore, opts liveSyncOptions) {
