@@ -617,6 +617,32 @@ func (e *Endpoint) AddExternalAddr(addr netip.AddrPort) {
 	e.advertiseNATTraversalCandidates()
 }
 
+// RemoveExternalAddr removes addr from the endpoint's externally reachable
+// addresses and stops advertising it as a QNT NAT traversal candidate. It
+// returns true if addr was present. Invalid, unspecified, or zero-port addresses
+// are ignored.
+func (e *Endpoint) RemoveExternalAddr(addr netip.AddrPort) bool {
+	if e.disableIP {
+		return false
+	}
+	addr, ok := canonicalNATTraversalCandidate(addr)
+	if !ok {
+		return false
+	}
+
+	e.mu.Lock()
+	i := slices.Index(e.externalNAT, addr)
+	if i < 0 {
+		e.mu.Unlock()
+		return false
+	}
+	e.externalNAT = slices.Delete(e.externalNAT, i, i+1)
+	e.updateAddrWatchLocked()
+	e.mu.Unlock()
+	e.advertiseNATTraversalCandidates()
+	return true
+}
+
 func (e *Endpoint) applyNetReport(report netreport.Report) bool {
 	publicReport := netReportFromInternal(report)
 	e.mu.Lock()

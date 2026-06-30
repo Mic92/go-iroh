@@ -142,6 +142,34 @@ func TestEndpointLifecycleAddressSurface(t *testing.T) {
 	if !containsAddrPort(ep.Addr().IPAddrs(), external) {
 		t.Fatalf("Addr IPs = %v, want external %v", ep.Addr().IPAddrs(), external)
 	}
+	if got := ep.localNATTraversalCandidates(); !containsAddrPort(got, external) {
+		t.Fatalf("localNATTraversalCandidates = %v, want external %v", got, external)
+	}
+	if ep.RemoveExternalAddr(netip.MustParseAddrPort("203.0.113.45:4444")) {
+		t.Fatal("RemoveExternalAddr(unadded) = true, want false")
+	}
+	if ep.RemoveExternalAddr(netip.AddrPort{}) {
+		t.Fatal("RemoveExternalAddr(invalid) = true, want false")
+	}
+	if !ep.RemoveExternalAddr(external) {
+		t.Fatal("RemoveExternalAddr(added) = false, want true")
+	}
+	got, err = w.Updated(ctx)
+	if err != nil {
+		t.Fatalf("WatchAddr remove update: %v", err)
+	}
+	if containsAddrPort(got.IPAddrs(), external) {
+		t.Fatalf("WatchAddr IPs after remove = %v, still contains external %v", got.IPAddrs(), external)
+	}
+	if containsAddrPort(ep.Addr().IPAddrs(), external) {
+		t.Fatalf("Addr IPs after remove = %v, still contains external %v", ep.Addr().IPAddrs(), external)
+	}
+	if got := ep.localNATTraversalCandidates(); containsAddrPort(got, external) {
+		t.Fatalf("localNATTraversalCandidates after remove = %v, still contains external %v", got, external)
+	}
+	if ep.RemoveExternalAddr(external) {
+		t.Fatal("RemoveExternalAddr(removed) = true, want false")
+	}
 
 	if err := ep.Shutdown(ctx); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -225,6 +253,9 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 		t.Fatalf("WithoutIPTransports NAT candidates = %v, want none", got)
 	}
 	ep.AddExternalAddr(netip.MustParseAddrPort("203.0.113.1:9999"))
+	if ep.RemoveExternalAddr(netip.MustParseAddrPort("203.0.113.1:9999")) {
+		t.Fatal("WithoutIPTransports RemoveExternalAddr = true, want false")
+	}
 	if got := ep.Addr().IPAddrs(); len(got) != 0 {
 		t.Fatalf("WithoutIPTransports external Addr IPs = %v, want none", got)
 	}
