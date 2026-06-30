@@ -92,6 +92,12 @@ type PathDebugStats struct {
 	BytesInFlight protocol.ByteCount
 	// CongestionWindow is pid's current congestion window.
 	CongestionWindow protocol.ByteCount
+	// LostPackets is the number of application-data packets declared lost on
+	// pid. It excludes path validation and path MTU probe packets.
+	LostPackets uint64
+	// LostBytes is the number of application-data bytes declared lost on pid.
+	// It excludes path validation and path MTU probe packets.
+	LostBytes uint64
 	// SmoothedRTT is pid's application-data RTT estimate.
 	SmoothedRTT time.Duration
 	// DistinctController is true when pid's congestion controller and RTT

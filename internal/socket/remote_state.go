@@ -108,6 +108,15 @@ type PathInfo struct {
 	// HasCongestionWindow reports whether CongestionWindow was observed from qng
 	// per-path state.
 	HasCongestionWindow bool
+	// LostPackets is the number of application-data packets declared lost on
+	// this path, when HasLoss is true.
+	LostPackets uint64
+	// LostBytes is the number of application-data bytes declared lost on this
+	// path, when HasLoss is true.
+	LostBytes uint64
+	// HasLoss reports whether LostPackets and LostBytes were observed from qng
+	// per-path state.
+	HasLoss bool
 	// Selected reports whether this path is currently selected for application
 	// data transmission.
 	Selected bool
@@ -839,6 +848,9 @@ func (a *RemoteStateActor) PathInfos(conn Connection) []PathInfo {
 				infos[i].HasBytesInFlight = p.HasBytesInFlight
 				infos[i].CongestionWindow = p.CongestionWindow
 				infos[i].HasCongestionWindow = p.HasCongestionWindow
+				infos[i].LostPackets = p.LostPackets
+				infos[i].LostBytes = p.LostBytes
+				infos[i].HasLoss = p.HasLoss
 				continue
 			}
 			p.Selected = selected != nil && selected.String() == p.Addr.String()

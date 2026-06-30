@@ -260,6 +260,15 @@ type PathInfo struct {
 	// HasCongestionWindow reports whether CongestionWindow was observed for this
 	// path.
 	HasCongestionWindow bool
+	// LostPackets is the number of application-data packets declared lost on
+	// this path, when HasLoss is true.
+	LostPackets uint64
+	// LostBytes is the number of application-data bytes declared lost on this
+	// path, when HasLoss is true.
+	LostBytes uint64
+	// HasLoss reports whether LostPackets and LostBytes were observed for this
+	// path.
+	HasLoss bool
 }
 
 // pathSnapshotRequest is the command Conn.Paths hands to the run goroutine,
@@ -310,6 +319,9 @@ func (c *Conn) processPathSnapshotRequests() {
 						info.HasBytesInFlight = true
 						info.CongestionWindow = stats.CongestionWindow
 						info.HasCongestionWindow = true
+						info.LostPackets = stats.LostPackets
+						info.LostBytes = stats.LostBytes
+						info.HasLoss = true
 					}
 					req.paths = append(req.paths, info)
 				}

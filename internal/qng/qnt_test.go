@@ -953,6 +953,9 @@ func TestQNTPathSnapshotReportsRoute(t *testing.T) {
 	if !req.paths[0].HasCongestionWindow || req.paths[0].CongestionWindow == 0 {
 		t.Fatalf("path CongestionWindow = %d, HasCongestionWindow = %v; want non-zero observed cwnd", req.paths[0].CongestionWindow, req.paths[0].HasCongestionWindow)
 	}
+	if !req.paths[0].HasLoss {
+		t.Fatalf("path HasLoss = false, want true: %+v", req.paths[0])
+	}
 }
 
 func TestQNTProcessValidatedPathOpenKeepsCandidateAtPathLimit(t *testing.T) {

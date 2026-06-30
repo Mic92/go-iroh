@@ -190,6 +190,15 @@ type PathInfo struct {
 	// HasCongestionWindow reports whether CongestionWindow was observed for this
 	// path.
 	HasCongestionWindow bool
+	// LostPackets is the number of application-data packets declared lost on
+	// this path, when HasLoss is true.
+	LostPackets uint64
+	// LostBytes is the number of application-data bytes declared lost on this
+	// path, when HasLoss is true.
+	LostBytes uint64
+	// HasLoss reports whether LostPackets and LostBytes were observed for this
+	// path.
+	HasLoss bool
 	// Selected reports whether this path is currently selected for application
 	// data transmission.
 	Selected bool
@@ -415,6 +424,9 @@ func pathInfosFromSocket(paths []socket.PathInfo) []PathInfo {
 			HasBytesInFlight:    p.HasBytesInFlight,
 			CongestionWindow:    p.CongestionWindow,
 			HasCongestionWindow: p.HasCongestionWindow,
+			LostPackets:         p.LostPackets,
+			LostBytes:           p.LostBytes,
+			HasLoss:             p.HasLoss,
 			Selected:            p.Selected,
 		}
 		if p.HasAddr {
@@ -640,6 +652,11 @@ func (a *connAdapter) Paths() []socket.PathInfo {
 		if p.HasCongestionWindow {
 			paths[i].CongestionWindow = uint64(p.CongestionWindow)
 			paths[i].HasCongestionWindow = true
+		}
+		if p.HasLoss {
+			paths[i].LostPackets = p.LostPackets
+			paths[i].LostBytes = p.LostBytes
+			paths[i].HasLoss = true
 		}
 		if p.RemoteAddr.IsValid() {
 			paths[i].Addr = socket.IPAddr(p.RemoteAddr)

@@ -386,6 +386,17 @@ func TestSentPacketHandlerReorderingLoss(t *testing.T) {
 	if got, want := h.getAppDataPath(protocol.PathIDZero).bytesInFlight, protocol.ByteCount(len(wantOutstanding))*packetSize; got != want {
 		t.Errorf("bytesInFlight = %d, want %d", got, want)
 	}
+	wantLost := uint64(len(sent) - 1 - len(wantOutstanding))
+	pathStats, ok := h.PathDebugStats(protocol.PathIDZero)
+	if !ok {
+		t.Fatal("PathDebugStats(PathIDZero) not found")
+	}
+	if pathStats.LostPackets != wantLost {
+		t.Errorf("LostPackets = %d, want %d", pathStats.LostPackets, wantLost)
+	}
+	if pathStats.LostBytes != wantLost*uint64(packetSize) {
+		t.Errorf("LostBytes = %d, want %d", pathStats.LostBytes, wantLost*uint64(packetSize))
+	}
 	if appData.largestAcked != largest {
 		t.Errorf("largestAcked = %d, want %d", appData.largestAcked, largest)
 	}

@@ -91,9 +91,11 @@ type appDataPath struct {
 	// send time of the largest acknowledged packet
 	largestAckedTime monotime.Time
 
-	rttStats      *utils.RTTStats
-	congestion    congestion.SendAlgorithmWithDebugInfos
-	bytesInFlight protocol.ByteCount
+	rttStats        *utils.RTTStats
+	congestion      congestion.SendAlgorithmWithDebugInfos
+	bytesInFlight   protocol.ByteCount
+	lostPacketCount uint64
+	lostByteCount   uint64
 
 	// PTO accounting for the application-data space. During the handshake the
 	// Initial/Handshake spaces share this single PathIDZero counter, mirroring
@@ -666,6 +668,8 @@ func (h *sentPacketHandler) PathDebugStats(pid protocol.PathID) (PathDebugStats,
 		LargestAcked:     path.space.largestAcked,
 		BytesInFlight:    path.bytesInFlight,
 		CongestionWindow: path.congestion.GetCongestionWindow(),
+		LostPackets:      path.lostPacketCount,
+		LostBytes:        path.lostByteCount,
 		SmoothedRTT:      path.rttStats.SmoothedRTT(),
 	}
 	if pid != protocol.PathIDZero {
@@ -1284,6 +1288,10 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 				h.removeFromBytesInFlight(p)
 				h.queueFramesForRetransmission(p)
 				if !p.IsPathMTUProbePacket {
+					if encLevel == protocol.Encryption1RTT {
+						lossPath.lostPacketCount++
+						lossPath.lostByteCount += uint64(p.Length)
+					}
 					lossCongestion.OnCongestionEvent(pn, p.Length, priorInFlight)
 				}
 				if encLevel == protocol.Encryption1RTT && lossPath.ecnTracker != nil {
