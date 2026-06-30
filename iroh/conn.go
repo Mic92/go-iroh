@@ -179,6 +179,17 @@ type PathInfo struct {
 	RTT time.Duration
 	// HasRTT reports whether RTT was observed for this path.
 	HasRTT bool
+	// BytesInFlight is the path's current application-data bytes in flight,
+	// when HasBytesInFlight is true.
+	BytesInFlight uint64
+	// HasBytesInFlight reports whether BytesInFlight was observed for this path.
+	HasBytesInFlight bool
+	// CongestionWindow is the path's current congestion window, when
+	// HasCongestionWindow is true.
+	CongestionWindow uint64
+	// HasCongestionWindow reports whether CongestionWindow was observed for this
+	// path.
+	HasCongestionWindow bool
 	// Selected reports whether this path is currently selected for application
 	// data transmission.
 	Selected bool
@@ -395,12 +406,16 @@ func pathInfosFromSocket(paths []socket.PathInfo) []PathInfo {
 	out := make([]PathInfo, 0, len(paths))
 	for _, p := range paths {
 		info := PathInfo{
-			ID:        p.ID,
-			Validated: p.Validated,
-			HasAddr:   p.HasAddr,
-			RTT:       p.RTT,
-			HasRTT:    p.HasRTT,
-			Selected:  p.Selected,
+			ID:                  p.ID,
+			Validated:           p.Validated,
+			HasAddr:             p.HasAddr,
+			RTT:                 p.RTT,
+			HasRTT:              p.HasRTT,
+			BytesInFlight:       p.BytesInFlight,
+			HasBytesInFlight:    p.HasBytesInFlight,
+			CongestionWindow:    p.CongestionWindow,
+			HasCongestionWindow: p.HasCongestionWindow,
+			Selected:            p.Selected,
 		}
 		if p.HasAddr {
 			info.Addr, info.Relayed = transportAddrFromSocket(p.Addr)
@@ -617,6 +632,14 @@ func (a *connAdapter) Paths() []socket.PathInfo {
 		if p.HasRTT {
 			paths[i].RTT = p.SmoothedRTT
 			paths[i].HasRTT = true
+		}
+		if p.HasBytesInFlight {
+			paths[i].BytesInFlight = uint64(p.BytesInFlight)
+			paths[i].HasBytesInFlight = true
+		}
+		if p.HasCongestionWindow {
+			paths[i].CongestionWindow = uint64(p.CongestionWindow)
+			paths[i].HasCongestionWindow = true
 		}
 		if p.RemoteAddr.IsValid() {
 			paths[i].Addr = socket.IPAddr(p.RemoteAddr)

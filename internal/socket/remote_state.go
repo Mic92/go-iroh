@@ -96,6 +96,18 @@ type PathInfo struct {
 	RTT time.Duration
 	// HasRTT reports whether RTT was observed from qng per-path state.
 	HasRTT bool
+	// BytesInFlight is the path's current application-data bytes in flight,
+	// when HasBytesInFlight is true.
+	BytesInFlight uint64
+	// HasBytesInFlight reports whether BytesInFlight was observed from qng
+	// per-path state.
+	HasBytesInFlight bool
+	// CongestionWindow is the path's current congestion window, when
+	// HasCongestionWindow is true.
+	CongestionWindow uint64
+	// HasCongestionWindow reports whether CongestionWindow was observed from qng
+	// per-path state.
+	HasCongestionWindow bool
 	// Selected reports whether this path is currently selected for application
 	// data transmission.
 	Selected bool
@@ -823,6 +835,10 @@ func (a *RemoteStateActor) PathInfos(conn Connection) []PathInfo {
 				infos[i].Validated = p.Validated
 				infos[i].RTT = p.RTT
 				infos[i].HasRTT = p.HasRTT
+				infos[i].BytesInFlight = p.BytesInFlight
+				infos[i].HasBytesInFlight = p.HasBytesInFlight
+				infos[i].CongestionWindow = p.CongestionWindow
+				infos[i].HasCongestionWindow = p.HasCongestionWindow
 				continue
 			}
 			p.Selected = selected != nil && selected.String() == p.Addr.String()

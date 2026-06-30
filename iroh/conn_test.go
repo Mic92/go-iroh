@@ -11,6 +11,7 @@ import (
 	"time"
 
 	quic "github.com/tmc/go-iroh/internal/qng"
+	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
@@ -222,6 +223,40 @@ func TestConnPaths(t *testing.T) {
 				t.Fatalf("selected path count = %d, want 1; paths=%+v", selected, paths)
 			}
 		})
+	}
+}
+
+func TestPathInfosFromSocketCarriesCongestionStats(t *testing.T) {
+	paths := pathInfosFromSocket([]socket.PathInfo{{
+		ID:                  7,
+		Validated:           true,
+		RTT:                 5 * time.Millisecond,
+		HasRTT:              true,
+		BytesInFlight:       123,
+		HasBytesInFlight:    true,
+		CongestionWindow:    456,
+		HasCongestionWindow: true,
+	}})
+	if len(paths) != 1 {
+		t.Fatalf("paths len = %d, want 1", len(paths))
+	}
+	p := paths[0]
+	if p.BytesInFlight != 123 || !p.HasBytesInFlight {
+		t.Fatalf("BytesInFlight = %d, HasBytesInFlight = %v; want 123, true", p.BytesInFlight, p.HasBytesInFlight)
+	}
+	if p.CongestionWindow != 456 || !p.HasCongestionWindow {
+		t.Fatalf("CongestionWindow = %d, HasCongestionWindow = %v; want 456, true", p.CongestionWindow, p.HasCongestionWindow)
+	}
+
+	paths = pathInfosFromSocket([]socket.PathInfo{{ID: 8, Validated: true}})
+	if len(paths) != 1 {
+		t.Fatalf("guarded paths len = %d, want 1", len(paths))
+	}
+	if paths[0].HasBytesInFlight || paths[0].BytesInFlight != 0 {
+		t.Fatalf("guarded BytesInFlight = %d, HasBytesInFlight = %v; want zero, false", paths[0].BytesInFlight, paths[0].HasBytesInFlight)
+	}
+	if paths[0].HasCongestionWindow || paths[0].CongestionWindow != 0 {
+		t.Fatalf("guarded CongestionWindow = %d, HasCongestionWindow = %v; want zero, false", paths[0].CongestionWindow, paths[0].HasCongestionWindow)
 	}
 }
 

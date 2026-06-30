@@ -90,6 +90,8 @@ type PathDebugStats struct {
 	LargestAcked protocol.PacketNumber
 	// BytesInFlight is pid's current application-data bytes in flight.
 	BytesInFlight protocol.ByteCount
+	// CongestionWindow is pid's current congestion window.
+	CongestionWindow protocol.ByteCount
 	// SmoothedRTT is pid's application-data RTT estimate.
 	SmoothedRTT time.Duration
 	// DistinctController is true when pid's congestion controller and RTT

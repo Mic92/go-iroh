@@ -397,6 +397,9 @@ func TestMultipathTwoPathE2E(t *testing.T) {
 		if !stats.DistinctController {
 			t.Errorf("%s: path 1 lacks a distinct congestion controller + RTT estimator (Stage 4 risk #4) on the live connection", ep.name)
 		}
+		if stats.CongestionWindow == 0 {
+			t.Errorf("%s: path 1 CongestionWindow = 0, want non-zero cwnd", ep.name)
+		}
 	}
 }
 

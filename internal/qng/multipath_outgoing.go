@@ -249,6 +249,17 @@ type PathInfo struct {
 	SmoothedRTT time.Duration
 	// HasRTT reports whether SmoothedRTT was observed for this path.
 	HasRTT bool
+	// BytesInFlight is the path's current application-data bytes in flight,
+	// when HasBytesInFlight is true.
+	BytesInFlight protocol.ByteCount
+	// HasBytesInFlight reports whether BytesInFlight was observed for this path.
+	HasBytesInFlight bool
+	// CongestionWindow is the path's current congestion window, when
+	// HasCongestionWindow is true.
+	CongestionWindow protocol.ByteCount
+	// HasCongestionWindow reports whether CongestionWindow was observed for this
+	// path.
+	HasCongestionWindow bool
 }
 
 // pathSnapshotRequest is the command Conn.Paths hands to the run goroutine,
@@ -295,6 +306,10 @@ func (c *Conn) processPathSnapshotRequests() {
 					if stats, ok := c.sentPacketHandler.PathDebugStats(pid); ok {
 						info.SmoothedRTT = stats.SmoothedRTT
 						info.HasRTT = true
+						info.BytesInFlight = stats.BytesInFlight
+						info.HasBytesInFlight = true
+						info.CongestionWindow = stats.CongestionWindow
+						info.HasCongestionWindow = true
 					}
 					req.paths = append(req.paths, info)
 				}
