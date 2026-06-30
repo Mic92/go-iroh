@@ -2,6 +2,7 @@ package blobs
 
 import (
 	"context"
+	"slices"
 	"testing"
 )
 
@@ -67,6 +68,79 @@ func TestFSStoreGCSweepsUntaggedBlobs(t *testing.T) {
 	}
 	if _, ok := store.GetBlob(drop); ok {
 		t.Fatal("untagged blob survived GC")
+	}
+}
+
+func TestFSStoreGCWithEvents(t *testing.T) {
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	keep, err := store.Add([]byte("keep"))
+	if err != nil {
+		t.Fatalf("Add keep: %v", err)
+	}
+	drop, err := store.Add([]byte("drop"))
+	if err != nil {
+		t.Fatalf("Add drop: %v", err)
+	}
+	if err := store.SetTag("keep", RawHash(keep)); err != nil {
+		t.Fatalf("SetTag: %v", err)
+	}
+	var events []GCEvent
+	result, err := store.GCWithEvents(context.Background(), func(ev GCEvent) {
+		events = append(events, ev)
+	})
+	if err != nil {
+		t.Fatalf("GCWithEvents: %v", err)
+	}
+	if result.Deleted != 1 {
+		t.Fatalf("GCWithEvents deleted %d blobs, want 1", result.Deleted)
+	}
+	kinds := make([]GCEventKind, len(events))
+	for i, ev := range events {
+		kinds[i] = ev.Kind
+	}
+	want := []GCEventKind{GCEventMark, GCEventDelete, GCEventDone}
+	if !slices.Equal(kinds, want) {
+		t.Fatalf("event kinds = %v, want %v", kinds, want)
+	}
+	if events[0].Live != 1 {
+		t.Fatalf("mark live = %d, want 1", events[0].Live)
+	}
+	if events[1].Hash != drop || events[1].Deleted != 1 {
+		t.Fatalf("delete event = %+v, want drop hash and deleted=1", events[1])
+	}
+	if events[2].Deleted != 1 {
+		t.Fatalf("done deleted = %d, want 1", events[2].Deleted)
+	}
+}
+
+func TestFSStoreGCRechecksTagsBeforeDelete(t *testing.T) {
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	hash, err := store.Add([]byte("late tag"))
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	result, err := store.GCWithEvents(context.Background(), func(ev GCEvent) {
+		if ev.Kind != GCEventMark {
+			return
+		}
+		if err := store.SetTag("late", RawHash(hash)); err != nil {
+			t.Fatalf("SetTag from GC callback: %v", err)
+		}
+	})
+	if err != nil {
+		t.Fatalf("GCWithEvents: %v", err)
+	}
+	if result.Deleted != 0 {
+		t.Fatalf("GCWithEvents deleted %d blobs, want 0", result.Deleted)
+	}
+	if _, ok := store.GetBlob(hash); !ok {
+		t.Fatal("late-tagged blob was swept")
 	}
 }
 

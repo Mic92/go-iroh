@@ -22,6 +22,26 @@ type GCResult struct {
 	Deleted int
 }
 
+// GCEventKind identifies a garbage-collection progress event.
+type GCEventKind string
+
+const (
+	// GCEventMark reports the number of hashes found reachable from tags.
+	GCEventMark GCEventKind = "mark"
+	// GCEventDelete reports one deleted blob.
+	GCEventDelete GCEventKind = "delete"
+	// GCEventDone reports the final sweep result.
+	GCEventDone GCEventKind = "done"
+)
+
+// GCEvent reports progress from [FSStore.GCWithEvents].
+type GCEvent struct {
+	Kind    GCEventKind
+	Hash    Hash
+	Live    int
+	Deleted int
+}
+
 // SetTag sets name to value.
 func (s *FSStore) SetTag(name string, value HashAndFormat) error {
 	if s == nil {
@@ -125,6 +145,12 @@ func (t *TempTag) Close() error {
 
 // GC deletes blobs that are not reachable from a persistent or temp tag.
 func (s *FSStore) GC(ctx context.Context) (GCResult, error) {
+	return s.GCWithEvents(ctx, nil)
+}
+
+// GCWithEvents deletes blobs that are not reachable from a persistent or temp
+// tag and calls onEvent with mark, delete, and done progress events.
+func (s *FSStore) GCWithEvents(ctx context.Context, onEvent func(GCEvent)) (GCResult, error) {
 	if s == nil {
 		return GCResult{}, errors.New("blobs: nil fs store")
 	}
@@ -132,17 +158,12 @@ func (s *FSStore) GC(ctx context.Context) (GCResult, error) {
 		return GCResult{}, err
 	}
 	live := make(map[Hash]struct{})
-	s.mu.RLock()
-	for _, value := range s.tags {
-		s.markLiveLocked(live, value)
+	roots := s.gcRoots()
+	for _, value := range roots {
+		s.markLive(live, value)
 	}
-	for _, value := range s.temp {
-		s.markLiveLocked(live, value)
-	}
-	s.mu.RUnlock()
+	emitGCEvent(onEvent, GCEvent{Kind: GCEventMark, Live: len(live)})
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	entries, err := os.ReadDir(s.dataDir)
 	if err != nil {
 		return GCResult{}, fmt.Errorf("blobs: read data dir: %w", err)
@@ -162,6 +183,9 @@ func (s *FSStore) GC(ctx context.Context) (GCResult, error) {
 		if _, ok := live[hash]; ok {
 			continue
 		}
+		if !s.gcClaimDelete(hash) {
+			continue
+		}
 		if err := os.Remove(filepath.Join(s.dataDir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return GCResult{}, fmt.Errorf("blobs: remove data: %w", err)
 		}
@@ -169,11 +193,53 @@ func (s *FSStore) GC(ctx context.Context) (GCResult, error) {
 			return GCResult{}, fmt.Errorf("blobs: remove outboard: %w", err)
 		}
 		deleted++
+		emitGCEvent(onEvent, GCEvent{Kind: GCEventDelete, Hash: hash, Deleted: deleted})
 	}
-	return GCResult{Deleted: deleted}, nil
+	result := GCResult{Deleted: deleted}
+	emitGCEvent(onEvent, GCEvent{Kind: GCEventDone, Deleted: deleted})
+	return result, nil
 }
 
-func (s *FSStore) markLiveLocked(live map[Hash]struct{}, value HashAndFormat) {
+func (s *FSStore) gcRoots() []HashAndFormat {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	roots := make([]HashAndFormat, 0, len(s.tags)+len(s.temp))
+	for _, value := range s.tags {
+		roots = append(roots, value)
+	}
+	for _, value := range s.temp {
+		roots = append(roots, value)
+	}
+	return roots
+}
+
+func (s *FSStore) gcClaimDelete(hash Hash) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.protectsHashLocked(hash)
+}
+
+func (s *FSStore) protectsHashLocked(hash Hash) bool {
+	for _, value := range s.tags {
+		if value.Hash == hash {
+			return true
+		}
+	}
+	for _, value := range s.temp {
+		if value.Hash == hash {
+			return true
+		}
+	}
+	return false
+}
+
+func emitGCEvent(onEvent func(GCEvent), ev GCEvent) {
+	if onEvent != nil {
+		onEvent(ev)
+	}
+}
+
+func (s *FSStore) markLive(live map[Hash]struct{}, value HashAndFormat) {
 	if value.Hash == EmptyHash {
 		return
 	}
