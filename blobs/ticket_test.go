@@ -3,6 +3,7 @@ package blobs
 import (
 	"encoding/base32"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"strconv"
@@ -91,6 +92,31 @@ func TestTicketRoundTripManyAddrs(t *testing.T) {
 		t.Fatalf("DecodeString: %v", err)
 	}
 	assertTicketEqual(t, got, ticket)
+}
+
+func TestTicketJSONRoundTrip(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket := NewTicket(netaddr.NewEndpointAddr(id), NewHash([]byte("json ticket")), Raw)
+	in := struct {
+		Ticket Ticket `json:"ticket"`
+	}{Ticket: ticket}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(data) != `{"ticket":"`+ticket.String()+`"}` {
+		t.Fatalf("Marshal = %s, want ticket string", data)
+	}
+	var out struct {
+		Ticket Ticket `json:"ticket"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	assertTicketEqual(t, out.Ticket, ticket)
 }
 
 func TestTicketShort(t *testing.T) {

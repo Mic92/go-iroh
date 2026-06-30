@@ -144,6 +144,19 @@ func (t DocTicket) EncodeString() string {
 // String returns the canonical ticket string.
 func (t DocTicket) String() string { return t.EncodeString() }
 
+// MarshalText implements encoding.TextMarshaler.
+func (t DocTicket) MarshalText() ([]byte, error) { return []byte(t.String()), nil }
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (t *DocTicket) UnmarshalText(text []byte) error {
+	tt, err := ParseTicket(string(text))
+	if err != nil {
+		return err
+	}
+	*t = tt
+	return nil
+}
+
 func appendCapability(b []byte, c Capability) []byte {
 	switch c.Kind() {
 	case CapabilityWrite:

@@ -3,6 +3,7 @@ package docs
 import (
 	"encoding/base32"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"strings"
@@ -82,6 +83,40 @@ func TestDocTicketRegistry(t *testing.T) {
 	if doc.Capability().NamespaceID().String() != ticket.Capability().NamespaceID().String() {
 		t.Fatalf("namespace = %s, want %s", doc.Capability().NamespaceID(), ticket.Capability().NamespaceID())
 	}
+}
+
+func TestDocTicketJSONRoundTrip(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	ticket := NewTicket(NewReadCapability(NamespaceID{id: id}), []netaddr.EndpointAddr{
+		netaddr.NewEndpointAddr(id),
+	})
+	in := struct {
+		Ticket DocTicket `json:"ticket"`
+	}{Ticket: ticket}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(data) != `{"ticket":"`+ticket.String()+`"}` {
+		t.Fatalf("Marshal = %s, want ticket string", data)
+	}
+	var out struct {
+		Ticket DocTicket `json:"ticket"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if out.Ticket.Capability().NamespaceID().String() != ticket.Capability().NamespaceID().String() {
+		t.Fatalf("namespace = %s, want %s", out.Ticket.Capability().NamespaceID(), ticket.Capability().NamespaceID())
+	}
+	if len(out.Ticket.Nodes()) != 1 {
+		t.Fatalf("nodes len = %d, want 1", len(out.Ticket.Nodes()))
+	}
+	assertEndpointAddrEqual(t, out.Ticket.Nodes()[0], ticket.Nodes()[0])
 }
 
 func TestDocTicketShort(t *testing.T) {

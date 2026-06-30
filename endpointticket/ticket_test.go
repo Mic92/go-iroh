@@ -3,6 +3,7 @@ package endpointticket
 import (
 	"encoding/base32"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"strconv"
@@ -111,6 +112,35 @@ func TestTicketCodec(t *testing.T) {
 		t.Fatalf("DecodeString: %v", err)
 	}
 	assertEndpointAddrEqual(t, decoded.Addr(), addr)
+}
+
+func TestTicketJSONRoundTrip(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	relay, err := netaddr.ParseRelayURL("https://relay.example/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket := New(netaddr.NewEndpointAddr(id, netaddr.RelayAddr{URL: relay}))
+	in := struct {
+		Ticket Ticket `json:"ticket"`
+	}{Ticket: ticket}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(data) != `{"ticket":"`+ticket.String()+`"}` {
+		t.Fatalf("Marshal = %s, want ticket string", data)
+	}
+	var out struct {
+		Ticket Ticket `json:"ticket"`
+	}
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	assertEndpointAddrEqual(t, out.Ticket.Addr(), ticket.Addr())
 }
 
 func TestShortTicket(t *testing.T) {

@@ -316,6 +316,19 @@ func (t Ticket) String() string {
 	return t.EncodeString()
 }
 
+// MarshalText implements encoding.TextMarshaler.
+func (t Ticket) MarshalText() ([]byte, error) { return []byte(t.String()), nil }
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (t *Ticket) UnmarshalText(text []byte) error {
+	tt, err := Parse(string(text))
+	if err != nil {
+		return err
+	}
+	*t = tt
+	return nil
+}
+
 // Short returns a ticket containing only the endpoint id and relay URLs.
 func (t Ticket) Short() Ticket {
 	return New(ShortAddr(t.addr))

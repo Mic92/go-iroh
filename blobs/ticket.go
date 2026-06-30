@@ -145,6 +145,19 @@ func (t Ticket) EncodeString() string {
 // String returns the canonical ticket string.
 func (t Ticket) String() string { return t.EncodeString() }
 
+// MarshalText implements encoding.TextMarshaler.
+func (t Ticket) MarshalText() ([]byte, error) { return []byte(t.String()), nil }
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (t *Ticket) UnmarshalText(text []byte) error {
+	tt, err := ParseTicket(string(text))
+	if err != nil {
+		return err
+	}
+	*t = tt
+	return nil
+}
+
 func appendAddrInfo(b []byte, addr netaddr.EndpointAddr) []byte {
 	relays := addr.RelayURLs()
 	if len(relays) == 0 {
