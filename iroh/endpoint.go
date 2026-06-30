@@ -1095,13 +1095,17 @@ func (e *Endpoint) AcceptIncoming(ctx context.Context) (*Incoming, error) {
 }
 
 func (e *Endpoint) acceptIncoming(ctx context.Context) (*Incoming, error) {
-	if e.isClosed() {
+	e.mu.Lock()
+	closed := e.closed
+	ln := e.listener
+	e.mu.Unlock()
+	if closed {
 		return nil, ErrEndpointClosed
 	}
-	if e.listener == nil {
+	if ln == nil {
 		return nil, errors.New("iroh: no ALPNs configured; nothing to accept")
 	}
-	qc, err := e.listener.Accept(ctx)
+	qc, err := ln.Accept(ctx)
 	if err != nil {
 		return nil, err
 	}
