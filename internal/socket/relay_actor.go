@@ -50,6 +50,12 @@ const (
 	backoffMaxDelay = 16 * time.Second
 )
 
+// Relay ping timeout bounds, matching iroh-relay's PingTracker.
+const (
+	relayPingTimeoutMin = 500 * time.Millisecond
+	relayPingTimeoutMax = 5 * time.Second
+)
+
 // Channel depths, matching the Rust reference
 // (iroh/src/socket/transports/relay.rs:46 and actor.rs:1254).
 const (
@@ -641,7 +647,9 @@ type connectedState struct {
 	pendingPong [8]byte
 	havePong    bool
 	pingSent    [8]byte
+	pingSentAt  time.Time
 	awaitingPng bool
+	lastRTT     time.Duration
 }
 
 // runConnected serves an established connection: it reads frames from the relay,
@@ -709,9 +717,18 @@ func (r *activeRelay) runConnected(client relayClient) (bool, error) {
 			}
 			return st.established, err
 		case msg := <-frames:
+			wasAwaiting := st.awaitingPng
 			r.handleFrame(msg, st)
 			// A received message proves liveness; reset the ping interval.
 			pingTick.Reset(pingInterval)
+			// If this frame was the pong we were waiting for, disarm the
+			// ping timeout. The timeout is shorter than pingInterval, so a
+			// live connection would otherwise trip it before the next ping
+			// re-arms it. Mirrors the Rust PingTracker, which cancels the
+			// timeout on pong (actor.rs).
+			if wasAwaiting && !st.awaitingPng {
+				stopTimer(pingTimeout)
+			}
 		case <-pingTick.C:
 			if err := r.sendPing(client, st, pingTimeout); err != nil {
 				return st.established, err
@@ -756,15 +773,29 @@ func (r *activeRelay) sendPing(client relayClient, st *connectedState, timeout *
 	var data [8]byte
 	rand.Read(data[:])
 	st.pingSent = data
+	st.pingSentAt = time.Now()
 	st.awaitingPng = true
-	if !timeout.Stop() {
+	stopTimer(timeout)
+	timeout.Reset(pingTimeoutDuration(st))
+	return r.send(client, relayproto.ClientToRelayMsg{Type: relayproto.FramePing, Ping: data})
+}
+
+// stopTimer stops t and drains its channel if the stop lost the race, so a
+// stale fire cannot be observed after a subsequent Reset.
+func stopTimer(t *time.Timer) {
+	if !t.Stop() {
 		select {
-		case <-timeout.C:
+		case <-t.C:
 		default:
 		}
 	}
-	timeout.Reset(pingInterval)
-	return r.send(client, relayproto.ClientToRelayMsg{Type: relayproto.FramePing, Ping: data})
+}
+
+func pingTimeoutDuration(st *connectedState) time.Duration {
+	if st != nil && st.lastRTT > 0 {
+		return min(max(st.lastRTT*3, relayPingTimeoutMin), relayPingTimeoutMax)
+	}
+	return relayPingTimeoutMax
 }
 
 // sendDatagrams sends a batch of queued datagrams as client-to-relay datagram
@@ -786,6 +817,10 @@ func (r *activeRelay) sendDatagrams(client relayClient, items []RelaySendItem) e
 // handleFrame processes one relay-to-client frame, matching the Rust
 // handle_relay_msg (actor.rs:664).
 func (r *activeRelay) handleFrame(msg relayproto.RelayToClientMsg, st *connectedState) {
+	r.handleFrameAt(msg, st, time.Now())
+}
+
+func (r *activeRelay) handleFrameAt(msg relayproto.RelayToClientMsg, st *connectedState, now time.Time) {
 	switch msg.Type {
 	case relayproto.FrameRelayToClientDatagram, relayproto.FrameRelayToClientDatagramBat:
 		r.noteRoute(msg.RemoteEndpointID)
@@ -804,6 +839,9 @@ func (r *activeRelay) handleFrame(msg relayproto.RelayToClientMsg, st *connected
 	case relayproto.FramePong:
 		if st.awaitingPng && st.pingSent == msg.Ping {
 			st.awaitingPng = false
+			if !st.pingSentAt.IsZero() {
+				st.lastRTT = now.Sub(st.pingSentAt)
+			}
 		}
 		st.established = true
 	case relayproto.FrameStatus, relayproto.FrameHealth, relayproto.FrameRestarting:

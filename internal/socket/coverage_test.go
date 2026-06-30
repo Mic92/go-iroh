@@ -365,6 +365,37 @@ func TestJitterBounds(t *testing.T) {
 	}
 }
 
+func TestRelayPingTimeoutDuration(t *testing.T) {
+	if got := pingTimeoutDuration(&connectedState{}); got != relayPingTimeoutMax {
+		t.Fatalf("pingTimeoutDuration(no RTT) = %v, want %v", got, relayPingTimeoutMax)
+	}
+	if got := pingTimeoutDuration(&connectedState{lastRTT: time.Millisecond}); got != relayPingTimeoutMin {
+		t.Fatalf("pingTimeoutDuration(min clamp) = %v, want %v", got, relayPingTimeoutMin)
+	}
+	if got := pingTimeoutDuration(&connectedState{lastRTT: 3 * time.Second}); got != relayPingTimeoutMax {
+		t.Fatalf("pingTimeoutDuration(max clamp) = %v, want %v", got, relayPingTimeoutMax)
+	}
+
+	var ping [8]byte
+	copy(ping[:], "pingpong")
+	now := time.Unix(100, 0)
+	st := &connectedState{
+		pingSent:    ping,
+		pingSentAt:  now.Add(-200 * time.Millisecond),
+		awaitingPng: true,
+	}
+	(&activeRelay{}).handleFrameAt(relayproto.RelayToClientMsg{
+		Type: relayproto.FramePong,
+		Ping: ping,
+	}, st, now)
+	if got := st.lastRTT; got != 200*time.Millisecond {
+		t.Fatalf("lastRTT = %v, want 200ms", got)
+	}
+	if got := pingTimeoutDuration(st); got != 600*time.Millisecond {
+		t.Fatalf("pingTimeoutDuration(after pong) = %v, want 600ms", got)
+	}
+}
+
 // TestDrain checks drain empties a channel without blocking and is a no-op on an
 // already-empty channel (relay_actor.go:765).
 func TestDrain(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,6 +136,42 @@ func TestSplitSegments(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPingTimeoutDisarmedByPong is a regression test for a relay keepalive bug:
+// the ping timeout (<=relayPingTimeoutMax, 5s) is shorter than pingInterval
+// (15s), so a live connection whose pongs arrive must disarm the timeout when
+// the pong is received. Before the fix the timeout was never stopped on pong,
+// so a healthy connection tripped errPingTimeout ~5s after each ping and
+// re-dialed in a loop. Here the auto-ponging fake client keeps the connection
+// live; a correct actor dials exactly once and never re-dials.
+func TestPingTimeoutDisarmedByPong(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits past relayPingTimeoutMax; skipped in -short")
+	}
+	client := newFakeRelayClient()
+	var dials atomic.Int32
+	sk, _ := key.GenerateSecretKey()
+	a := NewRelayActor(RelayActorConfig{
+		SecretKey: sk,
+		dialer: func(context.Context, netaddr.RelayURL, relayclient.Options) (relayClient, error) {
+			dials.Add(1)
+			return client, nil
+		},
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go a.Run(ctx)
+
+	a.SetHomeRelay(testURL(t))
+
+	// Wait past the ping timeout. A connection that disarms the timeout on
+	// pong stays on its first dial; the buggy one tears down at ~5s and
+	// re-dials, so dials climbs above 1.
+	time.Sleep(relayPingTimeoutMax + 2*time.Second)
+	if n := dials.Load(); n != 1 {
+		t.Fatalf("relay re-dialed %d times; a live (auto-ponged) connection must dial exactly once (ping timeout was not disarmed on pong)", n)
 	}
 }
 
