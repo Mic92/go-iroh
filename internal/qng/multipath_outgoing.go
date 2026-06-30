@@ -254,13 +254,15 @@ type PathInfo struct {
 	BytesInFlight protocol.ByteCount
 	// HasBytesInFlight reports whether BytesInFlight was observed for this path.
 	HasBytesInFlight bool
-	// BytesSent is the cumulative application-data bytes sent on this path,
-	// when HasBytesSent is true.
+	// BytesSent is the cumulative 1-RTT/0-RTT application-data packet
+	// bytes sent on this path, when HasBytesSent is true. It excludes
+	// Initial/Handshake packets and UDP framing overhead.
 	BytesSent uint64
 	// HasBytesSent reports whether BytesSent was observed for this path.
 	HasBytesSent bool
-	// BytesReceived is the cumulative application-data bytes received on this
-	// path, when HasBytesReceived is true.
+	// BytesReceived is the cumulative 1-RTT/0-RTT application-data packet
+	// bytes received on this path, when HasBytesReceived is true. It excludes
+	// Initial/Handshake packets and UDP framing overhead.
 	BytesReceived uint64
 	// HasBytesReceived reports whether BytesReceived was observed for this path.
 	HasBytesReceived bool
