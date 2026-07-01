@@ -14,6 +14,7 @@ import (
 
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/internal/netreport"
+	"github.com/tmc/go-iroh/internal/portmapper"
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/internal/qng/qlog"
 	"github.com/tmc/go-iroh/internal/socket"
@@ -89,6 +90,9 @@ type config struct {
 	enableNetReport bool
 	netReport       netReportRunner
 	netReportEvery  time.Duration
+	natPMP          bool
+	natPMPGateway   netip.Addr
+	natPMPPort      uint16
 	keyLogWriter    io.Writer
 	transportConfig *QUICTransportConfig
 	pathSelector    socket.PathSelector
@@ -260,6 +264,28 @@ func WithRelayMode(mode relay.Mode) Option {
 func WithNetReport() Option {
 	return func(c *config) error {
 		c.enableNetReport = true
+		return nil
+	}
+}
+
+// WithNATPMP enables NAT-PMP UDP port mapping through gateway.
+//
+// NAT-PMP does not define a portable default-gateway discovery mechanism; pass
+// the IPv4 address of the gateway that should receive NAT-PMP requests.
+func WithNATPMP(gateway netip.Addr) Option {
+	return func(c *config) error {
+		if !gateway.IsValid() || !gateway.Is4() {
+			return errors.New("iroh: invalid nat-pmp gateway")
+		}
+		c.natPMP = true
+		c.natPMPGateway = gateway
+		return nil
+	}
+}
+
+func withNATPMPPort(port uint16) Option {
+	return func(c *config) error {
+		c.natPMPPort = port
 		return nil
 	}
 }
@@ -451,6 +477,9 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	ep.addrWatch = watch.NewValueFunc(ep.Addr(), endpointAddrEqual)
 	if ep.netReport != nil {
 		go ep.runNetReport(serveCtx, c.netReportEvery)
+	}
+	if c.natPMP {
+		go ep.runNATPMP(serveCtx, c.natPMPGateway, c.natPMPPort)
 	}
 	return ep, nil
 }
@@ -726,6 +755,61 @@ func (e *Endpoint) runNetReport(ctx context.Context, interval time.Duration) {
 			return
 		case <-t.C:
 			_ = e.refreshNetReport(ctx)
+		}
+	}
+}
+
+func (e *Endpoint) runNATPMP(ctx context.Context, gateway netip.Addr, port uint16) {
+	if e.disableIP {
+		return
+	}
+	local := e.LocalAddr()
+	if !local.IsValid() || local.Port() == 0 {
+		return
+	}
+	client := portmapper.NATPMPClient{
+		Gateway: gateway,
+		Port:    port,
+		Timeout: 2 * time.Second,
+	}
+	const requestedLifetime = time.Hour
+	internalPort := local.Port()
+	var current netip.AddrPort
+	defer func() {
+		if current.IsValid() {
+			e.RemoveExternalAddr(current)
+			deleteCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_, _ = client.MapUDP(deleteCtx, internalPort, current.Port(), 0)
+		}
+	}()
+
+	for {
+		mapping, err := client.MapUDP(ctx, internalPort, internalPort, requestedLifetime)
+		if err == nil && mapping.ExternalAddr.IsValid() {
+			if current.IsValid() && current != mapping.ExternalAddr {
+				e.RemoveExternalAddr(current)
+			}
+			current = mapping.ExternalAddr
+			e.AddExternalAddr(current)
+			e.metrics.netReportPortmapAttempts.Add(1)
+			e.metrics.netReportPortmapExternalAddressUpdated.Add(1)
+		} else if err != nil {
+			e.metrics.netReportFailed.Add(1)
+		}
+		wait := requestedLifetime / 2
+		if err == nil && mapping.Lifetime > 0 {
+			wait = mapping.Lifetime / 2
+		}
+		if wait < 30*time.Second {
+			wait = 30 * time.Second
+		}
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return
+		case <-t.C:
 		}
 	}
 }

@@ -3,6 +3,7 @@ package iroh
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"net"
 	"net/netip"
@@ -32,6 +33,58 @@ func withNetReportInterval(d time.Duration) Option {
 	return func(c *config) error {
 		c.netReportEvery = d
 		return nil
+	}
+}
+
+type endpointNATPMPServer struct {
+	conn    *net.UDPConn
+	port    uint16
+	deleted chan struct{}
+	once    sync.Once
+}
+
+func newEndpointNATPMPServer(t *testing.T) *endpointNATPMPServer {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.MustParseAddrPort("127.0.0.1:0")))
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	s := &endpointNATPMPServer{
+		conn:    conn,
+		port:    conn.LocalAddr().(*net.UDPAddr).AddrPort().Port(),
+		deleted: make(chan struct{}),
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	go s.serve()
+	return s
+}
+
+func (s *endpointNATPMPServer) serve() {
+	buf := make([]byte, 64)
+	for {
+		n, addr, err := s.conn.ReadFromUDP(buf)
+		if err != nil {
+			return
+		}
+		req := append([]byte(nil), buf[:n]...)
+		switch {
+		case len(req) == 2 && req[0] == 0 && req[1] == 0:
+			resp := make([]byte, 12)
+			resp[1] = 0x80
+			copy(resp[8:12], []byte{203, 0, 113, 20})
+			_, _ = s.conn.WriteToUDP(resp, addr)
+		case len(req) == 12 && req[0] == 0 && req[1] == 1:
+			lifetime := binary.BigEndian.Uint32(req[8:12])
+			if lifetime == 0 {
+				s.once.Do(func() { close(s.deleted) })
+			}
+			resp := make([]byte, 16)
+			resp[1] = 0x81
+			copy(resp[8:10], req[4:6])
+			binary.BigEndian.PutUint16(resp[10:12], 4321)
+			binary.BigEndian.PutUint32(resp[12:16], lifetime)
+			_, _ = s.conn.WriteToUDP(resp, addr)
+		}
 	}
 }
 
@@ -178,6 +231,45 @@ func TestEndpointLifecycleAddressSurface(t *testing.T) {
 	case <-ep.Closed():
 	case <-time.After(time.Second):
 		t.Fatal("Closed channel did not fire")
+	}
+}
+
+func TestEndpointNATPMPPublishesExternalAddr(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	gateway := newEndpointNATPMPServer(t)
+	ep, err := Bind(ctx,
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)),
+		WithNATPMP(netip.MustParseAddr("127.0.0.1")),
+		withNATPMPPort(gateway.port),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := ep.WatchAddr()
+	want := netip.MustParseAddrPort("203.0.113.20:4321")
+	for {
+		addr, err := w.Updated(ctx)
+		if err != nil {
+			t.Fatalf("WatchAddr: %v", err)
+		}
+		if containsAddrPort(addr.IPAddrs(), want) {
+			break
+		}
+	}
+	if err := ep.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	select {
+	case <-gateway.deleted:
+	case <-ctx.Done():
+		t.Fatal("nat-pmp delete request not observed")
+	}
+}
+
+func TestEndpointNATPMPRejectsInvalidGateway(t *testing.T) {
+	if err := WithNATPMP(netip.MustParseAddr("2001:db8::1"))(&config{}); err == nil {
+		t.Fatal("WithNATPMP IPv6 gateway error = nil")
 	}
 }
 
