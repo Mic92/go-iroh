@@ -1,10 +1,38 @@
 package docs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 )
+
+// NewFileStore opens a store that persists successful inserts to path.
+func NewFileStore(path string) (*MemoryStore, error) {
+	if path == "" {
+		return nil, errors.New("docs: empty store file path")
+	}
+	var store *MemoryStore
+	if _, err := os.Stat(path); err == nil {
+		loaded, err := LoadMemoryStoreFile(path)
+		if err != nil {
+			return nil, err
+		}
+		store = loaded
+	} else if errors.Is(err, os.ErrNotExist) {
+		store = NewMemoryStore()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("docs: create store dir: %w", err)
+		}
+		if err := store.SaveFile(path); err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, fmt.Errorf("docs: stat store file: %w", err)
+	}
+	store.persistPath = path
+	return store, nil
+}
 
 // SaveFile writes s to path atomically.
 func (s *MemoryStore) SaveFile(path string) error {

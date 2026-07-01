@@ -23,10 +23,12 @@ func (o InsertOutcome) Removed() int { return o.removed }
 
 // MemoryStore is an in-memory document entry store.
 type MemoryStore struct {
-	mu      sync.RWMutex
-	entries map[string]SignedEntry
-	events  *storeWatcher
-	seq     uint64
+	mu          sync.RWMutex
+	entries     map[string]SignedEntry
+	events      *storeWatcher
+	seq         uint64
+	persistPath string
+	persistErr  error
 }
 
 // NewMemoryStore returns an empty in-memory store.
@@ -252,10 +254,29 @@ func (s *MemoryStore) put(entry SignedEntry) InsertOutcome {
 // PutWithOrigin inserts entry with origin metadata for subscribers.
 func (s *MemoryStore) PutWithOrigin(entry SignedEntry, origin InsertOrigin) InsertOutcome {
 	outcome, event, events := s.putEntry(entry, origin, true)
+	if outcome.Inserted() && s.persistPath != "" {
+		s.setPersistError(s.SaveFile(s.persistPath))
+	}
 	if outcome.Inserted() && events != nil {
 		events.Send(event)
 	}
 	return outcome
+}
+
+// PersistError returns the last error from an automatic file-store save.
+func (s *MemoryStore) PersistError() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.persistErr
+}
+
+func (s *MemoryStore) setPersistError(err error) {
+	s.mu.Lock()
+	s.persistErr = err
+	s.mu.Unlock()
 }
 
 func (s *MemoryStore) contentReady(hash blobs.Hash) {

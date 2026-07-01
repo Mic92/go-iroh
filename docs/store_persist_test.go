@@ -130,6 +130,36 @@ func TestMemoryStoreFileRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFileStorePersistsInsert(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	path := filepath.Join(t.TempDir(), "docs.store")
+
+	store, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	entry := testSignedEntry(namespace, author, "k", testRecord("one", 1, 1))
+	if outcome := store.Put(entry); !outcome.Inserted() {
+		t.Fatal("Put did not insert")
+	}
+	if err := store.PersistError(); err != nil {
+		t.Fatalf("PersistError: %v", err)
+	}
+
+	reopened, err := NewFileStore(path)
+	if err != nil {
+		t.Fatalf("reopen NewFileStore: %v", err)
+	}
+	got, ok := reopened.GetExact(namespace.ID(), author.ID(), []byte("k"), false)
+	if !ok {
+		t.Fatal("reopened entry missing")
+	}
+	if !got.Equal(entry) {
+		t.Fatalf("reopened entry = %#v, want %#v", got, entry)
+	}
+}
+
 func TestMemoryStoreSnapshotErrors(t *testing.T) {
 	tests := []struct {
 		name string
