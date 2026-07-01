@@ -15,7 +15,7 @@ import (
 
 type echoRelayServer struct{ ts *httptest.Server }
 
-func newEchoRelayServer(t *testing.T) echoRelayServer {
+func newEchoRelayServer(t testing.TB) echoRelayServer {
 	t.Helper()
 	ts := httptest.NewServer(relayserver.New())
 	t.Cleanup(ts.Close)
@@ -23,7 +23,7 @@ func newEchoRelayServer(t *testing.T) echoRelayServer {
 }
 
 // url returns the relay URL clients dial.
-func (s echoRelayServer) url(t *testing.T) netaddr.RelayURL {
+func (s echoRelayServer) url(t testing.TB) netaddr.RelayURL {
 	t.Helper()
 	u, err := netaddr.ParseRelayURL(s.ts.URL)
 	if err != nil {
