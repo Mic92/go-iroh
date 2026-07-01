@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"net/netip"
 	"sort"
 	"sync"
@@ -155,19 +156,20 @@ type ResolvedAddr struct {
 	Provenance string
 }
 
-// ResolveFunc resolves additional transport addresses for a remote endpoint. It
+// ResolveFunc streams additional transport addresses for a remote endpoint. It
 // is supplied by the iroh package (which owns the address-lookup services) so
-// the socket package does not import iroh. It returns the resolved addresses, or
-// an error if lookup failed. A nil ResolveFunc disables lookup-driven resolution.
+// the socket package does not import iroh. A nil ResolveFunc disables
+// lookup-driven resolution.
 //
 // It is the hook for the Rust RemoteStateActor::resolve_remote path
 // (remote_state.rs:843), wired in slice G's address lookup.
-type ResolveFunc func(ctx context.Context, id key.EndpointID) ([]ResolvedAddr, error)
+type ResolveFunc func(ctx context.Context, id key.EndpointID) iter.Seq2[ResolvedAddr, error]
 
 // remoteMessage is the actor inbox message. Exactly one field is set.
 type remoteMessage struct {
 	addConnection *addConnectionMsg
 	resolve       *resolveMsg
+	resolved      *resolvedMsg
 	connClosed    Connection // a registered connection's Done fired
 }
 
@@ -183,6 +185,10 @@ type addConnectionMsg struct {
 type resolveMsg struct {
 	addrs netaddr.EndpointAddr
 	reply chan<- error
+}
+
+type resolvedMsg struct {
+	addr ResolvedAddr
 }
 
 // connState is the actor's per-connection bookkeeping.
@@ -286,8 +292,8 @@ func (a *RemoteStateActor) AddConnection(conn Connection) (events <-chan PathEve
 }
 
 // ResolveRemote asks the actor to resolve more addresses for addr via the
-// [ResolveFunc] and register them as candidate paths. It blocks until resolution
-// completes, returning the lookup error if any. With no resolver and no addrs it
+// [ResolveFunc] and register them as candidate paths as they arrive. It returns
+// once the resolver stream has been started. With no resolver and no addrs it
 // returns nil immediately.
 func (a *RemoteStateActor) ResolveRemote(addr netaddr.EndpointAddr) error {
 	reply := make(chan error, 1)
@@ -366,6 +372,8 @@ func (a *RemoteStateActor) handle(ctx context.Context, msg remoteMessage) {
 		a.handleAddConnection(msg.addConnection)
 	case msg.resolve != nil:
 		a.handleResolve(ctx, msg.resolve)
+	case msg.resolved != nil:
+		a.handleResolved(msg.resolved)
 	case msg.connClosed != nil:
 		a.handleConnClosed(msg.connClosed)
 	}
@@ -432,20 +440,48 @@ func (a *RemoteStateActor) handleResolve(ctx context.Context, m *resolveMsg) {
 		m.reply <- nil
 		return
 	}
-	addrs, err := a.resolve(ctx, m.addrs.ID)
-	if err != nil {
-		m.reply <- err
+	streamCtx, cancel := context.WithCancel(ctx)
+	seq := a.resolve(streamCtx, m.addrs.ID)
+	if seq == nil {
+		cancel()
+		m.reply <- nil
 		return
 	}
-	a.mu.Lock()
-	for _, resolved := range addrs {
-		if pa, ok := transportToAddr(resolved.Addr, a.id); ok {
-			a.paths.AddWithProvenance(pa, resolved.Provenance)
+	go func() {
+		select {
+		case <-a.done:
+			cancel()
+		case <-streamCtx.Done():
 		}
+	}()
+	go a.runResolveStream(streamCtx, cancel, seq)
+	m.reply <- nil
+}
+
+func (a *RemoteStateActor) runResolveStream(ctx context.Context, cancel context.CancelFunc, seq iter.Seq2[ResolvedAddr, error]) {
+	defer cancel()
+	for addr, err := range seq {
+		if err != nil {
+			continue
+		}
+		select {
+		case a.inbox <- remoteMessage{resolved: &resolvedMsg{addr: addr}}:
+		case <-a.done:
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (a *RemoteStateActor) handleResolved(m *resolvedMsg) {
+	a.mu.Lock()
+	if pa, ok := transportToAddr(m.addr.Addr, a.id); ok {
+		a.paths.AddWithProvenance(pa, m.addr.Provenance)
 	}
 	a.paths.Prune()
 	a.mu.Unlock()
-	m.reply <- nil
+	a.reselect()
 }
 
 // handleConnClosed handles a connection closing: it removes the connection,

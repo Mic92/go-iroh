@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net"
 	"net/netip"
 	"slices"
@@ -1241,6 +1242,9 @@ func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn) (*socket.R
 	addr := e.sock.PathAddr(remote, qc.RemoteAddr())
 	adapter := newConnAdapter(qc, addr)
 	_, actor := e.remotes.AddConnectionActor(remote, adapter)
+	go func() {
+		_ = e.remotes.ResolveRemote(netaddr.NewEndpointAddr(remote))
+	}()
 	if !qc.ConnectionState().MultipathNegotiated {
 		return actor, adapter
 	}
@@ -1285,25 +1289,25 @@ func (e *Endpoint) resolveFunc() socket.ResolveFunc {
 	if lookup == nil {
 		return nil
 	}
-	return func(ctx context.Context, id key.EndpointID) ([]socket.ResolvedAddr, error) {
-		var addrs []socket.ResolvedAddr
-		var lastErr error
-		for item, err := range lookup.Resolve(ctx, id) {
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			for _, addr := range item.Addr().Addrs() {
-				addrs = append(addrs, socket.ResolvedAddr{
-					Addr:       addr,
-					Provenance: item.Provenance(),
-				})
+	return func(ctx context.Context, id key.EndpointID) iter.Seq2[socket.ResolvedAddr, error] {
+		return func(yield func(socket.ResolvedAddr, error) bool) {
+			for item, err := range lookup.Resolve(ctx, id) {
+				if err != nil {
+					if !yield(socket.ResolvedAddr{}, err) {
+						return
+					}
+					continue
+				}
+				for _, addr := range item.Addr().Addrs() {
+					if !yield(socket.ResolvedAddr{
+						Addr:       addr,
+						Provenance: item.Provenance(),
+					}, nil) {
+						return
+					}
+				}
 			}
 		}
-		if len(addrs) == 0 && lastErr != nil {
-			return nil, lastErr
-		}
-		return addrs, nil
 	}
 }
 

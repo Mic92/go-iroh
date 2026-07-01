@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"iter"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -465,8 +466,14 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	resolved := []ResolvedAddr{
 		{Addr: netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 7)}, Provenance: "test_lookup"},
 	}
-	resolve := func(ctx context.Context, id key.EndpointID) ([]ResolvedAddr, error) {
-		return resolved, nil
+	resolve := func(ctx context.Context, id key.EndpointID) iter.Seq2[ResolvedAddr, error] {
+		return func(yield func(ResolvedAddr, error) bool) {
+			for _, addr := range resolved {
+				if !yield(addr, nil) {
+					return
+				}
+			}
+		}
 	}
 	m := newRemoteMap(ctx, BiasedRttPathSelector{}, resolve, time.Second, nil)
 	id := testEndpointID(t)
@@ -487,11 +494,8 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	// a selected path it only sends to one, so check the path state directly.
 	a := m.Actor(id)
 	want := IPAddr(netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 7))
-	a.mu.Lock()
-	_, known := a.paths.Status(want)
-	a.mu.Unlock()
-	if !known {
-		t.Errorf("resolved path %s was not added as a candidate", want)
+	if !waitForActorPath(a, want, time.Second) {
+		t.Fatalf("resolved path %s was not added as a candidate", want)
 	}
 	info, ok := m.RemoteInfo(id)
 	if !ok {
@@ -508,6 +512,65 @@ func TestActorResolveAddsPaths(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("RemoteInfo addrs = %+v, want resolved addr", info.Addrs)
+	}
+}
+
+func TestActorResolveStreamsPathsAfterReturn(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	second := make(chan ResolvedAddr, 1)
+	resolve := func(ctx context.Context, id key.EndpointID) iter.Seq2[ResolvedAddr, error] {
+		return func(yield func(ResolvedAddr, error) bool) {
+			first := ResolvedAddr{
+				Addr:       netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{1, 2, 3, 4}), 7)},
+				Provenance: "first",
+			}
+			if !yield(first, nil) {
+				return
+			}
+			select {
+			case addr := <-second:
+				yield(addr, nil)
+			case <-ctx.Done():
+			}
+		}
+	}
+	m := newRemoteMap(ctx, BiasedRttPathSelector{}, resolve, time.Second, nil)
+	id := testEndpointID(t)
+	c := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	defer c.Close()
+	m.AddConnection(id, c)
+
+	if err := m.ResolveRemote(netaddr.NewEndpointAddr(id)); err != nil {
+		t.Fatalf("ResolveRemote: %v", err)
+	}
+	later := ResolvedAddr{
+		Addr:       netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.AddrFrom4([4]byte{5, 6, 7, 8}), 9)},
+		Provenance: "later",
+	}
+	second <- later
+
+	want := IPAddr(netip.AddrPortFrom(netip.AddrFrom4([4]byte{5, 6, 7, 8}), 9))
+	if !waitForActorPath(m.Actor(id), want, time.Second) {
+		t.Fatalf("streamed path %s was not added", want)
+	}
+}
+
+func waitForActorPath(a *RemoteStateActor, want Addr, timeout time.Duration) bool {
+	deadline := time.After(timeout)
+	for {
+		a.mu.Lock()
+		_, known := a.paths.Status(want)
+		a.mu.Unlock()
+		if known {
+			return true
+		}
+		select {
+		case <-deadline:
+			return false
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 

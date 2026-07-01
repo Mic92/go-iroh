@@ -409,7 +409,7 @@ func TestEndpointWithAddressLookup(t *testing.T) {
 	if resolve == nil {
 		t.Fatal("resolveFunc() = nil with WithAddressLookup, want non-nil")
 	}
-	addrs, err := resolve(ctx, id)
+	addrs, err := drainResolved(ctx, resolve, id)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -479,13 +479,29 @@ func TestEndpointWithDNSResolver(t *testing.T) {
 	if resolve == nil {
 		t.Fatal("resolveFunc() = nil with WithDNSResolver")
 	}
-	addrs, err := resolve(ctx, id)
+	addrs, err := drainResolved(ctx, resolve, id)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if len(addrs) != 1 {
 		t.Fatalf("resolved addrs = %v, want one", addrs)
 	}
+}
+
+func drainResolved(ctx context.Context, resolve socket.ResolveFunc, id key.EndpointID) ([]socket.ResolvedAddr, error) {
+	var addrs []socket.ResolvedAddr
+	var lastErr error
+	for addr, err := range resolve(ctx, id) {
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		addrs = append(addrs, addr)
+	}
+	if len(addrs) == 0 && lastErr != nil {
+		return nil, lastErr
+	}
+	return addrs, nil
 }
 
 func TestEndpointWithTransportConfig(t *testing.T) {
