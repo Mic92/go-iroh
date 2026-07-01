@@ -113,7 +113,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		msg, err := relayproto.ParseClientToRelayMsg(data)
+		msg, err := relayproto.ParseClientToRelayMsgNoCopy(data)
 		if err != nil {
 			conn.Close(websocket.StatusProtocolError, "bad relay frame")
 			return

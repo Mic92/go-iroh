@@ -44,6 +44,14 @@ func (d Datagrams) encodedLen() int {
 // datagramsFromBytes decodes a Datagrams payload. isBatch selects whether a
 // 2-byte segment size precedes the contents.
 func datagramsFromBytes(b []byte, isBatch bool) (Datagrams, error) {
+	return datagramsFromBytesCopy(b, isBatch, true)
+}
+
+func datagramsFromBytesNoCopy(b []byte, isBatch bool) (Datagrams, error) {
+	return datagramsFromBytesCopy(b, isBatch, false)
+}
+
+func datagramsFromBytesCopy(b []byte, isBatch, copyContents bool) (Datagrams, error) {
 	if isBatch {
 		if len(b) < 3 {
 			return Datagrams{}, ErrInvalidFrame
@@ -58,5 +66,8 @@ func datagramsFromBytes(b []byte, isBatch bool) (Datagrams, error) {
 		segSize = uint16(b[0])<<8 | uint16(b[1])
 		b = b[2:]
 	}
-	return Datagrams{Ecn: ecn, SegmentSize: segSize, Contents: bytes.Clone(b)}, nil
+	if copyContents {
+		b = bytes.Clone(b)
+	}
+	return Datagrams{Ecn: ecn, SegmentSize: segSize, Contents: b}, nil
 }

@@ -144,6 +144,16 @@ func (m RelayToClientMsg) frameType() FrameType {
 // ParseRelayToClientMsg decodes a relay-to-client message. version gates the
 // deprecated Health (V1 only) and Status (V2+) frames.
 func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClientMsg, error) {
+	return parseRelayToClientMsg(content, version, false)
+}
+
+// ParseRelayToClientMsgNoCopy decodes a relay-to-client message without
+// copying datagram contents. The returned message aliases content.
+func ParseRelayToClientMsgNoCopy(content []byte, version ProtocolVersion) (RelayToClientMsg, error) {
+	return parseRelayToClientMsg(content, version, true)
+}
+
+func parseRelayToClientMsg(content []byte, version ProtocolVersion, noCopy bool) (RelayToClientMsg, error) {
 	ft, rest, err := readFrameType(content)
 	if err != nil {
 		return RelayToClientMsg{}, err
@@ -160,7 +170,7 @@ func ParseRelayToClientMsg(content []byte, version ProtocolVersion) (RelayToClie
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
-		dg, err := datagramsFromBytes(rest[key.PublicKeySize:], ft == FrameRelayToClientDatagramBat)
+		dg, err := parseDatagrams(rest[key.PublicKeySize:], ft == FrameRelayToClientDatagramBat, noCopy)
 		if err != nil {
 			return RelayToClientMsg{}, err
 		}
@@ -255,6 +265,16 @@ func (m ClientToRelayMsg) frameType() FrameType {
 
 // ParseClientToRelayMsg decodes a client-to-relay message.
 func ParseClientToRelayMsg(content []byte) (ClientToRelayMsg, error) {
+	return parseClientToRelayMsg(content, false)
+}
+
+// ParseClientToRelayMsgNoCopy decodes a client-to-relay message without
+// copying datagram contents. The returned message aliases content.
+func ParseClientToRelayMsgNoCopy(content []byte) (ClientToRelayMsg, error) {
+	return parseClientToRelayMsg(content, true)
+}
+
+func parseClientToRelayMsg(content []byte, noCopy bool) (ClientToRelayMsg, error) {
 	ft, rest, err := readFrameType(content)
 	if err != nil {
 		return ClientToRelayMsg{}, err
@@ -271,7 +291,7 @@ func ParseClientToRelayMsg(content []byte) (ClientToRelayMsg, error) {
 		if err != nil {
 			return ClientToRelayMsg{}, err
 		}
-		dg, err := datagramsFromBytes(rest[key.PublicKeySize:], ft == FrameClientToRelayDatagramBat)
+		dg, err := parseDatagrams(rest[key.PublicKeySize:], ft == FrameClientToRelayDatagramBat, noCopy)
 		if err != nil {
 			return ClientToRelayMsg{}, err
 		}
@@ -286,4 +306,11 @@ func ParseClientToRelayMsg(content []byte) (ClientToRelayMsg, error) {
 	default:
 		return ClientToRelayMsg{}, fmt.Errorf("%w: %s", ErrUnknownFrameType, ft)
 	}
+}
+
+func parseDatagrams(b []byte, isBatch, noCopy bool) (Datagrams, error) {
+	if noCopy {
+		return datagramsFromBytesNoCopy(b, isBatch)
+	}
+	return datagramsFromBytes(b, isBatch)
 }

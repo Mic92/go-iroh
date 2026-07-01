@@ -161,7 +161,7 @@ func (c *Client) Recv(ctx context.Context) (relayproto.RelayToClientMsg, error) 
 	if err != nil {
 		return relayproto.RelayToClientMsg{}, err
 	}
-	return relayproto.ParseRelayToClientMsg(data, c.version)
+	return relayproto.ParseRelayToClientMsgNoCopy(data, c.version)
 }
 
 // Close closes the relay connection.
