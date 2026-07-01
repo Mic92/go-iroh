@@ -4,6 +4,7 @@ import (
 	"net/netip"
 	"testing"
 	"testing/synctest"
+	"time"
 )
 
 func ev(kind PathEventKind, port uint16) PathEvent {
@@ -53,15 +54,34 @@ func TestPathWatcherLag(t *testing.T) {
 	for i := 0; i < total; i++ {
 		w.Send(ev(PathEventOpened, uint16(i)))
 	}
-	// Closing lets the delivery goroutine drain its ring and then close ch, so we
-	// can read to completion deterministically.
-	w.Close()
-
 	var (
 		lagged    int
 		missed    uint64
 		delivered []uint16
 	)
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case got := <-ch:
+			switch got.Kind {
+			case PathEventLagged:
+				lagged++
+				missed += got.Missed
+			case PathEventOpened:
+				ap, _ := got.Addr.IP()
+				delivered = append(delivered, ap.Port())
+				if ap.Port() == total-1 {
+					cancel()
+					goto done
+				}
+			default:
+				t.Fatalf("unexpected event kind %v", got.Kind)
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for newest event, delivered=%v missed=%d", delivered, missed)
+		}
+	}
+done:
 	for got := range ch {
 		switch got.Kind {
 		case PathEventLagged:

@@ -24,22 +24,9 @@ func TestVerifySourceAddressRetriesBeforeConnectionConstruction(t *testing.T) {
 	defer udpConn.Close()
 
 	var verifyCalls atomic.Int32
-	tr := &Transport{
-		Conn: udpConn,
-		VerifySourceAddress: func(net.Addr) bool {
-			verifyCalls.Add(1)
-			return true
-		},
-	}
-	ln, err := tr.ListenEarly(serverTLS, &Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-
 	var newConnCalls atomic.Int32
-	origNewConn := ln.baseServer.newConn
-	ln.baseServer.newConn = func(
+	origNewConn := newConnection
+	newConnection = func(
 		ctx context.Context,
 		cancel context.CancelCauseFunc,
 		sendConn sendConn,
@@ -72,6 +59,20 @@ func TestVerifySourceAddressRetriesBeforeConnectionConstruction(t *testing.T) {
 		newConnCalls.Add(1)
 		return origNewConn(ctx, cancel, sendConn, connRunner, origDestConnID, retrySrcConnID, clientDestConnID, destConnID, srcConnID, connIDGenerator, statelessResetter, config, tlsConf, tokenGenerator, clientAddrValidated, createdAt, tracer, logger, v)
 	}
+	t.Cleanup(func() { newConnection = origNewConn })
+
+	tr := &Transport{
+		Conn: udpConn,
+		VerifySourceAddress: func(net.Addr) bool {
+			verifyCalls.Add(1)
+			return true
+		},
+	}
+	ln, err := tr.ListenEarly(serverTLS, &Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
