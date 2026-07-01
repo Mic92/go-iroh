@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"lukechampine.com/blake3/bao"
@@ -95,6 +97,54 @@ func TestFSStoreServesBlob(t *testing.T) {
 	}
 }
 
+func TestFSStoreImportFileCopy(t *testing.T) {
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	data := bytes.Repeat([]byte("import file copy"), 4096)
+	path := writeTempBlobFile(t, data)
+
+	hash, err := store.ImportFile(path, ImportCopy)
+	if err != nil {
+		t.Fatalf("ImportFile: %v", err)
+	}
+	if want := NewHash(data); hash != want {
+		t.Fatalf("ImportFile hash = %s, want %s", hash, want)
+	}
+	got, ok := store.GetBlob(hash)
+	if !ok {
+		t.Fatal("GetBlob = false, want true")
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("GetBlob data mismatch")
+	}
+}
+
+func TestFSStoreImportFileTryReference(t *testing.T) {
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	data := bytes.Repeat([]byte("import file reference"), 4096)
+	path := writeTempBlobFile(t, data)
+
+	hash, err := store.ImportFile(path, ImportTryReference)
+	if err != nil {
+		t.Fatalf("ImportFile: %v", err)
+	}
+	if want := NewHash(data); hash != want {
+		t.Fatalf("ImportFile hash = %s, want %s", hash, want)
+	}
+	got, ok := store.GetBlob(hash)
+	if !ok {
+		t.Fatal("GetBlob = false, want true")
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatal("GetBlob data mismatch")
+	}
+}
+
 func TestFSStoreHonorsCanceledContext(t *testing.T) {
 	store, err := NewFSStore(t.TempDir())
 	if err != nil {
@@ -109,4 +159,13 @@ func TestFSStoreHonorsCanceledContext(t *testing.T) {
 	if _, _, err := store.Get(ctx, hash); err == nil {
 		t.Fatal("Get canceled context error = nil")
 	}
+}
+
+func writeTempBlobFile(t *testing.T, data []byte) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "blob.data")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
