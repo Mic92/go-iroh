@@ -22,6 +22,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/tmc/go-iroh/blobs"
+	"github.com/tmc/go-iroh/docs"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
@@ -160,6 +161,59 @@ func TestBrowserBlobRelayOnlyFetch(t *testing.T) {
 	}
 	if status != "pass" {
 		t.Fatalf("browser blob fetch status=%q detail=%q", status, detail)
+	}
+}
+
+func TestBrowserDocsRelayOnlySync(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	ts := newWASMRelayServer(t, ctx)
+	defer ts.Close()
+	relayURL, err := netaddr.ParseRelayURL(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
+	namespace := docs.NewNamespaceSecret(repeat32Native(0xb2))
+	author := docs.NewAuthor(repeat32Native(0xa1))
+	serverEntry := docSignedEntryNative(namespace, author, "server", "server-data", 1)
+
+	serverStore := docs.NewMemoryStore()
+	serverStore.Put(serverEntry)
+	server, err := iroh.Bind(ctx,
+		iroh.WithRelayMode(mode),
+		iroh.WithoutIPTransports(),
+		iroh.WithTransportConfig(shortKeepAliveNative()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		docs.ALPN: &docs.Handler{Store: serverStore},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Shutdown(ctx)
+	if err := server.Online(ctx); err != nil {
+		t.Fatalf("server online: %v", err)
+	}
+
+	q := url.Values{
+		"relay": {ts.URL + "/"},
+		"mode":  {"docs-native"},
+		"peer":  {server.ID().String()},
+	}
+	status, detail, err := runHeadless(ctx, t, ts.URL+"/?"+q.Encode())
+	if err != nil {
+		t.Fatalf("headless browser: %v", err)
+	}
+	if status != "pass" {
+		t.Fatalf("browser docs sync status=%q detail=%q", status, detail)
+	}
+	if _, ok := serverStore.GetExact(namespace.ID(), author.ID(), []byte("client"), false); !ok {
+		t.Fatal("server missing browser client entry")
 	}
 }
 
@@ -324,6 +378,20 @@ func blobPayloadNative(n int) []byte {
 		p[i] = byte(11 + i*17)
 	}
 	return p
+}
+
+func docSignedEntryNative(namespace docs.NamespaceSecret, author docs.Author, keyName, data string, timestamp uint64) docs.SignedEntry {
+	hash := blobs.NewHash([]byte(data))
+	id := docs.NewRecordIdentifier(namespace.ID(), author.ID(), []byte(keyName))
+	return docs.NewSignedEntry(docs.NewEntry(id, docs.NewRecord(hash, uint64(len(data)), timestamp)), namespace, author)
+}
+
+func repeat32Native(b byte) [32]byte {
+	var out [32]byte
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }
 
 func writeFrameNative(w io.Writer, p []byte) error {

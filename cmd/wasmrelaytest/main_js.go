@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/blobs"
+	"github.com/tmc/go-iroh/docs"
 	"github.com/tmc/go-iroh/gossip"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
@@ -48,6 +49,8 @@ func run() error {
 	switch values.Get("mode") {
 	case "blob-native":
 		return runBlobNative(ctx, values, relayURL, mode)
+	case "docs-native":
+		return runDocsNative(ctx, values, relayURL, mode)
 	case "gossip-browser":
 		return runGossipBrowser(ctx, relayURL, mode)
 	case "browser-native":
@@ -161,6 +164,52 @@ func runBrowserNative(ctx context.Context, values url.Values, relayURL netaddr.R
 	}
 	if err := exchangeFrames(ctx, stream); err != nil {
 		return err
+	}
+	return nil
+}
+
+func runDocsNative(ctx context.Context, values url.Values, relayURL netaddr.RelayURL, mode relay.Mode) error {
+	peer := values.Get("peer")
+	if peer == "" {
+		return fmt.Errorf("missing peer query")
+	}
+	id, err := key.ParseEndpointID(peer)
+	if err != nil {
+		return fmt.Errorf("parse peer id: %w", err)
+	}
+	namespace := docs.NewNamespaceSecret(repeat32(0xb2))
+	author := docs.NewAuthor(repeat32(0xa1))
+	serverEntry := docSignedEntry(namespace, author, "server", "server-data", 1)
+	clientEntry := docSignedEntry(namespace, author, "client", "client-data", 1)
+	clientStore := docs.NewMemoryStore()
+	clientStore.Put(clientEntry)
+
+	client, err := iroh.Bind(ctx,
+		iroh.WithRelayMode(mode),
+		iroh.WithoutIPTransports(),
+		iroh.WithTransportConfig(shortKeepAlive()),
+	)
+	if err != nil {
+		return fmt.Errorf("bind docs client: %w", err)
+	}
+	defer client.Shutdown(ctx)
+	if err := client.Online(ctx); err != nil {
+		return fmt.Errorf("docs client online: %w", err)
+	}
+	addr := netaddr.NewEndpointAddr(id).WithRelayURL(relayURL)
+	outcome, err := docs.Sync(ctx, client, addr, namespace.ID(), clientStore, nil, docs.DefaultSyncConfig())
+	if err != nil {
+		return fmt.Errorf("docs sync: %w", err)
+	}
+	if outcome.NumSent == 0 || outcome.NumRecv == 0 {
+		return fmt.Errorf("docs sync outcome = %+v, want sent and received entries", outcome)
+	}
+	got, ok := clientStore.GetExact(namespace.ID(), author.ID(), []byte("server"), false)
+	if !ok {
+		return fmt.Errorf("docs client missing server entry")
+	}
+	if got.Entry.Compare(serverEntry.Entry) != 0 {
+		return fmt.Errorf("docs server entry mismatch")
 	}
 	return nil
 }
@@ -375,6 +424,20 @@ func blobPayload(n int) []byte {
 		p[i] = byte(11 + i*17)
 	}
 	return p
+}
+
+func docSignedEntry(namespace docs.NamespaceSecret, author docs.Author, keyName, data string, timestamp uint64) docs.SignedEntry {
+	hash := blobs.NewHash([]byte(data))
+	id := docs.NewRecordIdentifier(namespace.ID(), author.ID(), []byte(keyName))
+	return docs.NewSignedEntry(docs.NewEntry(id, docs.NewRecord(hash, uint64(len(data)), timestamp)), namespace, author)
+}
+
+func repeat32(b byte) [32]byte {
+	var out [32]byte
+	for i := range out {
+		out[i] = b
+	}
+	return out
 }
 
 func writeFrame(w io.Writer, p []byte) error {
