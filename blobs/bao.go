@@ -46,6 +46,12 @@ func EncodeBlob(data []byte) (Hash, []byte, error) {
 func DecodeBlob(expected Hash, encoded []byte) ([]byte, error) {
 	r := bytes.NewReader(encoded)
 	var out bytes.Buffer
+	if len(encoded) >= 8 {
+		size := binary.LittleEndian.Uint64(encoded[:8])
+		if size <= uint64(len(encoded)) {
+			out.Grow(int(size))
+		}
+	}
 	if err := DecodeBlobToWriter(expected, r, &out); err != nil {
 		return nil, err
 	}
