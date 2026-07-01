@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"strconv"
 	"syscall/js"
 	"time"
 
+	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
@@ -43,6 +45,8 @@ func run() error {
 	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
 
 	switch values.Get("mode") {
+	case "blob-native":
+		return runBlobNative(ctx, values, relayURL, mode)
 	case "browser-native":
 		return runBrowserNative(ctx, values, relayURL, mode)
 	default:
@@ -158,6 +162,56 @@ func runBrowserNative(ctx context.Context, values url.Values, relayURL netaddr.R
 	return nil
 }
 
+func runBlobNative(ctx context.Context, values url.Values, relayURL netaddr.RelayURL, mode relay.Mode) error {
+	peer := values.Get("peer")
+	if peer == "" {
+		return fmt.Errorf("missing peer query")
+	}
+	id, err := key.ParseEndpointID(peer)
+	if err != nil {
+		return fmt.Errorf("parse peer id: %w", err)
+	}
+	size, err := strconv.Atoi(values.Get("size"))
+	if err != nil || size <= 0 {
+		return fmt.Errorf("invalid size query %q", values.Get("size"))
+	}
+	want := blobPayload(size)
+	hash := blobs.NewHash(want)
+
+	client, err := iroh.Bind(ctx,
+		iroh.WithRelayMode(mode),
+		iroh.WithoutIPTransports(),
+		iroh.WithTransportConfig(shortKeepAlive()),
+	)
+	if err != nil {
+		return fmt.Errorf("bind blob client: %w", err)
+	}
+	defer client.Shutdown(ctx)
+	if err := client.Online(ctx); err != nil {
+		return fmt.Errorf("blob client online: %w", err)
+	}
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(id).WithRelayURL(relayURL), blobs.ALPN)
+	if err != nil {
+		return fmt.Errorf("connect blob provider: %w", err)
+	}
+	defer conn.CloseWithError(0, "")
+	stream, err := conn.OpenStreamSync(ctx)
+	if err != nil {
+		return fmt.Errorf("open blob stream: %w", err)
+	}
+	got, err := blobs.GetBlobBytes(ctx, stream, hash)
+	if err != nil {
+		return fmt.Errorf("get blob: %w", err)
+	}
+	if string(got) != string(want) {
+		return fmt.Errorf("blob length = %d, want %d", len(got), len(want))
+	}
+	if gotHash := blobs.NewHash(got); gotHash != hash {
+		return fmt.Errorf("blob hash = %s, want %s", gotHash, hash)
+	}
+	return nil
+}
+
 func shortKeepAlive() *iroh.QUICTransportConfig {
 	return &iroh.QUICTransportConfig{
 		KeepAlivePeriod: 200 * time.Millisecond,
@@ -206,6 +260,14 @@ func payload(seed int) []byte {
 	p := make([]byte, 64*1024+seed%17)
 	for i := range p {
 		p[i] = byte(seed + i*31)
+	}
+	return p
+}
+
+func blobPayload(n int) []byte {
+	p := make([]byte, n)
+	for i := range p {
+		p[i] = byte(11 + i*17)
 	}
 	return p
 }

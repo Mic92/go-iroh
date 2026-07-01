@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
@@ -99,6 +100,66 @@ func TestBrowserNativeRelayOnlyEcho(t *testing.T) {
 	}
 	if err := <-errc; err != nil {
 		t.Fatalf("native server: %v", err)
+	}
+}
+
+func TestBrowserBlobRelayOnlyFetch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	ts := newWASMRelayServer(t, ctx)
+	defer ts.Close()
+	relayURL, err := netaddr.ParseRelayURL(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
+	const size = 70 * 1024
+	data := blobPayloadNative(size)
+	hash := blobs.NewHash(data)
+
+	server, err := iroh.Bind(ctx,
+		iroh.WithRelayMode(mode),
+		iroh.WithoutIPTransports(),
+		iroh.WithTransportConfig(shortKeepAliveNative()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		blobs.ALPN: iroh.ProtocolHandlerFunc(func(ctx context.Context, conn *iroh.Conn) error {
+			stream, err := conn.AcceptStream(ctx)
+			if err != nil {
+				return err
+			}
+			return blobs.ServeBlob(ctx, stream, blobs.StoreFunc(func(got blobs.Hash) ([]byte, bool) {
+				if got != hash {
+					return nil, false
+				}
+				return append([]byte(nil), data...), true
+			}))
+		}),
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer router.Shutdown(ctx)
+	if err := server.Online(ctx); err != nil {
+		t.Fatalf("server online: %v", err)
+	}
+
+	q := url.Values{
+		"relay": {ts.URL + "/"},
+		"mode":  {"blob-native"},
+		"peer":  {server.ID().String()},
+		"size":  {fmt.Sprint(size)},
+	}
+	status, detail, err := runHeadless(ctx, t, ts.URL+"/?"+q.Encode())
+	if err != nil {
+		t.Fatalf("headless browser: %v", err)
+	}
+	if status != "pass" {
+		t.Fatalf("browser blob fetch status=%q detail=%q", status, detail)
 	}
 }
 
@@ -234,6 +295,14 @@ func payloadNative(seed int) []byte {
 	p := make([]byte, 64*1024+seed%17)
 	for i := range p {
 		p[i] = byte(seed + i*31)
+	}
+	return p
+}
+
+func blobPayloadNative(n int) []byte {
+	p := make([]byte, n)
+	for i := range p {
+		p[i] = byte(11 + i*17)
 	}
 	return p
 }
