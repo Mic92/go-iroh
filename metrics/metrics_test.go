@@ -74,6 +74,53 @@ func TestRegistryWriteStructuredOpenMetrics(t *testing.T) {
 	}
 }
 
+func TestRegistryWriteFamilyOpenMetrics(t *testing.T) {
+	r := NewRegistry()
+	f := NewFamily("connections", CounterMetric, "family", "state")
+	quic, err := f.With("quic", "open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcp, err := f.With("tcp", "closed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	quic.Add(2)
+	tcp.Add(1)
+	if err := r.Register("endpoint", f); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := r.WriteOpenMetrics(&buf); err != nil {
+		t.Fatal(err)
+	}
+	want := "# TYPE endpoint_connections counter\n" +
+		"endpoint_connections_total{family=\"quic\",state=\"open\"} 2\n" +
+		"endpoint_connections_total{family=\"tcp\",state=\"closed\"} 1\n" +
+		"# EOF\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("OpenMetrics = %q, want %q", got, want)
+	}
+}
+
+func TestFamilyRejectsWrongLabelCount(t *testing.T) {
+	f := NewFamily("connections", CounterMetric, "family", "state")
+	if _, err := f.With("quic"); err == nil {
+		t.Fatal("With accepted wrong label count")
+	}
+}
+
+func ExampleNewFamily() {
+	f := NewFamily("connections", CounterMetric, "family")
+	quic, _ := f.With("quic")
+	quic.Add(2)
+
+	r := NewRegistry()
+	_ = r.Register("endpoint", f)
+	_ = r.WriteOpenMetrics(io.Discard)
+}
+
 func TestRegistryRejectsUnknownMetricType(t *testing.T) {
 	r := NewRegistry()
 	if err := r.Register("bad", structuredSource{"value": {Type: "unknown"}}); err != nil {

@@ -35,9 +35,17 @@ type HistogramBucket struct {
 	Count uint64
 }
 
+// Label is one OpenMetrics label on a sample.
+type Label struct {
+	Name  string
+	Value string
+}
+
 // MetricValue is one metric sample in a [StructuredSnapshot].
 type MetricValue struct {
+	Name    string
 	Type    MetricType
+	Labels  []Label
 	Counter uint64
 	Gauge   float64
 	Sum     float64
@@ -141,11 +149,17 @@ func (r *Registry) WriteOpenMetrics(w io.Writer) error {
 			names = append(names, name)
 		}
 		sort.Strings(names)
+		typed := make(map[string]bool)
 		for _, name := range names {
+			value := snap[name]
 			metricName := cleanName(prefix + "_" + name)
-			if err := writeMetric(w, metricName, snap[name]); err != nil {
+			if value.Name != "" {
+				metricName = cleanName(prefix + "_" + value.Name)
+			}
+			if err := writeMetric(w, metricName, value, !typed[metricName]); err != nil {
 				return err
 			}
+			typed[metricName] = true
 		}
 	}
 	if _, err := io.WriteString(w, "# EOF\n"); err != nil {
@@ -170,44 +184,81 @@ func structuredSnapshot(source any) StructuredSnapshot {
 	return out
 }
 
-func writeMetric(w io.Writer, name string, value MetricValue) error {
+func writeMetric(w io.Writer, name string, value MetricValue, writeType bool) error {
 	switch value.Type {
 	case "", CounterMetric:
-		_, err := fmt.Fprintf(w, "# TYPE %s counter\n%s_total %d\n", name, name, value.Counter)
+		if writeType {
+			if _, err := fmt.Fprintf(w, "# TYPE %s counter\n", name); err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintf(w, "%s_total%s %d\n", name, formatLabels(value.Labels), value.Counter)
 		return err
 	case GaugeMetric:
-		_, err := fmt.Fprintf(w, "# TYPE %s gauge\n%s %s\n", name, name, formatFloat(value.Gauge))
+		if writeType {
+			if _, err := fmt.Fprintf(w, "# TYPE %s gauge\n", name); err != nil {
+				return err
+			}
+		}
+		_, err := fmt.Fprintf(w, "%s%s %s\n", name, formatLabels(value.Labels), formatFloat(value.Gauge))
 		return err
 	case HistogramMetric:
-		return writeHistogram(w, name, value)
+		return writeHistogram(w, name, value, writeType)
 	default:
 		return fmt.Errorf("metrics: unknown metric type %q", value.Type)
 	}
 }
 
-func writeHistogram(w io.Writer, name string, value MetricValue) error {
+func writeHistogram(w io.Writer, name string, value MetricValue, writeType bool) error {
 	buckets := append([]HistogramBucket(nil), value.Buckets...)
 	sort.Slice(buckets, func(i, j int) bool {
 		return buckets[i].Le < buckets[j].Le
 	})
-	if _, err := fmt.Fprintf(w, "# TYPE %s histogram\n", name); err != nil {
-		return err
+	if writeType {
+		if _, err := fmt.Fprintf(w, "# TYPE %s histogram\n", name); err != nil {
+			return err
+		}
 	}
 	for _, b := range buckets {
-		if _, err := fmt.Fprintf(w, "%s_bucket{le=%q} %d\n", name, formatBucket(b.Le), b.Count); err != nil {
+		if _, err := fmt.Fprintf(w, "%s_bucket%s %d\n", name, formatLabels(appendLabel(value.Labels, Label{Name: "le", Value: formatBucket(b.Le)})), b.Count); err != nil {
 			return err
 		}
 	}
 	if len(buckets) == 0 || !math.IsInf(buckets[len(buckets)-1].Le, 1) {
-		if _, err := fmt.Fprintf(w, "%s_bucket{le=\"+Inf\"} %d\n", name, value.Count); err != nil {
+		if _, err := fmt.Fprintf(w, "%s_bucket%s %d\n", name, formatLabels(appendLabel(value.Labels, Label{Name: "le", Value: "+Inf"})), value.Count); err != nil {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(w, "%s_sum %s\n", name, formatFloat(value.Sum)); err != nil {
+	if _, err := fmt.Fprintf(w, "%s_sum%s %s\n", name, formatLabels(value.Labels), formatFloat(value.Sum)); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(w, "%s_count %d\n", name, value.Count)
+	_, err := fmt.Fprintf(w, "%s_count%s %d\n", name, formatLabels(value.Labels), value.Count)
 	return err
+}
+
+func formatLabels(labels []Label) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, label := range labels {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(cleanName(label.Name))
+		b.WriteByte('=')
+		b.WriteString(strconv.Quote(label.Value))
+	}
+	b.WriteByte('}')
+	return b.String()
+}
+
+func appendLabel(labels []Label, label Label) []Label {
+	out := make([]Label, 0, len(labels)+1)
+	out = append(out, labels...)
+	out = append(out, label)
+	return out
 }
 
 func formatBucket(v float64) string {
