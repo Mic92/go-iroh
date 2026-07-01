@@ -131,6 +131,50 @@ func TestLiveSyncDownloadPolicySkipsRemotePut(t *testing.T) {
 	}
 }
 
+// TestLiveSyncDownloadPolicySkipsEmptyKeyPut is a regression test: an empty
+// entry key must still be subject to the download policy. A previous guard
+// skipped the policy check when the key was nil, letting an empty-key remote
+// Put bypass a restrictive policy.
+func TestLiveSyncDownloadPolicySkipsEmptyKeyPut(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	hash := blobs.NewHash([]byte("secret content"))
+	entry := testSignedEntry(namespace, author, "", NewRecord(hash, 14, 1))
+	msg, err := postcard.Marshal(liveOp{Kind: liveOpPut, Entry: entry})
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	from, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatalf("GenerateSecretKey: %v", err)
+	}
+	addr := netaddr.NewEndpointAddr(from.Public().EndpointID())
+	blobStore, err := blobs.NewBytesMap()
+	if err != nil {
+		t.Fatalf("NewBytesMap: %v", err)
+	}
+
+	l := LiveSync{downloads: make(chan liveDownload, 1)}
+	l.handleReceived(context.Background(), namespace.ID(), NewMemoryStore(), liveSyncOptions{
+		LiveSyncOptions: LiveSyncOptions{
+			BlobStore: blobStore,
+			Resolver:  iroh.StaticLookupFromAddrs(addr),
+			// An include-only policy: the empty key matches no prefix, so it
+			// must be excluded.
+			DownloadPolicy: DownloadPolicy{IncludePrefixes: []string{"public/"}},
+		},
+	}, gossip.Event{
+		Kind:          gossip.Received,
+		Content:       msg,
+		DeliveredFrom: from.Public().EndpointID(),
+	})
+	select {
+	case req := <-l.downloads:
+		t.Fatalf("queued download for empty key excluded by policy: %+v", req)
+	default:
+	}
+}
+
 func TestLiveSyncDownloadPolicySkipsContentReady(t *testing.T) {
 	namespace := NewNamespaceSecret(repeat32(0xb2))
 	author := NewAuthor(repeat32(0xa1))
@@ -167,6 +211,51 @@ func TestLiveSyncDownloadPolicySkipsContentReady(t *testing.T) {
 	select {
 	case req := <-l.downloads:
 		t.Fatalf("queued download for excluded content-ready key: %+v", req)
+	default:
+	}
+}
+
+func TestLiveSyncQueuesMultipleContentProviders(t *testing.T) {
+	namespace := NewNamespaceSecret(repeat32(0xb2))
+	author := NewAuthor(repeat32(0xa1))
+	hash := blobs.NewHash([]byte("shared content"))
+	entry := testSignedEntry(namespace, author, "public/k", NewRecord(hash, 14, 1))
+	store := NewMemoryStore()
+	store.PutWithOrigin(entry, InsertOrigin{Kind: InsertOriginRemote, ContentStatus: ContentMissing})
+	blobStore, err := blobs.NewBytesMap()
+	if err != nil {
+		t.Fatalf("NewBytesMap: %v", err)
+	}
+	firstKey := key.NewSecretKey(repeat32(0x01))
+	secondKey := key.NewSecretKey(repeat32(0x02))
+	first := netaddr.NewEndpointAddr(firstKey.Public().EndpointID())
+	second := netaddr.NewEndpointAddr(secondKey.Public().EndpointID())
+	l := LiveSync{downloads: make(chan liveDownload, 1)}
+	opts := liveSyncOptions{
+		LiveSyncOptions: LiveSyncOptions{
+			BlobStore: blobStore,
+			Resolver:  iroh.StaticLookupFromAddrs(first, second),
+		},
+	}
+
+	l.queueDownload(context.Background(), opts, hash, entry.Entry.Key(), true, first.ID)
+	l.queueDownload(context.Background(), opts, hash, nil, false, second.ID)
+
+	select {
+	case req := <-l.downloads:
+		providers := req.pending.snapshot()
+		if len(providers) != 2 {
+			t.Fatalf("providers len = %d, want 2", len(providers))
+		}
+		if !providers[0].ID.Equal(first.ID) || !providers[1].ID.Equal(second.ID) {
+			t.Fatalf("providers = %v, want %s then %s", providers, first.ID, second.ID)
+		}
+	default:
+		t.Fatal("download was not queued")
+	}
+	select {
+	case req := <-l.downloads:
+		t.Fatalf("queued duplicate download: %+v", req)
 	default:
 	}
 }

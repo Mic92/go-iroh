@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/tmc/go-iroh/blobs"
 	"github.com/tmc/go-iroh/gossip"
@@ -77,7 +78,7 @@ func matchGlob(s string, globs []string) bool {
 type liveSyncOptions struct {
 	LiveSyncOptions
 	syncPeer             func(context.Context, netaddr.EndpointAddr) (SyncOutcome, error)
-	downloadBlob         func(context.Context, netaddr.EndpointAddr, blobs.Hash) error
+	downloadBlob         func(context.Context, []netaddr.EndpointAddr, blobs.Hash) error
 	maxGossipPayloadSize int
 }
 
@@ -90,7 +91,7 @@ type LiveSync struct {
 	topic       *gossip.Topic
 	cancelStore func()
 	downloads   chan liveDownload
-	pending     map[blobs.Hash]struct{}
+	pending     map[blobs.Hash]*pendingDownload
 }
 
 // StartLiveSync starts live synchronization for namespace.
@@ -117,8 +118,8 @@ func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, nam
 	cfg.syncPeer = func(ctx context.Context, addr netaddr.EndpointAddr) (SyncOutcome, error) {
 		return Sync(ctx, ep, addr, namespace, store, opts.BlobStore, opts.Config)
 	}
-	cfg.downloadBlob = func(ctx context.Context, addr netaddr.EndpointAddr, hash blobs.Hash) error {
-		return downloadBlob(ctx, ep, addr, opts.BlobStore, hash)
+	cfg.downloadBlob = func(ctx context.Context, providers []netaddr.EndpointAddr, hash blobs.Hash) error {
+		return downloadBlob(ctx, ep, providers, opts.BlobStore, hash)
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	events, cancelStore := store.Subscribe()
@@ -128,7 +129,7 @@ func StartLiveSync(ctx context.Context, ep *iroh.Endpoint, g *gossip.Gossip, nam
 		topic:       topic,
 		cancelStore: cancelStore,
 		downloads:   make(chan liveDownload, liveDownloadQueueSize),
-		pending:     make(map[blobs.Hash]struct{}),
+		pending:     make(map[blobs.Hash]*pendingDownload),
 	}
 	go l.run(ctx, namespace, store, cfg, events)
 	return l, nil
@@ -240,11 +241,12 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 			ContentStatus: status,
 		})
 		if outcome.Inserted() && status != ContentComplete {
-			l.queueDownload(ctx, opts, hash, op.Entry.Entry.Key(), ev.DeliveredFrom)
+			l.queueDownload(ctx, opts, hash, op.Entry.Entry.Key(), true, ev.DeliveredFrom)
 		}
 	case liveOpContentReady:
 		if op.Hash != blobs.EmptyHash && store.downloadAllowed(namespace, op.Hash, opts.DownloadPolicy) {
-			l.queueDownload(ctx, opts, op.Hash, nil, ev.DeliveredFrom)
+			// The policy was already applied by downloadAllowed above.
+			l.queueDownload(ctx, opts, op.Hash, nil, false, ev.DeliveredFrom)
 		}
 	case liveOpSyncReport:
 		if op.Report.Namespace != namespace {
@@ -269,11 +271,15 @@ func (l *LiveSync) broadcastContentReady(ctx context.Context, hash blobs.Hash) {
 	_ = l.topic.Broadcast(ctx, msg)
 }
 
-func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash blobs.Hash, entryKey []byte, peer key.EndpointID) {
+func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash blobs.Hash, entryKey []byte, applyPolicy bool, peer key.EndpointID) {
 	if l.downloads == nil || hash == blobs.EmptyHash || blobs.Status(opts.BlobStore, hash).IsComplete() {
 		return
 	}
-	if entryKey != nil && !opts.DownloadPolicy.allow(entryKey) {
+	// applyPolicy is false for callers that already filtered by policy (the
+	// content-ready path). Otherwise apply it, including to an empty key, which
+	// matches no include prefix and so is correctly excluded by a restrictive
+	// policy.
+	if applyPolicy && !opts.DownloadPolicy.allow(entryKey) {
 		return
 	}
 	addr, ok := l.downloadAddr(ctx, opts, peer)
@@ -281,14 +287,17 @@ func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash
 		return
 	}
 	if l.pending == nil {
-		l.pending = make(map[blobs.Hash]struct{})
+		l.pending = make(map[blobs.Hash]*pendingDownload)
 	}
-	if _, ok := l.pending[hash]; ok {
+	pending := l.pending[hash]
+	if pending != nil {
+		pending.add(addr)
 		return
 	}
-	l.pending[hash] = struct{}{}
+	pending = newPendingDownload(addr)
+	l.pending[hash] = pending
 	select {
-	case l.downloads <- liveDownload{Hash: hash, Addr: addr}:
+	case l.downloads <- liveDownload{Hash: hash, pending: pending}:
 	case <-ctx.Done():
 	default:
 		delete(l.pending, hash)
@@ -331,7 +340,11 @@ func (l *LiveSync) runDownloader(ctx context.Context, store *MemoryStore, opts l
 			if opts.downloadBlob == nil {
 				continue
 			}
-			if err := opts.downloadBlob(ctx, req.Addr, req.Hash); err != nil {
+			providers := req.pending.snapshot()
+			if len(providers) == 0 {
+				continue
+			}
+			if err := opts.downloadBlob(ctx, providers, req.Hash); err != nil {
 				continue
 			}
 			store.contentReady(req.Hash)
@@ -341,43 +354,69 @@ func (l *LiveSync) runDownloader(ctx context.Context, store *MemoryStore, opts l
 }
 
 type liveDownload struct {
-	Hash blobs.Hash
-	Addr netaddr.EndpointAddr
+	Hash    blobs.Hash
+	pending *pendingDownload
 }
 
-type blobAdder interface {
-	Add([]byte) (blobs.Hash, error)
+type pendingDownload struct {
+	mu        sync.Mutex
+	providers []netaddr.EndpointAddr
+	seen      map[key.EndpointID]struct{}
 }
 
-func downloadBlob(ctx context.Context, ep *iroh.Endpoint, addr netaddr.EndpointAddr, store blobs.Store, hash blobs.Hash) error {
+func newPendingDownload(addr netaddr.EndpointAddr) *pendingDownload {
+	p := &pendingDownload{seen: make(map[key.EndpointID]struct{})}
+	p.add(addr)
+	return p
+}
+
+func (p *pendingDownload) add(addr netaddr.EndpointAddr) {
+	if p == nil || addr.ID.IsZero() {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if _, ok := p.seen[addr.ID]; ok {
+		return
+	}
+	p.seen[addr.ID] = struct{}{}
+	p.providers = append(p.providers, addr)
+}
+
+func (p *pendingDownload) snapshot() []netaddr.EndpointAddr {
+	if p == nil {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]netaddr.EndpointAddr(nil), p.providers...)
+}
+
+func downloadBlob(ctx context.Context, ep *iroh.Endpoint, providers []netaddr.EndpointAddr, store blobs.Store, hash blobs.Hash) error {
 	if ep == nil {
 		return errors.New("docs: nil endpoint")
 	}
-	add, ok := store.(blobAdder)
+	add, ok := store.(blobs.BlobAdder)
 	if !ok {
 		return errors.New("docs: blob store cannot add content")
 	}
-	conn, err := ep.Connect(ctx, addr, blobs.ALPN)
-	if err != nil {
-		return fmt.Errorf("docs: connect blob provider: %w", err)
-	}
-	defer conn.CloseWithError(0, "")
-	s, err := conn.OpenStreamSync(ctx)
-	if err != nil {
-		return fmt.Errorf("docs: open blob stream: %w", err)
-	}
-	data, err := blobs.GetBlobBytes(ctx, s, hash)
-	if err != nil {
-		return fmt.Errorf("docs: get blob: %w", err)
-	}
-	got, err := add.Add(data)
-	if err != nil {
-		return fmt.Errorf("docs: store blob: %w", err)
-	}
-	if got != hash {
-		return fmt.Errorf("docs: stored blob hash mismatch")
-	}
-	return nil
+	d := blobs.NewDownloader(add, blobs.BlobConnectorFunc(func(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (blobs.BlobConn, error) {
+		conn, err := ep.Connect(ctx, addr, alpn)
+		if err != nil {
+			return nil, err
+		}
+		return blobConn{Conn: conn}, nil
+	}), blobs.DownloaderOptions{Concurrency: len(providers)})
+	defer d.Close()
+	return d.Download(ctx, hash, providers)
+}
+
+type blobConn struct {
+	*iroh.Conn
+}
+
+func (c blobConn) OpenStreamSync(ctx context.Context) (blobs.BidiStream, error) {
+	return c.Conn.OpenStreamSync(ctx)
 }
 
 func (l *LiveSync) syncPeers(ctx context.Context, namespace NamespaceID, store *MemoryStore, opts liveSyncOptions, peers []netaddr.EndpointAddr) {
