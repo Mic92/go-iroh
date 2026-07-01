@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -72,8 +73,8 @@ func Connect(ctx context.Context, u netaddr.RelayURL, opts Options) (*Client, er
 	}
 
 	httpClient := opts.HTTPClient
-	if httpClient == nil && opts.TLSConfig != nil {
-		httpClient = &http.Client{Transport: &http.Transport{TLSClientConfig: opts.TLSConfig}}
+	if httpClient == nil {
+		httpClient = keyMaterialHTTPClient(opts.SecretKey, opts.TLSConfig)
 	}
 
 	conn, resp, err := websocket.Dial(ctx, dialURL, dialOptions(httpClient, header))
@@ -98,6 +99,52 @@ func Connect(ctx context.Context, u netaddr.RelayURL, opts Options) (*Client, er
 		return nil, err
 	}
 	return c, nil
+}
+
+func keyMaterialHTTPClient(sk key.SecretKey, config *tls.Config) *http.Client {
+	return &http.Client{Transport: keyMaterialTransport{secretKey: sk, tlsConfig: config}}
+}
+
+type keyMaterialTransport struct {
+	secretKey key.SecretKey
+	tlsConfig *tls.Config
+}
+
+func (t keyMaterialTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	tr := &http.Transport{TLSClientConfig: t.tlsConfig}
+	tr.DialTLSContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		tlsConfig := t.tlsConfig
+		if tlsConfig == nil {
+			tlsConfig = &tls.Config{}
+		} else {
+			tlsConfig = tlsConfig.Clone()
+		}
+		if tlsConfig.ServerName == "" {
+			host, _, err := net.SplitHostPort(addr)
+			if err != nil {
+				host = addr
+			}
+			tlsConfig.ServerName = host
+		}
+		dialer := tls.Dialer{Config: tlsConfig}
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		tlsConn, ok := conn.(*tls.Conn)
+		if !ok {
+			return conn, nil
+		}
+		state := tlsConn.ConnectionState()
+		if auth, err := relayproto.NewKeyMaterialClientAuth(t.secretKey, &state); err == nil {
+			if value, err := auth.HeaderValue(); err == nil {
+				req.Header.Set(relayproto.ClientAuthHeader, value)
+			}
+		}
+		return tlsConn, nil
+	}
+	return tr.RoundTrip(req)
 }
 
 // Version returns the negotiated relay protocol version.

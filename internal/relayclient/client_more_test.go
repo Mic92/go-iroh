@@ -177,6 +177,45 @@ func TestConnectTLSConfig(t *testing.T) {
 	}
 }
 
+func TestConnectTLSKeyMaterialAuthHeader(t *testing.T) {
+	var gotHeader string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/relay", func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get(relayproto.ClientAuthHeader)
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+			Subprotocols: relayproto.SupportedProtocolVersions(),
+		})
+		if err != nil {
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		conn.Write(ctx, websocket.MessageBinary, relayproto.ServerConfirmsAuth{}.AppendTo(nil))
+	})
+	ts := httptest.NewTLSServer(mux)
+	defer ts.Close()
+
+	certPool := ts.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	tlsConfig := &tls.Config{RootCAs: certPool}
+	sk, _ := key.GenerateSecretKey()
+	c, err := Connect(context.Background(), relayURL(t, ts), Options{SecretKey: sk, TLSConfig: tlsConfig})
+	if err != nil {
+		t.Fatalf("Connect over TLS: %v", err)
+	}
+	defer c.Close()
+	if gotHeader == "" {
+		t.Fatal("missing key-material auth header")
+	}
+	auth, err := relayproto.KeyMaterialClientAuthFromHeader(gotHeader)
+	if err != nil {
+		t.Fatalf("decode key-material auth header: %v", err)
+	}
+	if !auth.PublicKey.Equal(sk.Public()) {
+		t.Fatalf("auth public key = %s, want %s", auth.PublicKey, sk.Public())
+	}
+}
+
 func TestConnectDialFails(t *testing.T) {
 	// Start then immediately close a server so its address refuses connections.
 	ts := fakeRelay(t, false)

@@ -1,9 +1,13 @@
 package relayproto
 
 import (
+	"bytes"
+	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"fmt"
 
+	"github.com/tmc/go-iroh/internal/postcard"
 	"github.com/tmc/go-iroh/key"
 	"lukechampine.com/blake3"
 )
@@ -12,12 +16,19 @@ import (
 // signature, matching iroh-relay/src/protos/handshake.rs.
 const domainSepChallenge = "iroh-relay handshake v1 challenge signature"
 
+// ClientAuthHeader is the HTTP header carrying TLS key-material relay auth.
+const ClientAuthHeader = "x-iroh-relay-client-auth-v1"
+
+const domainSepTLSExportLabel = "iroh-relay handshake v1"
+
 // Handshake errors.
 var (
 	ErrServerDeniedAuth   = errors.New("relayproto: the relay denied authentication")
 	ErrSignatureInvalid   = errors.New("relayproto: client signature invalid")
 	ErrHandshakeDeserial  = errors.New("relayproto: handshake frame deserialization failed")
 	ErrUnexpectedFrameTag = errors.New("relayproto: unexpected handshake frame type")
+	ErrNoKeyingMaterial   = errors.New("relayproto: no TLS keying material")
+	ErrKeyMaterialSuffix  = errors.New("relayproto: TLS keying material suffix mismatch")
 )
 
 // ServerChallenge is the challenge a relay sends a client to sign for endpoint
@@ -49,6 +60,14 @@ type ClientAuth struct {
 	Signature key.Signature
 }
 
+// KeyMaterialClientAuth is the client's 1-RTT relay authentication. It is sent
+// in [ClientAuthHeader] as base64url-no-pad postcard bytes.
+type KeyMaterialClientAuth struct {
+	PublicKey         key.PublicKey
+	Signature         key.Signature
+	KeyMaterialSuffix [16]byte
+}
+
 // NewClientAuth builds a ClientAuth for challenge using secretKey.
 func NewClientAuth(secretKey key.SecretKey, challenge ServerChallenge) ClientAuth {
 	msg := challenge.messageToSign()
@@ -64,6 +83,106 @@ func (a ClientAuth) Verify(challenge ServerChallenge) error {
 	if err := a.PublicKey.Verify(msg[:], a.Signature); err != nil {
 		return fmt.Errorf("%w: %v", ErrSignatureInvalid, err)
 	}
+	return nil
+}
+
+// NewKeyMaterialClientAuth builds a client auth header value from exported TLS
+// keying material. It returns [ErrNoKeyingMaterial] if state cannot export it.
+func NewKeyMaterialClientAuth(secretKey key.SecretKey, state *tls.ConnectionState) (KeyMaterialClientAuth, error) {
+	if state == nil {
+		return KeyMaterialClientAuth{}, ErrNoKeyingMaterial
+	}
+	publicKey := secretKey.Public()
+	pk := publicKey.Bytes()
+	keyMaterial, err := state.ExportKeyingMaterial(domainSepTLSExportLabel, pk[:], 32)
+	if err != nil {
+		return KeyMaterialClientAuth{}, fmt.Errorf("%w: %v", ErrNoKeyingMaterial, err)
+	}
+	auth := KeyMaterialClientAuth{
+		PublicKey: publicKey,
+		Signature: secretKey.Sign(keyMaterial[:16]),
+	}
+	copy(auth.KeyMaterialSuffix[:], keyMaterial[16:])
+	return auth, nil
+}
+
+// KeyMaterialClientAuthFromHeader decodes a value from [ClientAuthHeader].
+func KeyMaterialClientAuthFromHeader(value string) (KeyMaterialClientAuth, error) {
+	b, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return KeyMaterialClientAuth{}, fmt.Errorf("%w: %v", ErrHandshakeDeserial, err)
+	}
+	var auth KeyMaterialClientAuth
+	if err := postcard.Unmarshal(b, &auth); err != nil {
+		return KeyMaterialClientAuth{}, fmt.Errorf("%w: %v", ErrHandshakeDeserial, err)
+	}
+	return auth, nil
+}
+
+// HeaderValue encodes a for [ClientAuthHeader].
+func (a KeyMaterialClientAuth) HeaderValue() (string, error) {
+	b, err := postcard.Marshal(a)
+	if err != nil {
+		return "", fmt.Errorf("relayproto: encode key-material auth: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// Verify checks this key-material auth against the server's TLS state.
+func (a KeyMaterialClientAuth) Verify(state *tls.ConnectionState) error {
+	if state == nil {
+		return ErrNoKeyingMaterial
+	}
+	pk := a.PublicKey.Bytes()
+	keyMaterial, err := state.ExportKeyingMaterial(domainSepTLSExportLabel, pk[:], 32)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNoKeyingMaterial, err)
+	}
+	if !bytes.Equal(keyMaterial[16:], a.KeyMaterialSuffix[:]) {
+		return ErrKeyMaterialSuffix
+	}
+	if err := a.PublicKey.Verify(keyMaterial[:16], a.Signature); err != nil {
+		return fmt.Errorf("%w: %v", ErrSignatureInvalid, err)
+	}
+	return nil
+}
+
+// EncodePostcard encodes a like Rust KeyMaterialClientAuth: raw public key,
+// serde_bytes signature, then raw 16-byte suffix.
+func (a KeyMaterialClientAuth) EncodePostcard(e *postcard.Encoder) error {
+	pk := a.PublicKey.Bytes()
+	e.RawBytes(pk[:])
+	sig := a.Signature.Bytes()
+	e.BytesValue(sig[:])
+	e.RawBytes(a.KeyMaterialSuffix[:])
+	return nil
+}
+
+// DecodePostcard decodes a Rust KeyMaterialClientAuth.
+func (a *KeyMaterialClientAuth) DecodePostcard(d *postcard.Decoder) error {
+	pkBytes, err := d.RawBytes(key.PublicKeySize)
+	if err != nil {
+		return err
+	}
+	pk, err := key.PublicKeyFromSlice(pkBytes)
+	if err != nil {
+		return err
+	}
+	sigBytes, err := d.BytesValue()
+	if err != nil {
+		return err
+	}
+	sig, err := key.SignatureFromSlice(sigBytes)
+	if err != nil {
+		return err
+	}
+	suffix, err := d.RawBytes(16)
+	if err != nil {
+		return err
+	}
+	a.PublicKey = pk
+	a.Signature = sig
+	copy(a.KeyMaterialSuffix[:], suffix)
 	return nil
 }
 

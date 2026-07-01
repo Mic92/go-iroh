@@ -2,6 +2,8 @@ package relayserver
 
 import (
 	"context"
+	"crypto/tls"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -76,5 +78,43 @@ func TestRelayServerForwardsDatagramAndPong(t *testing.T) {
 	snapshot := srv.Snapshot()
 	if snapshot["clients_accepted"] != 2 || snapshot["pings"] != 1 || snapshot["datagrams_forwarded"] != 1 {
 		t.Fatalf("Snapshot = %+v, want clients=2 pings=1 datagrams=1", snapshot)
+	}
+}
+
+func TestRelayServerAcceptsTLSKeyMaterialAuth(t *testing.T) {
+	srv := New()
+	ts := httptest.NewTLSServer(srv)
+	defer ts.Close()
+
+	u, err := netaddr.ParseRelayURL(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	certPool := ts.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	tlsConfig := &tls.Config{RootCAs: certPool}
+	sk, _ := key.GenerateSecretKey()
+	c, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: sk, TLSConfig: tlsConfig})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer c.Close()
+
+	var ping [8]byte
+	copy(ping[:], "fastauth")
+	if err := c.Send(ctx, relayproto.ClientToRelayMsg{Type: relayproto.FramePing, Ping: ping}); err != nil {
+		t.Fatalf("send ping: %v", err)
+	}
+	pong, err := c.Recv(ctx)
+	if err != nil {
+		t.Fatalf("recv pong: %v", err)
+	}
+	if pong.Type != relayproto.FramePong || pong.Ping != ping {
+		t.Fatalf("pong = %+v, want ping echo", pong)
+	}
+	if got := srv.Snapshot()["clients_accepted"]; got != 1 {
+		t.Fatalf("clients_accepted = %d, want 1", got)
 	}
 }

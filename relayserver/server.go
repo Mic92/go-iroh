@@ -9,6 +9,7 @@ package relayserver
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"sync"
@@ -84,7 +85,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := authenticate(ctx, conn)
+	id, err := authenticate(ctx, conn, r.TLS, r.Header.Get(relayproto.ClientAuthHeader))
 	if err != nil {
 		return
 	}
@@ -121,7 +122,17 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func authenticate(ctx context.Context, conn *websocket.Conn) (key.EndpointID, error) {
+func authenticate(ctx context.Context, conn *websocket.Conn, state *tls.ConnectionState, clientAuthHeader string) (key.EndpointID, error) {
+	if clientAuthHeader != "" {
+		auth, err := relayproto.KeyMaterialClientAuthFromHeader(clientAuthHeader)
+		if err == nil && auth.Verify(state) == nil {
+			if err := conn.Write(ctx, websocket.MessageBinary, relayproto.ServerConfirmsAuth{}.AppendTo(nil)); err != nil {
+				return key.EndpointID{}, err
+			}
+			return auth.PublicKey.EndpointID(), nil
+		}
+	}
+
 	var challenge relayproto.ServerChallenge
 	if _, err := rand.Read(challenge.Challenge[:]); err != nil {
 		return key.EndpointID{}, err

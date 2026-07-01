@@ -1,6 +1,7 @@
 package relayproto
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/tmc/go-iroh/key"
@@ -106,5 +107,50 @@ func TestClientAuthPostcardLayout(t *testing.T) {
 	}
 	if encoded[1+32] != 0x40 {
 		t.Errorf("serde_bytes length prefix = %#x, want 0x40 (64)", encoded[1+32])
+	}
+}
+
+func TestKeyMaterialClientAuthHeaderRoundTrip(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	var sigBytes [key.SignatureSize]byte
+	for i := range sigBytes {
+		sigBytes[i] = byte(i)
+	}
+	var suffix [16]byte
+	for i := range suffix {
+		suffix[i] = byte(0xa0 + i)
+	}
+	auth := KeyMaterialClientAuth{
+		PublicKey:         sk.Public(),
+		Signature:         key.NewSignature(sigBytes),
+		KeyMaterialSuffix: suffix,
+	}
+	value, err := auth.HeaderValue()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := KeyMaterialClientAuthFromHeader(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.PublicKey.Equal(auth.PublicKey) {
+		t.Fatal("public key mismatch")
+	}
+	if got.Signature != auth.Signature {
+		t.Fatal("signature mismatch")
+	}
+	if got.KeyMaterialSuffix != auth.KeyMaterialSuffix {
+		t.Fatal("suffix mismatch")
+	}
+
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(raw), key.PublicKeySize+1+key.SignatureSize+16; got != want {
+		t.Fatalf("postcard len = %d, want %d", got, want)
+	}
+	if raw[key.PublicKeySize] != key.SignatureSize {
+		t.Fatalf("signature length byte = %d, want %d", raw[key.PublicKeySize], key.SignatureSize)
 	}
 }
