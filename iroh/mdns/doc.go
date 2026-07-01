@@ -1,3 +1,5 @@
+//go:build !js
+
 // Package mdns provides local-network endpoint discovery for go-iroh.
 //
 // A Discovery advertises endpoint direct addresses on the local multicast DNS
