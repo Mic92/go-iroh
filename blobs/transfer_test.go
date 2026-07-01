@@ -121,6 +121,39 @@ func TestBlobRangeTransferRejectsDisjointRanges(t *testing.T) {
 	}
 }
 
+func TestObserveTransfer(t *testing.T) {
+	data := vectorData(3*ChunkSize + 17)
+	hash := NewHash(data)
+	client, server := newTestBidiStreamPair()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- ServeBlob(context.Background(), server, StoreFunc(func(got Hash) ([]byte, bool) {
+			if got != hash {
+				t.Errorf("requested hash = %s, want %s", got, hash)
+				return nil, false
+			}
+			return append([]byte(nil), data...), true
+		}))
+	}()
+
+	var got []Bitfield
+	for bitfield, err := range Observe(context.Background(), client, hash) {
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		got = append(got, bitfield)
+	}
+	if len(got) != 1 {
+		t.Fatalf("Observe yielded %d updates, want 1", len(got))
+	}
+	if got[0].Size() != uint64(len(data)) || !got[0].IsComplete() {
+		t.Fatalf("Observe = size %d complete %v", got[0].Size(), got[0].IsComplete())
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
+	}
+}
+
 func openRangeForTest(start uint64) ChunkRanges {
 	return ChunkRanges{open: &start}
 }

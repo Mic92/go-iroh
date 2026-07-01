@@ -1,10 +1,12 @@
 package blobs
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 )
 
 // BidiStream is the stream shape used by the blob transfer helpers.
@@ -114,11 +116,32 @@ func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byt
 				return err
 			}
 		}
+	case RequestObserve:
+		if req.Observe == nil {
+			_ = s.Close()
+			return ErrUnsupportedRequest
+		}
+		if err := writeObserve(s, store, *req.Observe); err != nil {
+			_ = s.Close()
+			return err
+		}
 	default:
 		_ = s.Close()
 		return ErrUnsupportedRequest
 	}
 	return closeWrite(s)
+}
+
+func writeObserve(s io.Writer, store Store, req ObserveRequest) error {
+	data, ok := store.GetBlob(req.Hash)
+	if !ok {
+		return ErrBlobNotFound
+	}
+	b := CompleteBitfield(uint64(len(data)))
+	if !req.Ranges.IsAll() {
+		b = NewBitfield(uint64(len(data)), req.Ranges.ChunkRanges())
+	}
+	return writeObserveItem(s, b)
 }
 
 func writeGet(s io.Writer, store Store, req GetRequest, encode func([]byte) (Hash, []byte, error)) error {
@@ -189,6 +212,57 @@ func writeBlobBytes(s io.Writer, hash Hash, data []byte, encode func([]byte) (Ha
 		return fmt.Errorf("blobs: write response: %w", err)
 	}
 	return nil
+}
+
+// Observe requests bitfield updates for hash from s.
+//
+// Observe sends [ObserveBlob], closes its send side, and yields provider
+// bitfield updates until the response stream ends.
+func Observe(ctx context.Context, s BidiStream, hash Hash) iter.Seq2[Bitfield, error] {
+	return func(yield func(Bitfield, error) bool) {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		done := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				_ = s.Close()
+			case <-done:
+			}
+		}()
+		defer close(done)
+
+		if _, err := s.Write(EncodeObserveRequestBytes(ObserveBlob(hash))); err != nil {
+			_ = s.Close()
+			yield(Bitfield{}, fmt.Errorf("blobs: write observe request: %w", err))
+			return
+		}
+		if err := closeWrite(s); err != nil {
+			yield(Bitfield{}, fmt.Errorf("blobs: close observe request: %w", err))
+			return
+		}
+		r := bufio.NewReader(s)
+		for {
+			bitfield, err := readObserveItem(r)
+			if err == nil {
+				if !yield(bitfield, nil) {
+					_ = s.Close()
+					return
+				}
+				continue
+			}
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			if ctx.Err() != nil {
+				yield(Bitfield{}, ctx.Err())
+				return
+			}
+			yield(Bitfield{}, fmt.Errorf("blobs: read observe response: %w", err))
+			return
+		}
+	}
 }
 
 // GetBlobBytes requests and validates one full-range raw blob from s.

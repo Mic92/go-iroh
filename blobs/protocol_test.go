@@ -1,6 +1,8 @@
 package blobs
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"testing"
@@ -133,6 +135,45 @@ func TestRequestWireFormat(t *testing.T) {
 	}
 }
 
+func TestObserveRequestWireFormat(t *testing.T) {
+	var hash Hash
+	for i := range hash {
+		hash[i] = 0xda
+	}
+	got := EncodeObserveRequestBytes(ObserveBlob(hash))
+	want := "01" +
+		"dadadadadadadadadadadadadadadadadadadadadadadadadadadadadadadada" +
+		"0100"
+	if hex.EncodeToString(got) != want {
+		t.Fatalf("encode = %x, want %s", got, want)
+	}
+	decoded, err := DecodeObserveRequestBytes(got)
+	if err != nil {
+		t.Fatalf("DecodeObserveRequestBytes: %v", err)
+	}
+	if decoded.Hash != hash || !decoded.Ranges.IsAll() {
+		t.Fatalf("round trip = %#v", decoded)
+	}
+}
+
+func TestObserveItemWireFormat(t *testing.T) {
+	item := CompleteBitfield(1234)
+	var b []byte
+	if err := writeObserveItem(bytesBuffer{&b}, item); err != nil {
+		t.Fatalf("writeObserveItem: %v", err)
+	}
+	if hex.EncodeToString(b) != "04d2090100" {
+		t.Fatalf("encode = %x, want 04d2090100", b)
+	}
+	got, err := readObserveItem(newByteReader(b))
+	if err != nil {
+		t.Fatalf("readObserveItem: %v", err)
+	}
+	if got.Size() != 1234 || !got.IsComplete() {
+		t.Fatalf("bitfield = size %d complete %v", got.Size(), got.IsComplete())
+	}
+}
+
 func TestRequestDecodeErrors(t *testing.T) {
 	if _, err := DecodeRequestBytes([]byte{byte(RequestPush)}); !errors.Is(err, endpointticket.ErrVerify) {
 		t.Fatalf("DecodeRequestBytes unsupported error = %v", err)
@@ -158,4 +199,17 @@ func unionRanges(rs ...ChunkRanges) ChunkRanges {
 		}
 	}
 	return out.normalize()
+}
+
+type bytesBuffer struct {
+	b *[]byte
+}
+
+func (w bytesBuffer) Write(p []byte) (int, error) {
+	*w.b = append(*w.b, p...)
+	return len(p), nil
+}
+
+func newByteReader(b []byte) *bufio.Reader {
+	return bufio.NewReader(bytes.NewReader(b))
 }

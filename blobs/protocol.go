@@ -78,6 +78,36 @@ func decodeGetRequest(p *parser) (GetRequest, error) {
 	return GetRequest{Hash: hash, Ranges: ranges}, nil
 }
 
+// ObserveRequest requests bitfield updates for a raw blob from a provider.
+type ObserveRequest struct {
+	Hash   Hash
+	Ranges RangeSpec
+}
+
+// ObserveBlob returns an observe request for every chunk of hash.
+func ObserveBlob(hash Hash) ObserveRequest {
+	return ObserveRequest{Hash: hash, Ranges: RangeSpecAll()}
+}
+
+func (r ObserveRequest) encode(b []byte) []byte {
+	b = append(b, r.Hash[:]...)
+	return r.Ranges.encode(b)
+}
+
+func decodeObserveRequest(p *parser) (ObserveRequest, error) {
+	hashBytes, err := p.bytes(HashSize)
+	if err != nil {
+		return ObserveRequest{}, wrapDecodeErr(err)
+	}
+	var hash Hash
+	copy(hash[:], hashBytes)
+	ranges, err := decodeRangeSpec(p)
+	if err != nil {
+		return ObserveRequest{}, err
+	}
+	return ObserveRequest{Hash: hash, Ranges: ranges}, nil
+}
+
 // GetManyRequest requests multiple raw blobs from one provider.
 type GetManyRequest struct {
 	Hashes []Hash
@@ -123,6 +153,7 @@ func decodeGetManyRequest(p *parser) (GetManyRequest, error) {
 type Request struct {
 	Type    RequestType
 	Get     *GetRequest
+	Observe *ObserveRequest
 	GetMany *GetManyRequest
 }
 
@@ -136,6 +167,12 @@ func EncodeRequestBytes(req Request) ([]byte, error) {
 		}
 		b = appendVarint(b, uint64(RequestGet))
 		b = req.Get.encode(b)
+	case RequestObserve:
+		if req.Observe == nil {
+			return nil, fmt.Errorf("blob request: missing observe request")
+		}
+		b = appendVarint(b, uint64(RequestObserve))
+		b = req.Observe.encode(b)
 	case RequestGetMany:
 		if req.GetMany == nil {
 			return nil, fmt.Errorf("blob request: missing get-many request")
@@ -163,6 +200,12 @@ func DecodeRequestBytes(b []byte) (Request, error) {
 				return err
 			}
 			req = Request{Type: RequestGet, Get: &get}
+		case RequestObserve:
+			observe, err := decodeObserveRequest(p)
+			if err != nil {
+				return err
+			}
+			req = Request{Type: RequestObserve, Observe: &observe}
 		case RequestGetMany:
 			getMany, err := decodeGetManyRequest(p)
 			if err != nil {
@@ -196,6 +239,14 @@ func EncodeGetManyRequestBytes(r GetManyRequest) []byte {
 	return b
 }
 
+// EncodeObserveRequestBytes encodes r as a full Request::Observe message.
+func EncodeObserveRequestBytes(r ObserveRequest) []byte {
+	var b []byte
+	b = appendVarint(b, uint64(RequestObserve))
+	b = r.encode(b)
+	return b
+}
+
 // DecodeGetRequestBytes decodes a full Request::Get message.
 func DecodeGetRequestBytes(b []byte) (GetRequest, error) {
 	req, err := DecodeRequestBytes(b)
@@ -209,4 +260,19 @@ func DecodeGetRequestBytes(b []byte) (GetRequest, error) {
 		}
 	}
 	return *req.Get, nil
+}
+
+// DecodeObserveRequestBytes decodes a full Request::Observe message.
+func DecodeObserveRequestBytes(b []byte) (ObserveRequest, error) {
+	req, err := DecodeRequestBytes(b)
+	if err != nil {
+		return ObserveRequest{}, err
+	}
+	if req.Type != RequestObserve || req.Observe == nil {
+		return ObserveRequest{}, &endpointticket.ParseError{
+			Kind:    endpointticket.ParseErrorKindVerify,
+			Message: "not an observe request",
+		}
+	}
+	return *req.Observe, nil
 }
