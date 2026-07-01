@@ -5,6 +5,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -20,6 +21,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/netaddr"
+	"github.com/tmc/go-iroh/relay"
 	"github.com/tmc/go-iroh/relayserver"
 )
 
@@ -27,6 +31,79 @@ func TestBrowserRelayOnlyEcho(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
+	ts := newWASMRelayServer(t, ctx)
+	defer ts.Close()
+
+	page := ts.URL + "/?relay=" + url.QueryEscape(ts.URL+"/")
+	status, detail, err := runHeadless(ctx, t, page)
+	if err != nil {
+		t.Fatalf("headless browser: %v", err)
+	}
+	if status != "pass" {
+		t.Fatalf("browser relay echo status=%q detail=%q", status, detail)
+	}
+}
+
+func TestBrowserNativeRelayOnlyEcho(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	ts := newWASMRelayServer(t, ctx)
+	defer ts.Close()
+	relayURL, err := netaddr.ParseRelayURL(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
+	const alpn = "iroh-wasm-native/2"
+	server, err := iroh.Bind(ctx,
+		iroh.WithALPNs(alpn),
+		iroh.WithRelayMode(mode),
+		iroh.WithoutIPTransports(),
+		iroh.WithTransportConfig(shortKeepAliveNative()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+	if err := server.Online(ctx); err != nil {
+		t.Fatalf("server online: %v", err)
+	}
+
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err != nil {
+			errc <- err
+			return
+		}
+		stream, err := conn.AcceptStream(ctx)
+		if err != nil {
+			errc <- err
+			return
+		}
+		errc <- serveFramesNative(ctx, stream)
+	}()
+
+	q := url.Values{
+		"relay": {ts.URL + "/"},
+		"mode":  {"browser-native"},
+		"peer":  {server.ID().String()},
+	}
+	status, detail, err := runHeadless(ctx, t, ts.URL+"/?"+q.Encode())
+	if err != nil {
+		t.Fatalf("headless browser: %v", err)
+	}
+	if status != "pass" {
+		t.Fatalf("browser native relay echo status=%q detail=%q", status, detail)
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("native server: %v", err)
+	}
+}
+
+func newWASMRelayServer(t *testing.T, ctx context.Context) *httptest.Server {
+	t.Helper()
 	tmp := t.TempDir()
 	wasm := filepath.Join(tmp, "wasmrelaytest.wasm")
 	build := exec.CommandContext(ctx, "go", "build", "-o", wasm, "./cmd/wasmrelaytest")
@@ -64,17 +141,7 @@ WebAssembly.instantiateStreaming(fetch("/wasmrelaytest.wasm"), go.importObject)
 <a id="relay" href="?relay=%s"></a>
 </body></html>`, html.EscapeString(url.QueryEscape(relay)))
 	})
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	page := ts.URL + "/?relay=" + url.QueryEscape(ts.URL+"/")
-	status, detail, err := runHeadless(ctx, t, page)
-	if err != nil {
-		t.Fatalf("headless browser: %v", err)
-	}
-	if status != "pass" {
-		t.Fatalf("browser relay echo status=%q detail=%q", status, detail)
-	}
+	return httptest.NewServer(mux)
 }
 
 func runHeadless(ctx context.Context, t *testing.T, page string) (string, string, error) {
@@ -129,6 +196,66 @@ func runHeadless(ctx context.Context, t *testing.T, page string) (string, string
 		return "", "", err
 	}
 	return waitBrowserStatus(ctx, target)
+}
+
+func shortKeepAliveNative() *iroh.QUICTransportConfig {
+	return &iroh.QUICTransportConfig{
+		KeepAlivePeriod: 200 * time.Millisecond,
+		MaxIdleTimeout:  5 * time.Second,
+	}
+}
+
+func serveFramesNative(ctx context.Context, stream io.ReadWriteCloser) error {
+	for i := 0; i < 4; i++ {
+		got, err := readFrameNative(stream)
+		if err != nil {
+			return fmt.Errorf("server read frame %d: %w", i, err)
+		}
+		if want := payloadNative(i); string(got) != string(want) {
+			return fmt.Errorf("server frame %d mismatch", i)
+		}
+		if err := writeFrameNative(stream, payloadNative(100+i)); err != nil {
+			return fmt.Errorf("server write frame %d: %w", i, err)
+		}
+		if i == 1 {
+			timer := time.NewTimer(600 * time.Millisecond)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			}
+		}
+	}
+	return stream.Close()
+}
+
+func payloadNative(seed int) []byte {
+	p := make([]byte, 64*1024+seed%17)
+	for i := range p {
+		p[i] = byte(seed + i*31)
+	}
+	return p
+}
+
+func writeFrameNative(w io.Writer, p []byte) error {
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(p)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return err
+	}
+	_, err := w.Write(p)
+	return err
+}
+
+func readFrameNative(r io.Reader) ([]byte, error) {
+	var hdr [4]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return nil, err
+	}
+	p := make([]byte, binary.BigEndian.Uint32(hdr[:]))
+	_, err := io.ReadFull(r, p)
+	return p, err
 }
 
 func browserPath(t *testing.T) string {
