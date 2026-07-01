@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tmc/go-iroh/blobs"
+	"github.com/tmc/go-iroh/gossip"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
@@ -47,6 +48,8 @@ func run() error {
 	switch values.Get("mode") {
 	case "blob-native":
 		return runBlobNative(ctx, values, relayURL, mode)
+	case "gossip-browser":
+		return runGossipBrowser(ctx, relayURL, mode)
 	case "browser-native":
 		return runBrowserNative(ctx, values, relayURL, mode)
 	default:
@@ -162,6 +165,87 @@ func runBrowserNative(ctx context.Context, values url.Values, relayURL netaddr.R
 	return nil
 }
 
+func runGossipBrowser(ctx context.Context, relayURL netaddr.RelayURL, mode relay.Mode) error {
+	var topic gossip.TopicID
+	copy(topic[:], "wasm-gossip-relay")
+
+	server, err := iroh.Bind(ctx,
+		iroh.WithRelayMode(mode),
+		iroh.WithoutIPTransports(),
+		iroh.WithTransportConfig(shortKeepAlive()),
+	)
+	if err != nil {
+		return fmt.Errorf("bind gossip server: %w", err)
+	}
+	defer server.Shutdown(ctx)
+	serverGossip := gossip.NewGossip(server)
+	serverRouter, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: serverGossip.Handler(),
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("server gossip router: %w", err)
+	}
+	defer serverRouter.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx,
+		iroh.WithRelayMode(mode),
+		iroh.WithoutIPTransports(),
+		iroh.WithTransportConfig(shortKeepAlive()),
+	)
+	if err != nil {
+		return fmt.Errorf("bind gossip client: %w", err)
+	}
+	defer client.Shutdown(ctx)
+	clientGossip := gossip.NewGossip(client)
+	clientRouter, err := iroh.NewRouter(client, map[string]iroh.ProtocolHandler{
+		gossip.ALPN: clientGossip.Handler(),
+	}, nil)
+	if err != nil {
+		return fmt.Errorf("client gossip router: %w", err)
+	}
+	defer clientRouter.Shutdown(ctx)
+
+	if err := server.Online(ctx); err != nil {
+		return fmt.Errorf("gossip server online: %w", err)
+	}
+	if err := client.Online(ctx); err != nil {
+		return fmt.Errorf("gossip client online: %w", err)
+	}
+	serverTopic, err := serverGossip.Subscribe(ctx, topic, nil)
+	if err != nil {
+		return fmt.Errorf("server subscribe: %w", err)
+	}
+	defer serverTopic.Close()
+	clientTopic, err := clientGossip.SubscribeAndJoin(ctx, topic, []netaddr.EndpointAddr{
+		netaddr.NewEndpointAddr(server.ID()).WithRelayURL(relayURL),
+	})
+	if err != nil {
+		return fmt.Errorf("client subscribe join: %w", err)
+	}
+	defer clientTopic.Close()
+
+	const msg = "hello gossip from browser"
+	if err := clientTopic.Broadcast(ctx, []byte(msg)); err != nil {
+		return fmt.Errorf("gossip broadcast: %w", err)
+	}
+	for {
+		ev, err := nextGossipEvent(ctx, serverTopic)
+		if err != nil {
+			return err
+		}
+		if ev.Kind != gossip.Received {
+			continue
+		}
+		if string(ev.Content) != msg {
+			return fmt.Errorf("gossip content = %q, want %q", ev.Content, msg)
+		}
+		if !ev.DeliveredFrom.Equal(client.ID()) {
+			return fmt.Errorf("gossip delivered from %s, want %s", ev.DeliveredFrom, client.ID())
+		}
+		return nil
+	}
+}
+
 func runBlobNative(ctx context.Context, values url.Values, relayURL netaddr.RelayURL, mode relay.Mode) error {
 	peer := values.Get("peer")
 	if peer == "" {
@@ -210,6 +294,27 @@ func runBlobNative(ctx context.Context, values url.Values, relayURL netaddr.Rela
 		return fmt.Errorf("blob hash = %s, want %s", gotHash, hash)
 	}
 	return nil
+}
+
+func nextGossipEvent(ctx context.Context, topic *gossip.Topic) (gossip.Event, error) {
+	type result struct {
+		ev  gossip.Event
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		for ev, err := range topic.Events() {
+			ch <- result{ev: ev, err: err}
+			return
+		}
+		ch <- result{err: fmt.Errorf("gossip topic closed")}
+	}()
+	select {
+	case res := <-ch:
+		return res.ev, res.err
+	case <-ctx.Done():
+		return gossip.Event{}, ctx.Err()
+	}
 }
 
 func shortKeepAlive() *iroh.QUICTransportConfig {

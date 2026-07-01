@@ -163,6 +163,25 @@ func TestBrowserBlobRelayOnlyFetch(t *testing.T) {
 	}
 }
 
+func TestBrowserGossipRelayOnly(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	ts := newWASMRelayServer(t, ctx)
+	defer ts.Close()
+	q := url.Values{
+		"relay": {ts.URL + "/"},
+		"mode":  {"gossip-browser"},
+	}
+	status, detail, err := runHeadless(ctx, t, ts.URL+"/?"+q.Encode())
+	if err != nil {
+		t.Fatalf("headless browser: %v", err)
+	}
+	if status != "pass" {
+		t.Fatalf("browser gossip status=%q detail=%q", status, detail)
+	}
+}
+
 func newWASMRelayServer(t *testing.T, ctx context.Context) *httptest.Server {
 	t.Helper()
 	tmp := t.TempDir()
