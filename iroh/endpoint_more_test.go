@@ -159,6 +159,27 @@ func TestEndpointSecretKey(t *testing.T) {
 	}
 }
 
+// TestRelayOnlyAdvertisesNoIP checks that an endpoint with no IP transport
+// (nil udp socket) never advertises an IP address, even when disableIP was not
+// requested directly. bindPacketConn returns a nil socket both for
+// WithoutIPTransports and on the js build; disableIP is coupled to that so the
+// endpoint does not advertise a zero LocalAddr to peers.
+func TestRelayOnlyAdvertisesNoIP(t *testing.T) {
+	ctx := context.Background()
+	ep, err := Bind(ctx, WithoutIPTransports())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ep.Shutdown(ctx)
+
+	if got := ep.LocalAddr(); got.IsValid() {
+		t.Errorf("LocalAddr = %v, want zero value for a relay-only endpoint", got)
+	}
+	if ips := ep.Addr().IPAddrs(); len(ips) != 0 {
+		t.Errorf("Addr advertised %d IP(s) %v, want none for a relay-only endpoint", len(ips), ips)
+	}
+}
+
 func TestEndpointLifecycleAddressSurface(t *testing.T) {
 	ctx := context.Background()
 	ep, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))

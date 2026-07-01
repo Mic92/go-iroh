@@ -2,6 +2,7 @@ package socket
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"sync"
@@ -15,10 +16,10 @@ import (
 // transport plus optional relay and custom transports. It is the Go analog of
 // the Rust Transports struct (iroh/src/socket/transports.rs:47).
 //
-// The IP transport is always present. The relay transport is present when the
-// endpoint has relays configured; otherwise relay-addressed sends are blackholed
-// (reported as success so quic-go's loss recovery retransmits). Custom
-// transports are present only when callers configure them.
+// The IP transport is nil for relay-only endpoints. The relay transport is
+// present when the endpoint has relays configured; otherwise relay-addressed
+// sends are blackholed (reported as success so quic-go's loss recovery
+// retransmits). Custom transports are present only when callers configure them.
 type Transports struct {
 	ip     *IpTransport
 	relay  *RelayTransport
@@ -43,6 +44,7 @@ type MagicConn struct {
 	sock       *Socket
 	transports *Transports
 	udp        *net.UDPConn
+	localAddr  net.Addr
 
 	recvCh chan recvBatch
 
@@ -76,8 +78,26 @@ func NewMagicConnWithRelay(sock *Socket, udp *net.UDPConn, actor *RelayActor) *M
 // NewMagicConnWithTransports returns a MagicConn with direct IP, optional relay,
 // and optional custom transports.
 func NewMagicConnWithTransports(sock *Socket, udp *net.UDPConn, actor *RelayActor, custom ...CustomTransport) *MagicConn {
+	return newMagicConn(sock, udp, actor, custom...)
+}
+
+// NewMagicConnRelayOnly returns a MagicConn with no direct-IP transport. Relay
+// and custom transports are still available. Start the receive loops with
+// [MagicConn.Serve].
+func NewMagicConnRelayOnly(sock *Socket, actor *RelayActor, custom ...CustomTransport) *MagicConn {
+	return newMagicConn(sock, nil, actor, custom...)
+}
+
+func newMagicConn(sock *Socket, udp *net.UDPConn, actor *RelayActor, custom ...CustomTransport) *MagicConn {
 	recvCh := make(chan recvBatch, 4)
-	transports := &Transports{ip: NewIpTransport(udp, recvCh)}
+	transports := &Transports{}
+	var localAddr net.Addr
+	if udp != nil {
+		transports.ip = NewIpTransport(udp, recvCh)
+		localAddr = udp.LocalAddr()
+	} else {
+		localAddr = mappedUDPAddr(NewRelayMappedAddr().Addr())
+	}
 	if actor != nil {
 		transports.relay = NewRelayTransport(sock, actor, recvCh)
 	}
@@ -90,6 +110,7 @@ func NewMagicConnWithTransports(sock *Socket, udp *net.UDPConn, actor *RelayActo
 		sock:       sock,
 		transports: transports,
 		udp:        udp,
+		localAddr:  localAddr,
 		recvCh:     recvCh,
 		recvAddrs:  make(map[netip.AddrPort]*net.UDPAddr),
 	}
@@ -113,6 +134,17 @@ func (m *MagicConn) SetEndpointSender(send func(key.EndpointID, []byte) bool) {
 // Serve runs the magic socket's receive loops until ctx is cancelled or the
 // underlying socket is closed. It blocks; run it in its own goroutine.
 func (m *MagicConn) Serve(ctx context.Context) {
+	if m.transports.ip == nil {
+		for _, t := range m.transports.custom {
+			go t.Serve(ctx)
+		}
+		if m.transports.relay != nil {
+			m.transports.relay.Serve(ctx)
+			return
+		}
+		<-ctx.Done()
+		return
+	}
 	if m.transports.relay != nil {
 		go m.transports.relay.Serve(ctx)
 	}
@@ -228,6 +260,10 @@ func (m *MagicConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	if udp, ok := addr.(*net.UDPAddr); ok {
 		ap := udp.AddrPort()
 		if isDefinitelyIP(ap.Addr()) || Classify(ap.Addr()) == KindIP {
+			if m.transports.ip == nil {
+				m.metrics.blackholed.Add(1)
+				return len(p), nil
+			}
 			if _, err := m.transports.ip.send(p, ap); err == nil {
 				m.recordIPSent(ap)
 			} else {
@@ -307,6 +343,10 @@ func (m *MagicConn) sendAddr(addr Addr, p []byte) bool {
 			m.metrics.blackholed.Add(1)
 			return false
 		}
+		if m.transports.ip == nil {
+			m.metrics.blackholed.Add(1)
+			return false
+		}
 		_, err := m.transports.ip.send(p, ap)
 		if err == nil {
 			m.recordIPSent(ap)
@@ -380,7 +420,7 @@ func (m *MagicConn) recordIPSent(ap netip.AddrPort) {
 
 // LocalAddr returns the bound local address of the underlying UDP socket. It
 // implements net.PacketConn.
-func (m *MagicConn) LocalAddr() net.Addr { return m.udp.LocalAddr() }
+func (m *MagicConn) LocalAddr() net.Addr { return m.localAddr }
 
 // Close releases the magic socket. It marks the shared [Socket] closed and
 // closes the underlying UDP socket, which ends the receive loop. It implements
@@ -388,6 +428,9 @@ func (m *MagicConn) LocalAddr() net.Addr { return m.udp.LocalAddr() }
 func (m *MagicConn) Close() error {
 	m.sock.Close()
 	m.readDeadline.set(time.Unix(0, 1))
+	if m.udp == nil {
+		return nil
+	}
 	return m.udp.Close()
 }
 
@@ -395,6 +438,9 @@ func (m *MagicConn) Close() error {
 // net.PacketConn.
 func (m *MagicConn) SetDeadline(t time.Time) error {
 	m.readDeadline.set(t)
+	if m.udp == nil {
+		return nil
+	}
 	return m.udp.SetWriteDeadline(t)
 }
 
@@ -409,6 +455,9 @@ func (m *MagicConn) SetReadDeadline(t time.Time) error {
 // straight to the underlying socket, so the deadline is applied there. It
 // implements net.PacketConn.
 func (m *MagicConn) SetWriteDeadline(t time.Time) error {
+	if m.udp == nil {
+		return nil
+	}
 	return m.udp.SetWriteDeadline(t)
 }
 
@@ -417,13 +466,28 @@ func (m *MagicConn) SetWriteDeadline(t time.Time) error {
 // direct-IP path. Exposing it does not make MagicConn an OOBCapablePacketConn —
 // that interface also needs ReadMsgUDP/WriteMsgUDP, which MagicConn does not
 // provide, so quic-go still uses its single-packet path.
-func (m *MagicConn) SyscallConn() (syscall.RawConn, error) { return m.udp.SyscallConn() }
+func (m *MagicConn) SyscallConn() (syscall.RawConn, error) {
+	if m.udp == nil {
+		return nil, errors.ErrUnsupported
+	}
+	return m.udp.SyscallConn()
+}
 
 // SetReadBuffer sets the kernel receive buffer size on the underlying UDP
 // socket. quic-go calls it to raise the buffer to its desired size.
-func (m *MagicConn) SetReadBuffer(n int) error { return m.udp.SetReadBuffer(n) }
+func (m *MagicConn) SetReadBuffer(n int) error {
+	if m.udp == nil {
+		return nil
+	}
+	return m.udp.SetReadBuffer(n)
+}
 
 // SetWriteBuffer sets the kernel send buffer size on the underlying UDP socket.
-func (m *MagicConn) SetWriteBuffer(n int) error { return m.udp.SetWriteBuffer(n) }
+func (m *MagicConn) SetWriteBuffer(n int) error {
+	if m.udp == nil {
+		return nil
+	}
+	return m.udp.SetWriteBuffer(n)
+}
 
 var _ net.PacketConn = (*MagicConn)(nil)

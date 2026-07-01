@@ -1,6 +1,7 @@
 package quic
 
 import (
+	"errors"
 	"io"
 	"log"
 	"net"
@@ -81,15 +82,20 @@ func wrapConn(pc net.PacketConn) (rawConn, error) {
 	if ok {
 		rawConn, err := conn.SyscallConn()
 		if err != nil {
-			return nil, err
+			if !errors.Is(err, errors.ErrUnsupported) {
+				return nil, err
+			}
+			ok = false
 		}
 
 		// only set DF on UDP sockets
-		if _, ok := pc.LocalAddr().(*net.UDPAddr); ok {
-			var err error
-			supportsDF, err = setDF(rawConn)
-			if err != nil {
-				return nil, err
+		if ok {
+			if _, ok := pc.LocalAddr().(*net.UDPAddr); ok {
+				var err error
+				supportsDF, err = setDF(rawConn)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

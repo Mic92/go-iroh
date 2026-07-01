@@ -205,9 +205,9 @@ func validateBindOpts(addr netip.AddrPort, opts BindOpts) error {
 	return nil
 }
 
-// WithoutIPTransports prevents the endpoint from advertising or dialing direct
-// IP addresses. The endpoint still binds UDP because relay-carried QUIC packets
-// use the same magic connection machinery.
+// WithoutIPTransports prevents the endpoint from binding, advertising, or
+// dialing direct IP addresses. Relay and custom transports still use the magic
+// connection machinery.
 func WithoutIPTransports() Option {
 	return func(c *config) error {
 		c.disableIP = true
@@ -370,7 +370,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	if !c.haveBindAddr {
 		bind = netip.AddrPortFrom(netip.IPv6Unspecified(), 0)
 	}
-	udp, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(bind))
+	udp, err := bindPacketConn(c, bind)
 	if err != nil {
 		return nil, fmt.Errorf("iroh: bind udp: %w", err)
 	}
@@ -417,7 +417,13 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		})
 	}
 
-	magic := socket.NewMagicConnWithTransports(sock, udp, relayActor, customTransportAdapters(c.custom)...)
+	custom := customTransportAdapters(c.custom)
+	var magic *socket.MagicConn
+	if udp == nil {
+		magic = socket.NewMagicConnRelayOnly(sock, relayActor, custom...)
+	} else {
+		magic = socket.NewMagicConnWithTransports(sock, udp, relayActor, custom...)
+	}
 	serveCtx, serveStop := context.WithCancel(context.Background())
 	go magic.Serve(serveCtx)
 
@@ -437,7 +443,10 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		quicConf:     quicConf,
 		keyLogWriter: c.keyLogWriter,
 		sessionCache: NewSessionCache(),
-		disableIP:    c.disableIP,
+		// A nil udp means there is no IP transport (relay-only bind, or the js
+		// build where bindPacketConn never returns a socket), so IP addresses
+		// must not be advertised regardless of the requested disableIP.
+		disableIP:    c.disableIP || udp == nil,
 		verifySource: c.verifySource,
 		hooks:        append([]EndpointHooks(nil), c.hooks...),
 		custom:       append([]CustomTransport(nil), c.custom...),
@@ -470,7 +479,9 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	if len(c.alpns) > 0 {
 		if err := ep.startListener(); err != nil {
 			serveStop()
-			udp.Close()
+			if udp != nil {
+				udp.Close()
+			}
 			return nil, err
 		}
 	}
@@ -584,6 +595,9 @@ func (e *Endpoint) SecretKey() key.SecretKey { return e.secretKey }
 
 // LocalAddr returns the bound UDP address.
 func (e *Endpoint) LocalAddr() netip.AddrPort {
+	if e.udp == nil {
+		return netip.AddrPort{}
+	}
 	return e.udp.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
@@ -1420,8 +1434,10 @@ func (e *Endpoint) Shutdown(ctx context.Context) error {
 	if err := e.transport.Close(); err != nil && firstErr == nil {
 		firstErr = err
 	}
-	if err := e.udp.Close(); err != nil && firstErr == nil && !errors.Is(err, net.ErrClosed) {
-		firstErr = err
+	if e.udp != nil {
+		if err := e.udp.Close(); err != nil && firstErr == nil && !errors.Is(err, net.ErrClosed) {
+			firstErr = err
+		}
 	}
 	return firstErr
 }

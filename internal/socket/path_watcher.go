@@ -123,7 +123,7 @@ func (w *PathWatcher) unsubscribe(s *pathSub) {
 	}
 	delete(w.subs, s)
 	w.mu.Unlock()
-	s.close()
+	s.close(false)
 }
 
 // Send broadcasts ev to every subscriber. A subscriber whose ring buffer is full
@@ -163,7 +163,7 @@ func (w *PathWatcher) Close() {
 	w.subs = make(map[*pathSub]struct{})
 	w.mu.Unlock()
 	for _, s := range subs {
-		s.close()
+		s.close(true)
 	}
 }
 
@@ -188,7 +188,7 @@ func (s *pathSub) enqueue(ev PathEvent) {
 
 // close marks the subscriber closed, wakes its delivery goroutine, and lets it
 // close the channel. Idempotent.
-func (s *pathSub) close() {
+func (s *pathSub) close(drain bool) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -197,7 +197,9 @@ func (s *pathSub) close() {
 	s.closed = true
 	s.cond.Signal()
 	s.mu.Unlock()
-	s.once.Do(func() { close(s.done) })
+	if !drain {
+		s.once.Do(func() { close(s.done) })
+	}
 }
 
 // deliver is the per-subscriber delivery goroutine. It pops events from the ring
