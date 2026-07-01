@@ -33,9 +33,9 @@ func (s echoRelayServer) url(t *testing.T) netaddr.RelayURL {
 }
 
 // TestRelayOnlyEcho is the slice-D integration gate: two endpoints with no
-// direct-IP address connect entirely through an in-process relay, exchange a
-// bidi-stream echo and a datagram, and each observes the other's verified
-// endpoint id.
+// UDP socket and no direct-IP address connect entirely through an in-process
+// relay, exchange a bidi-stream echo and a datagram, and each observes the
+// other's verified endpoint id.
 func TestRelayOnlyEcho(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -51,15 +51,14 @@ func TestRelayOnlyEcho(t *testing.T) {
 		WithSecretKey(srvKey),
 		WithALPNs(alpn),
 		WithRelayMode(mode),
-		// Bind to loopback so no usable public IP is advertised; the addr we
-		// dial carries only the relay URL, so the path is relay-only.
+		WithoutIPTransports(),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Shutdown(ctx)
 
-	client, err := Bind(ctx, WithRelayMode(mode))
+	client, err := Bind(ctx, WithRelayMode(mode), WithoutIPTransports())
 	if err != nil {
 		t.Fatal(err)
 	}
