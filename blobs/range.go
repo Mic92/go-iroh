@@ -180,6 +180,9 @@ func decodeRangeSpec(p *parser) (RangeSpec, error) {
 	if err != nil {
 		return RangeSpec{}, wrapDecodeErr(err)
 	}
+	if n > uint64(len(p.b)-p.off) {
+		return RangeSpec{}, wrapDecodeErr(endpointticket.ErrTruncated)
+	}
 	spans := make([]uint64, 0, n)
 	for range n {
 		span, err := p.varint()
@@ -300,6 +303,9 @@ func decodeChunkRangesSeq(p *parser) (ChunkRangesSeq, error) {
 	n, err := p.varint()
 	if err != nil {
 		return ChunkRangesSeq{}, wrapDecodeErr(err)
+	}
+	if n > uint64(len(p.b)-p.off) {
+		return ChunkRangesSeq{}, wrapDecodeErr(endpointticket.ErrTruncated)
 	}
 	entries := make([]chunkRangesSeqEntry, 0, n)
 	var offset uint64

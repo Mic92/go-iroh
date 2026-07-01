@@ -132,6 +132,9 @@ func decodeGetManyRequest(p *parser) (GetManyRequest, error) {
 	if err != nil {
 		return GetManyRequest{}, wrapDecodeErr(err)
 	}
+	if n > uint64(len(p.b)-p.off)/HashSize {
+		return GetManyRequest{}, wrapDecodeErr(endpointticket.ErrTruncated)
+	}
 	hashes := make([]Hash, 0, n)
 	for range n {
 		hashBytes, err := p.bytes(HashSize)

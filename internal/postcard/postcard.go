@@ -340,11 +340,11 @@ func (d *Decoder) value(v reflect.Value) error {
 		if err != nil {
 			return err
 		}
-		if n > uint64(len(d.b)-d.off) && v.Type().Elem().Kind() == reflect.Uint8 {
-			return errShort
-		}
 		if n > uint64(math.MaxInt) {
 			return fmt.Errorf("postcard: sequence too large")
+		}
+		if n > uint64(len(d.b)-d.off) {
+			return errShort
 		}
 		s := reflect.MakeSlice(v.Type(), int(n), int(n))
 		if v.Type().Elem().Kind() == reflect.Uint8 {
