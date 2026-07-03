@@ -4,8 +4,10 @@ import (
 	"encoding/base32"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -380,7 +382,12 @@ func appendTransportAddr(b []byte, a netaddr.TransportAddr) []byte {
 			b = appendVarint(b, 1)
 			b = append(b, ip6[:]...)
 		}
-		return appendVarint(b, uint64(ap.Port()))
+		b = appendVarint(b, uint64(ap.Port()))
+		if ap.Addr().Is6() && !ap.Addr().Is4In6() {
+			b = appendVarint(b, 0)
+			b = appendVarint(b, uint64(scopeID(ap.Addr().Zone())))
+		}
+		return b
 	case netaddr.CustomAddr:
 		b = appendVarint(b, 2)
 		b = appendVarint(b, a.ID())
@@ -457,6 +464,7 @@ func (p *parser) transportAddr() (netaddr.TransportAddr, error) {
 			return nil, err
 		}
 		var ip netip.Addr
+		v6 := false
 		switch family {
 		case 0:
 			b, err := p.bytes(4)
@@ -470,6 +478,7 @@ func (p *parser) transportAddr() (netaddr.TransportAddr, error) {
 				return nil, err
 			}
 			ip = netip.AddrFrom16([16]byte(b))
+			v6 = true
 		default:
 			return nil, fmt.Errorf("endpoint ticket: unsupported IP family %d", family)
 		}
@@ -479,6 +488,21 @@ func (p *parser) transportAddr() (netaddr.TransportAddr, error) {
 		}
 		if port > 65535 {
 			return nil, fmt.Errorf("endpoint ticket: invalid port %d", port)
+		}
+		if v6 {
+			if _, err := p.varint(); err != nil {
+				return nil, err
+			}
+			scope, err := p.varint()
+			if err != nil {
+				return nil, err
+			}
+			if scope > 0xffffffff {
+				return nil, fmt.Errorf("endpoint ticket: invalid IPv6 scope id %d", scope)
+			}
+			if scope != 0 {
+				ip = ip.WithZone(zoneFromScopeID(uint32(scope)))
+			}
 		}
 		return netaddr.IPAddr{Addr: netip.AddrPortFrom(ip, uint16(port))}, nil
 	case 2:
@@ -498,4 +522,27 @@ func (p *parser) transportAddr() (netaddr.TransportAddr, error) {
 	default:
 		return nil, fmt.Errorf("endpoint ticket: unsupported transport kind %d", kind)
 	}
+}
+
+func scopeID(zone string) uint32 {
+	if zone == "" {
+		return 0
+	}
+	if n, err := strconv.ParseUint(zone, 10, 32); err == nil {
+		return uint32(n)
+	}
+	if iface, err := net.InterfaceByName(zone); err == nil && iface.Index > 0 {
+		return uint32(iface.Index)
+	}
+	return 0
+}
+
+func zoneFromScopeID(scope uint32) string {
+	if scope == 0 {
+		return ""
+	}
+	if iface, err := net.InterfaceByIndex(int(scope)); err == nil && iface.Name != "" {
+		return iface.Name
+	}
+	return strconv.FormatUint(uint64(scope), 10)
 }

@@ -67,6 +67,20 @@ func TestRoundTripCustomAddr(t *testing.T) {
 	assertEndpointAddrEqual(t, got, addr)
 }
 
+func TestRoundTripIPv6Zone(t *testing.T) {
+	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ip := netip.AddrPortFrom(netip.MustParseAddr("fe80::1").WithZone("123456789"), 1024)
+	addr := netaddr.NewEndpointAddr(id, netaddr.IPAddr{Addr: ip})
+	got, err := Decode(Encode(addr))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	assertEndpointAddrEqual(t, got, addr)
+}
+
 func TestParseTicket(t *testing.T) {
 	id, err := key.ParseEndpointID("ae58ff8833241ac82d6ff7611046ed67b5072d142c588d0063e942d9a75502b6")
 	if err != nil {
