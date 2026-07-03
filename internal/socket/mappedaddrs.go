@@ -118,13 +118,17 @@ func CustomMappedAddrFromAddr(a netip.Addr) CustomMappedAddr { return CustomMapp
 
 // AddrPort returns the mapped address with the fixed dummy port, suitable for
 // handing to quic-go as a path's net.Addr.
-func (m EndpointIDMappedAddr) AddrPort() netip.AddrPort { return netip.AddrPortFrom(m.a, mappedPort) }
+func (m EndpointIDMappedAddr) AddrPort() netip.AddrPort { return mappedAddrPort(m.a) }
 
 // AddrPort returns the mapped address with the fixed dummy port.
-func (m RelayMappedAddr) AddrPort() netip.AddrPort { return netip.AddrPortFrom(m.a, mappedPort) }
+func (m RelayMappedAddr) AddrPort() netip.AddrPort { return mappedAddrPort(m.a) }
 
 // AddrPort returns the mapped address with the fixed dummy port.
-func (m CustomMappedAddr) AddrPort() netip.AddrPort { return netip.AddrPortFrom(m.a, mappedPort) }
+func (m CustomMappedAddr) AddrPort() netip.AddrPort { return mappedAddrPort(m.a) }
+
+func mappedAddrPort(a netip.Addr) netip.AddrPort {
+	return netip.AddrPortFrom(a, mappedPort)
+}
 
 // MappedKind classifies a netip.Addr as one of the mapped kinds or a real IP.
 type MappedKind int

@@ -112,10 +112,19 @@ func (t *IpTransport) send(p []byte, dst netip.AddrPort) (int, error) {
 }
 
 func canonicalAddrPort(ap netip.AddrPort) netip.AddrPort {
-	if !ap.Addr().Is4In6() {
+	addr := ap.Addr()
+	if !addr.Is4In6() {
 		return ap
 	}
-	return netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+	return netip.AddrPortFrom(addr.Unmap(), ap.Port())
+}
+
+func udpAddrFromAddrPort(ap netip.AddrPort) *net.UDPAddr {
+	return net.UDPAddrFromAddrPort(canonicalAddrPort(ap))
+}
+
+func addrPortFromUDPAddr(addr *net.UDPAddr) netip.AddrPort {
+	return canonicalAddrPort(addr.AddrPort())
 }
 
 // addrPort extracts a netip.AddrPort from a net.Addr, handling the *net.UDPAddr
@@ -124,14 +133,14 @@ func canonicalAddrPort(ap netip.AddrPort) netip.AddrPort {
 func addrPort(a net.Addr) (netip.AddrPort, bool) {
 	switch v := a.(type) {
 	case *net.UDPAddr:
-		return v.AddrPort(), true
+		return addrPortFromUDPAddr(v), true
 	case interface{ AddrPort() netip.AddrPort }:
-		return v.AddrPort(), true
+		return canonicalAddrPort(v.AddrPort()), true
 	default:
 		ap, err := netip.ParseAddrPort(a.String())
 		if err != nil {
 			return netip.AddrPort{}, false
 		}
-		return ap, true
+		return canonicalAddrPort(ap), true
 	}
 }

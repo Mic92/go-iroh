@@ -133,6 +133,44 @@ func TestMappedAddrConstructorGoldens(t *testing.T) {
 	}
 }
 
+func TestIPAddrPreservesIPv6Zone(t *testing.T) {
+	ap := netip.AddrPortFrom(netip.MustParseAddr("fe80::1").WithZone("en0"), 4242)
+	addr := IPAddr(ap)
+	got, ok := addr.IP()
+	if !ok {
+		t.Fatal("IPAddr did not produce an IP address")
+	}
+	if got != ap {
+		t.Fatalf("IPAddr = %s, want %s", got, ap)
+	}
+}
+
+func TestUDPAddrRoundTripPreservesIPv6Zone(t *testing.T) {
+	ap := netip.AddrPortFrom(netip.MustParseAddr("fe80::1").WithZone("en0"), 4242)
+	udp := udpAddrFromAddrPort(ap)
+	if udp.Zone != "en0" {
+		t.Fatalf("UDPAddr.Zone = %q, want en0", udp.Zone)
+	}
+	if got := addrPortFromUDPAddr(udp); got != ap {
+		t.Fatalf("round trip = %s, want %s", got, ap)
+	}
+}
+
+func TestMagicConnUDPAddrCacheKeysIPv6Zone(t *testing.T) {
+	m := &MagicConn{recvAddrs: make(map[netip.AddrPort]*net.UDPAddr)}
+	ap := netip.AddrPortFrom(netip.MustParseAddr("fe80::1").WithZone("en0"), 4242)
+	got := m.udpAddr(ap)
+	if got.Zone != "en0" {
+		t.Fatalf("UDPAddr.Zone = %q, want en0", got.Zone)
+	}
+	if got.AddrPort() != ap {
+		t.Fatalf("UDPAddr.AddrPort = %s, want %s", got.AddrPort(), ap)
+	}
+	if cached := m.udpAddr(ap); cached != got {
+		t.Fatal("udpAddr did not reuse cached address")
+	}
+}
+
 // TestMappedAddrPrefixExact checks the literal first 8 bytes.
 func TestMappedAddrPrefixExact(t *testing.T) {
 	a := mappedAddr(subnetRelay, 1).As16()

@@ -311,7 +311,7 @@ func (d *Discovery) announcement(data dns.EndpointData) ([]byte, error) {
 type announcementData struct {
 	id       key.EndpointID
 	port     uint16
-	ips      []netip.Addr
+	ips      []netip.AddrPort
 	relay    string
 	userData string
 }
@@ -328,7 +328,7 @@ func (d *Discovery) announcementInfo(data dns.EndpointData) (announcementData, e
 		if addr.Port() != port || !addr.Addr().IsValid() {
 			continue
 		}
-		out.ips = append(out.ips, addr.Addr().Unmap())
+		out.ips = append(out.ips, netip.AddrPortFrom(addr.Addr().Unmap(), addr.Port()))
 	}
 	if len(out.ips) == 0 {
 		return announcementData{}, errNoAddresses
@@ -382,7 +382,7 @@ func infoFromAnnouncement(a announcementData) dns.EndpointInfo {
 	data := dns.NewEndpointData()
 	var addrs []netip.AddrPort
 	for _, ip := range a.ips {
-		addrs = append(addrs, netip.AddrPortFrom(ip, a.port))
+		addrs = append(addrs, ip)
 	}
 	data.AddIPAddrs(addrs...)
 	if a.relay != "" {

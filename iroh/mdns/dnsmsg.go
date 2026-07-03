@@ -50,7 +50,8 @@ func buildAnnouncement(service string, data announcementData) ([]byte, error) {
 	}
 
 	answers := 3
-	for _, ip := range data.ips {
+	for _, ap := range data.ips {
+		ip := ap.Addr()
 		if ip.Is4() || ip.Is4In6() {
 			answers++
 		} else if ip.Is6() {
@@ -70,7 +71,8 @@ func buildAnnouncement(service string, data announcementData) ([]byte, error) {
 	if err := b.txt(inst, txt); err != nil {
 		return nil, err
 	}
-	for _, ip := range data.ips {
+	for _, ap := range data.ips {
+		ip := ap.Addr()
 		if ip.Is4() || ip.Is4In6() {
 			if err := b.a(host, ip); err != nil {
 				return nil, err
@@ -232,7 +234,9 @@ func parseAnnouncement(packet []byte, service string) (dns.EndpointInfo, bool) {
 		var data announcementData
 		data.id = id
 		data.port = s.port
-		data.ips = append(data.ips, hosts[s.host]...)
+		for _, ip := range hosts[s.host] {
+			data.ips = append(data.ips, netip.AddrPortFrom(ip, s.port))
+		}
 		if len(data.ips) == 0 {
 			continue
 		}

@@ -230,10 +230,11 @@ func (m *MagicConn) recvAddr(info RecvInfo) (net.Addr, bool) {
 }
 
 func (m *MagicConn) udpAddr(ap netip.AddrPort) *net.UDPAddr {
+	ap = canonicalAddrPort(ap)
 	if addr, ok := m.recvAddrs[ap]; ok {
 		return addr
 	}
-	addr := net.UDPAddrFromAddrPort(ap)
+	addr := udpAddrFromAddrPort(ap)
 	m.recvAddrs[ap] = addr
 	return addr
 }
@@ -241,7 +242,7 @@ func (m *MagicConn) udpAddr(ap netip.AddrPort) *net.UDPAddr {
 // mappedUDPAddr wraps a mapped IPv6 ULA as a *net.UDPAddr at the fixed dummy
 // port quic-go uses to address the path.
 func mappedUDPAddr(a netip.Addr) *net.UDPAddr {
-	return net.UDPAddrFromAddrPort(netip.AddrPortFrom(a, mappedPort))
+	return udpAddrFromAddrPort(netip.AddrPortFrom(a, mappedPort))
 }
 
 // WriteTo routes p to the transport addressed by addr and reports success.

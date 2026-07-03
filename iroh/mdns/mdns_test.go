@@ -35,7 +35,7 @@ func TestAnnouncementRoundTrip(t *testing.T) {
 	packet, err := buildAnnouncement(DefaultServiceName, announcementData{
 		id:       id,
 		port:     7777,
-		ips:      []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("2001:db8::1")},
+		ips:      []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:7777"), netip.MustParseAddrPort("[2001:db8::1]:7777")},
 		relay:    relay.String(),
 		userData: user.String(),
 	})
@@ -70,7 +70,7 @@ func TestDiscoveryResolveFromPacket(t *testing.T) {
 	packet, err := buildAnnouncement(DefaultServiceName, announcementData{
 		id:   id,
 		port: 7777,
-		ips:  []netip.Addr{netip.MustParseAddr("192.0.2.1")},
+		ips:  []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:7777")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestServiceNameIsolation(t *testing.T) {
 	packet, err := buildAnnouncement("other", announcementData{
 		id:   id,
 		port: 7777,
-		ips:  []netip.Addr{netip.MustParseAddr("192.0.2.1")},
+		ips:  []netip.AddrPort{netip.MustParseAddrPort("192.0.2.1:7777")},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +139,27 @@ func TestEndpointLabelMatchesRustMDNS(t *testing.T) {
 	}
 	if parsed != id {
 		t.Fatalf("endpoint label round trip = %v, want %v", parsed, id)
+	}
+}
+
+func TestAnnouncementInfoPreservesIPv6Zone(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	d := New(id)
+	want := netip.AddrPortFrom(netip.MustParseAddr("fe80::1").WithZone("en0"), 7777)
+	info, err := d.announcementInfo(dns.NewEndpointData().WithIPAddrs(want))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.ips) != 1 || info.ips[0] != want {
+		t.Fatalf("announcementInfo IPs = %v, want [%s]", info.ips, want)
+	}
+	got := infoFromAnnouncement(info).Data.IPAddrs()
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("infoFromAnnouncement IPs = %v, want [%s]", got, want)
 	}
 }
 

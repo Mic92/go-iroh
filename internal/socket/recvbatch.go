@@ -37,7 +37,7 @@ type Addr struct {
 // so an IPv4-mapped IPv6 address becomes a plain IPv4 address, matching Rust's
 // SocketAddr -> Addr conversion (iroh/src/socket/transports.rs:825).
 func IPAddr(ap netip.AddrPort) Addr {
-	return Addr{kind: AddrIP, ip: netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())}
+	return Addr{kind: AddrIP, ip: canonicalAddrPort(ap)}
 }
 
 // RelayAddr returns an [Addr] for a relay path reaching eid through url.
