@@ -3,7 +3,9 @@ package iroh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"sync"
 
 	"github.com/tmc/go-iroh/netaddr"
 )
@@ -17,7 +19,9 @@ var ErrRDMAUnsupported = errors.New("rdma: unsupported on this platform")
 // peers support it. The data path is available only when a platform backend can
 // open and connect a local RDMA device.
 type RDMAStreamTransport struct {
-	id uint64
+	id    uint64
+	ctrl  net.Listener
+	close sync.Once
 }
 
 // NewRDMAStreamTransport returns an RDMA stream transport.
@@ -25,7 +29,11 @@ func NewRDMAStreamTransport(id uint64) (*RDMAStreamTransport, error) {
 	if id == 0 {
 		return nil, errors.New("iroh: zero rdma stream transport id")
 	}
-	return &RDMAStreamTransport{id: id}, nil
+	ln, err := net.Listen("tcp", "[::]:0")
+	if err != nil {
+		return nil, fmt.Errorf("rdma: listen control: %w", err)
+	}
+	return &RDMAStreamTransport{id: id, ctrl: ln}, nil
 }
 
 func (t *RDMAStreamTransport) ID() uint64 { return t.id }
@@ -33,7 +41,7 @@ func (t *RDMAStreamTransport) ID() uint64 { return t.id }
 func (t *RDMAStreamTransport) LinkClass() TransportLinkClass { return TransportLinkRDMA }
 
 func (t *RDMAStreamTransport) LocalAddrs(ctx context.Context) ([]netaddr.CustomAddr, error) {
-	return localRDMAStreamAddrs(ctx, t.id)
+	return localRDMAStreamAddrs(ctx, t.id, t.localControlAddrs())
 }
 
 func (t *RDMAStreamTransport) DialStream(ctx context.Context, remote netaddr.CustomAddr, opts StreamOptions) (net.Conn, error) {
@@ -41,5 +49,41 @@ func (t *RDMAStreamTransport) DialStream(ctx context.Context, remote netaddr.Cus
 }
 
 func (t *RDMAStreamTransport) ListenStreams(ctx context.Context, accept func(StreamAccept) error) error {
-	return listenRDMAStreams(ctx, t.id, accept)
+	return listenRDMAStreams(ctx, t.id, t.ctrl, accept)
+}
+
+func (t *RDMAStreamTransport) Close() error {
+	var err error
+	t.close.Do(func() {
+		err = t.ctrl.Close()
+	})
+	return err
+}
+
+func (t *RDMAStreamTransport) localControlAddrs() []string {
+	tcpAddr, ok := t.ctrl.Addr().(*net.TCPAddr)
+	if !ok {
+		return []string{t.ctrl.Addr().String()}
+	}
+	if !tcpAddr.IP.IsUnspecified() {
+		return []string{t.ctrl.Addr().String()}
+	}
+	links, err := LocalTransportLinkAddrs()
+	if err != nil {
+		return []string{t.ctrl.Addr().String()}
+	}
+	out := make([]string, 0, len(links))
+	for _, link := range links {
+		if link.Class != TransportLinkThunderbolt && link.Class != TransportLinkWiredLAN && link.Class != TransportLinkLAN && link.Class != TransportLinkLoopback {
+			continue
+		}
+		control, ok := tcpDialAddrFromLinkAddr(link, tcpAddr.Port)
+		if ok {
+			out = append(out, control)
+		}
+	}
+	if len(out) == 0 {
+		return []string{t.ctrl.Addr().String()}
+	}
+	return out
 }

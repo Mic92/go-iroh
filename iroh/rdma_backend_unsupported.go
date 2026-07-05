@@ -14,7 +14,7 @@ func (unsupportedRDMAStreamBackend) DialStream(ctx context.Context, id uint64, r
 	return nil, ErrRDMAUnsupported
 }
 
-func (unsupportedRDMAStreamBackend) ListenStreams(ctx context.Context, id uint64, accept func(StreamAccept) error) error {
-	_, _, _ = ctx, id, accept
+func (unsupportedRDMAStreamBackend) ListenStreams(ctx context.Context, id uint64, ln net.Listener, accept func(StreamAccept) error) error {
+	_, _, _, _ = ctx, id, ln, accept
 	return ErrRDMAUnsupported
 }

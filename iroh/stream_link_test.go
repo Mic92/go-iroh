@@ -260,6 +260,7 @@ func TestRDMAStreamTransportUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer tr.Close()
 	if tr.LinkClass() != TransportLinkRDMA {
 		t.Fatalf("LinkClass = %v, want %v", tr.LinkClass(), TransportLinkRDMA)
 	}

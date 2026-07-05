@@ -3,6 +3,7 @@ package iroh
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/tmc/go-iroh/netaddr"
 )
@@ -15,22 +16,53 @@ type RDMALink struct {
 	ActiveMTU int32
 }
 
-func rdmaStreamDialAddr(link RDMALink) string {
-	return "rdma:" + link.Device
+type rdmaStreamDialInfo struct {
+	Device  string
+	Control string
 }
 
-func rdmaStreamAddr(id uint64, link RDMALink) netaddr.CustomAddr {
-	return NewStreamLinkAddr(id, TransportLinkRDMA, link.Device, rdmaStreamDialAddr(link))
+func rdmaStreamDialAddr(link RDMALink, control string) string {
+	if control == "" {
+		return "rdma:" + link.Device
+	}
+	return "rdma:" + link.Device + "@" + control
 }
 
-func localRDMAStreamAddrs(ctx context.Context, id uint64) ([]netaddr.CustomAddr, error) {
+func parseRDMAStreamDialAddr(s string) (rdmaStreamDialInfo, error) {
+	if !strings.HasPrefix(s, "rdma:") {
+		return rdmaStreamDialInfo{}, fmt.Errorf("rdma: malformed dial address %q", s)
+	}
+	rest := strings.TrimPrefix(s, "rdma:")
+	device, control, ok := strings.Cut(rest, "@")
+	if device == "" {
+		return rdmaStreamDialInfo{}, fmt.Errorf("rdma: malformed dial address %q", s)
+	}
+	if !ok {
+		return rdmaStreamDialInfo{Device: device}, nil
+	}
+	if control == "" {
+		return rdmaStreamDialInfo{}, fmt.Errorf("rdma: malformed dial address %q", s)
+	}
+	return rdmaStreamDialInfo{Device: device, Control: control}, nil
+}
+
+func rdmaStreamAddr(id uint64, link RDMALink, control string) netaddr.CustomAddr {
+	return NewStreamLinkAddr(id, TransportLinkRDMA, link.Device, rdmaStreamDialAddr(link, control))
+}
+
+func localRDMAStreamAddrs(ctx context.Context, id uint64, controls []string) ([]netaddr.CustomAddr, error) {
 	links, err := LocalRDMALinks(ctx)
 	if err != nil {
 		return nil, err
 	}
-	addrs := make([]netaddr.CustomAddr, 0, len(links))
+	if len(controls) == 0 {
+		controls = []string{""}
+	}
+	addrs := make([]netaddr.CustomAddr, 0, len(links)*len(controls))
 	for _, link := range links {
-		addrs = append(addrs, rdmaStreamAddr(id, link))
+		for _, control := range controls {
+			addrs = append(addrs, rdmaStreamAddr(id, link, control))
+		}
 	}
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("%w: no active rdma devices", ErrRDMAUnsupported)

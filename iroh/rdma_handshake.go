@@ -70,6 +70,34 @@ func readRDMAStreamDestination(r io.Reader) (rdmaStreamDestination, error) {
 	return dst, nil
 }
 
+func writeRDMAStreamString(w io.Writer, s string) error {
+	if len(s) > 0xffff {
+		return errors.New("rdma: string too long")
+	}
+	var hdr [2]byte
+	binary.BigEndian.PutUint16(hdr[:], uint16(len(s)))
+	if _, err := w.Write(hdr[:]); err != nil {
+		return fmt.Errorf("rdma: write string length: %w", err)
+	}
+	if _, err := io.WriteString(w, s); err != nil {
+		return fmt.Errorf("rdma: write string: %w", err)
+	}
+	return nil
+}
+
+func readRDMAStreamString(r io.Reader) (string, error) {
+	var hdr [2]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil {
+		return "", fmt.Errorf("rdma: read string length: %w", err)
+	}
+	n := int(binary.BigEndian.Uint16(hdr[:]))
+	buf := make([]byte, n)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return "", fmt.Errorf("rdma: read string: %w", err)
+	}
+	return string(buf), nil
+}
+
 const (
 	rdmaStreamHandshakeVersion = 1
 	rdmaStreamDestinationSize  = 32

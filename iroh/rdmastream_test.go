@@ -8,13 +8,35 @@ import (
 )
 
 func TestRDMAStreamAddr(t *testing.T) {
-	addr := rdmaStreamAddr(99, RDMALink{Device: "rdma_en3", State: 4, LinkLayer: 100, ActiveMTU: 5})
+	addr := rdmaStreamAddr(99, RDMALink{Device: "rdma_en3", State: 4, LinkLayer: 100, ActiveMTU: 5}, "127.0.0.1:1")
 	got, err := ParseStreamLinkAddr(addr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Class != TransportLinkRDMA || got.Interface != "rdma_en3" || got.DialAddr != "rdma:rdma_en3" {
+	if got.Class != TransportLinkRDMA || got.Interface != "rdma_en3" || got.DialAddr != "rdma:rdma_en3@127.0.0.1:1" {
 		t.Fatalf("addr = %+v", got)
+	}
+}
+
+func TestParseRDMAStreamDialAddr(t *testing.T) {
+	got, err := parseRDMAStreamDialAddr("rdma:rdma_en3@127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Device != "rdma_en3" || got.Control != "127.0.0.1:1" {
+		t.Fatalf("dial info = %+v", got)
+	}
+	got, err = parseRDMAStreamDialAddr("rdma:rdma_en3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Device != "rdma_en3" || got.Control != "" {
+		t.Fatalf("dial info without control = %+v", got)
+	}
+	for _, s := range []string{"", "tcp:rdma_en3", "rdma:", "rdma:rdma_en3@"} {
+		if _, err := parseRDMAStreamDialAddr(s); err == nil {
+			t.Fatalf("parseRDMAStreamDialAddr(%q) succeeded", s)
+		}
 	}
 }
 
@@ -23,8 +45,11 @@ func TestRDMAStreamTransportDialUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tr.DialStream(context.Background(), rdmaStreamAddr(99, RDMALink{Device: "rdma_en3"}), StreamOptions{}); !errors.Is(err, ErrRDMAUnsupported) {
+	if _, err := tr.DialStream(context.Background(), rdmaStreamAddr(99, RDMALink{Device: "rdma_en3"}, "127.0.0.1:1"), StreamOptions{}); !errors.Is(err, ErrRDMAUnsupported) {
 		t.Fatalf("DialStream = %v, want %v", err, ErrRDMAUnsupported)
+	}
+	if err := tr.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -119,6 +119,17 @@ func (t *rdmaStreamResourceTransport) poll(ctx context.Context, n int) ([]rdmaSt
 	return pollRDMAStreamCompletions(ctx, t.cq, n)
 }
 
+func (t *rdmaStreamResourceTransport) localDestination() (rdmaStreamDestination, error) {
+	return localRDMAStreamDestination(t.qp)
+}
+
+func (t *rdmaStreamResourceTransport) connect(ctx context.Context, local, remote rdmaStreamDestination) error {
+	if err := readyToReceiveRDMAStream(ctx, t.qp, local, remote); err != nil {
+		return err
+	}
+	return readyToSendRDMAStream(ctx, t.qp, local.PSN)
+}
+
 func (t *rdmaStreamResourceTransport) close() error {
 	var err error
 	if t.qp != nil && t.cq != nil {
