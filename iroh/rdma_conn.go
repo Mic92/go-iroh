@@ -86,9 +86,7 @@ func (c *rdmaStreamConn) Read(p []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
 	for len(c.read) == 0 {
-		work, err := c.pollWork(func(work rdmaStreamWorkRequest) bool {
-			return work.ID == c.recvID
-		})
+		work, err := c.pollWorkID(c.recvID)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return 0, net.ErrClosed
@@ -135,7 +133,7 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 	if err := c.t.postSend(0, rdmaStreamFrameHeaderSize+len(p), id); err != nil {
 		return 0, err
 	}
-	if _, err := c.pollWork(func(work rdmaStreamWorkRequest) bool { return work.ID == id }); err != nil {
+	if _, err := c.pollWorkID(id); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return 0, net.ErrClosed
 		}
@@ -180,12 +178,12 @@ func (c *rdmaStreamConn) postRecvLocked() error {
 	return c.t.postRecv(0, len(c.t.recvBuf()), c.recvID)
 }
 
-func (c *rdmaStreamConn) pollWork(match func(rdmaStreamWorkRequest) bool) (rdmaStreamWorkRequest, error) {
+func (c *rdmaStreamConn) pollWorkID(id uint64) (rdmaStreamWorkRequest, error) {
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
 	for {
 		for i, work := range c.pending {
-			if match(work) {
+			if work.ID == id {
 				copy(c.pending[i:], c.pending[i+1:])
 				c.pending = c.pending[:len(c.pending)-1]
 				return work, nil
@@ -196,7 +194,7 @@ func (c *rdmaStreamConn) pollWork(match func(rdmaStreamWorkRequest) bool) (rdmaS
 			return rdmaStreamWorkRequest{}, err
 		}
 		for _, work := range works {
-			if match(work) {
+			if work.ID == id {
 				return work, nil
 			}
 			c.pending = append(c.pending, work)
