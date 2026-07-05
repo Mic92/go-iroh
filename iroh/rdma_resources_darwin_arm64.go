@@ -742,7 +742,6 @@ func pollRDMAStreamCompletions(ctx context.Context, cq *rdmaStreamCompletionQueu
 		return out, nil
 	}
 	var wc [8]applerdma.IbvWC
-	works := out[:0]
 	spins := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -762,7 +761,7 @@ func pollRDMAStreamCompletions(ctx context.Context, cq *rdmaStreamCompletionQueu
 			}
 			continue
 		}
-		next, err := appendRDMAStreamWorkRequests(works, wc[:], n)
+		next, err := fillRDMAStreamWorkRequests(out, wc[:], n)
 		if err != nil {
 			return nil, err
 		}
@@ -771,25 +770,28 @@ func pollRDMAStreamCompletions(ctx context.Context, cq *rdmaStreamCompletionQueu
 }
 
 func rdmaStreamWorkRequests(wc []applerdma.IbvWC, n int) ([]rdmaStreamWorkRequest, error) {
-	return appendRDMAStreamWorkRequests(make([]rdmaStreamWorkRequest, 0, n), wc, n)
+	return fillRDMAStreamWorkRequests(make([]rdmaStreamWorkRequest, n), wc, n)
 }
 
-func appendRDMAStreamWorkRequests(out []rdmaStreamWorkRequest, wc []applerdma.IbvWC, n int) ([]rdmaStreamWorkRequest, error) {
+func fillRDMAStreamWorkRequests(out []rdmaStreamWorkRequest, wc []applerdma.IbvWC, n int) ([]rdmaStreamWorkRequest, error) {
 	if n < 0 || n > len(wc) {
 		return nil, fmt.Errorf("rdma: completion count %d outside buffer length %d", n, len(wc))
+	}
+	if n > len(out) {
+		return nil, fmt.Errorf("rdma: completion count %d outside output length %d", n, len(out))
 	}
 	for i := 0; i < n; i++ {
 		if wc[i].Status != applerdma.IBV_WC_SUCCESS {
 			return nil, fmt.Errorf("rdma: completion id %d opcode %d status %d", wc[i].WRID, wc[i].Opcode, wc[i].Status)
 		}
-		out = append(out, rdmaStreamWorkRequest{
+		out[i] = rdmaStreamWorkRequest{
 			ID:     wc[i].WRID,
 			Opcode: int(wc[i].Opcode),
 			Bytes:  int(wc[i].ByteLen),
 			Status: int(wc[i].Status),
-		})
+		}
 	}
-	return out, nil
+	return out[:n], nil
 }
 
 func drainRDMAStreamQueuePair(qp *rdmaStreamQueuePair, cq *rdmaStreamCompletionQueue) error {

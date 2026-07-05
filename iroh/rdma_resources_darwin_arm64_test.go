@@ -81,9 +81,49 @@ func TestRDMAStreamWorkRequests(t *testing.T) {
 	if len(works) != 1 || works[0].ID != 11 || works[0].Bytes != 7 {
 		t.Fatalf("works = %+v", works)
 	}
+	out := make([]rdmaStreamWorkRequest, 8)
+	works, err = fillRDMAStreamWorkRequests(out, wc, len(wc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(works) != 1 || works[0].ID != 11 || cap(works) != cap(out) {
+		t.Fatalf("filled works = len %d cap %d %+v", len(works), cap(works), works)
+	}
 	_, err = rdmaStreamWorkRequests([]applerdma.IbvWC{{WRID: 12, Status: 5}}, 1)
 	if err == nil || !strings.Contains(err.Error(), "status 5") {
 		t.Fatalf("failure err = %v", err)
+	}
+	_, err = fillRDMAStreamWorkRequests(make([]rdmaStreamWorkRequest, 1), wc, 2)
+	if err == nil || !strings.Contains(err.Error(), "outside buffer length") {
+		t.Fatalf("short input err = %v", err)
+	}
+	_, err = fillRDMAStreamWorkRequests(nil, wc, 1)
+	if err == nil || !strings.Contains(err.Error(), "outside output length") {
+		t.Fatalf("short output err = %v", err)
+	}
+}
+
+func BenchmarkRDMAStreamWorkRequests(b *testing.B) {
+	wc := []applerdma.IbvWC{
+		{WRID: 11, Status: applerdma.IBV_WC_SUCCESS, Opcode: 3, ByteLen: 7},
+		{WRID: 12, Status: applerdma.IBV_WC_SUCCESS, Opcode: 3, ByteLen: 8},
+		{WRID: 13, Status: applerdma.IBV_WC_SUCCESS, Opcode: 3, ByteLen: 9},
+		{WRID: 14, Status: applerdma.IBV_WC_SUCCESS, Opcode: 3, ByteLen: 10},
+		{WRID: 15, Status: applerdma.IBV_WC_SUCCESS, Opcode: 3, ByteLen: 11},
+		{WRID: 16, Status: applerdma.IBV_WC_SUCCESS, Opcode: 3, ByteLen: 12},
+		{WRID: 17, Status: applerdma.IBV_WC_SUCCESS, Opcode: 3, ByteLen: 13},
+		{WRID: 18, Status: applerdma.IBV_WC_SUCCESS, Opcode: 3, ByteLen: 14},
+	}
+	out := make([]rdmaStreamWorkRequest, len(wc))
+	b.ReportAllocs()
+	for b.Loop() {
+		works, err := fillRDMAStreamWorkRequests(out, wc, len(wc))
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(works) != len(wc) {
+			b.Fatalf("len(works) = %d, want %d", len(works), len(wc))
+		}
 	}
 }
 
