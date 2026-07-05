@@ -16,9 +16,16 @@ type RDMALink struct {
 	ActiveMTU int32
 }
 
+const rdmaLinkLayerThunderbolt uint8 = 100
+
 type rdmaStreamDialInfo struct {
 	Device  string
 	Control string
+}
+
+type rdmaStreamControlAddr struct {
+	Addr  string
+	Class TransportLinkClass
 }
 
 func rdmaStreamDialAddr(link RDMALink, control string) string {
@@ -50,22 +57,39 @@ func rdmaStreamAddr(id uint64, link RDMALink, control string) netaddr.CustomAddr
 	return NewStreamLinkAddr(id, TransportLinkRDMA, link.Device, rdmaStreamDialAddr(link, control))
 }
 
-func localRDMAStreamAddrs(ctx context.Context, id uint64, controls []string) ([]netaddr.CustomAddr, error) {
+func localRDMAStreamAddrs(ctx context.Context, id uint64, controls []rdmaStreamControlAddr) ([]netaddr.CustomAddr, error) {
 	links, err := LocalRDMALinks(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if len(controls) == 0 {
-		controls = []string{""}
+		controls = []rdmaStreamControlAddr{{}}
 	}
 	addrs := make([]netaddr.CustomAddr, 0, len(links)*len(controls))
+	var controlBuf [8]rdmaStreamControlAddr
 	for _, link := range links {
-		for _, control := range controls {
-			addrs = append(addrs, rdmaStreamAddr(id, link, control))
+		linkControls := rdmaStreamControlsForLink(link, controls, controlBuf[:0])
+		for _, control := range linkControls {
+			addrs = append(addrs, rdmaStreamAddr(id, link, control.Addr))
 		}
 	}
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("%w: no active rdma devices", ErrRDMAUnsupported)
 	}
 	return addrs, nil
+}
+
+func rdmaStreamControlsForLink(link RDMALink, controls, dst []rdmaStreamControlAddr) []rdmaStreamControlAddr {
+	if link.LinkLayer != rdmaLinkLayerThunderbolt {
+		return controls
+	}
+	for _, control := range controls {
+		if control.Class == TransportLinkThunderbolt {
+			dst = append(dst, control)
+		}
+	}
+	if len(dst) == 0 {
+		return controls
+	}
+	return dst
 }

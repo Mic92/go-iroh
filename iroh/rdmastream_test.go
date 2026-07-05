@@ -40,6 +40,36 @@ func TestParseRDMAStreamDialAddr(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamControlsForThunderboltLink(t *testing.T) {
+	controls := []rdmaStreamControlAddr{
+		{Addr: "127.0.0.1:1", Class: TransportLinkLoopback},
+		{Addr: "[fe80::1%bridge0]:1", Class: TransportLinkThunderbolt},
+		{Addr: "192.0.2.1:1", Class: TransportLinkWiredLAN},
+	}
+	got := rdmaStreamControlsForLink(RDMALink{LinkLayer: rdmaLinkLayerThunderbolt}, controls, nil)
+	if len(got) != 1 || got[0].Addr != "[fe80::1%bridge0]:1" {
+		t.Fatalf("controls = %+v, want thunderbolt only", got)
+	}
+	if len(controls) != 3 || controls[0].Addr != "127.0.0.1:1" {
+		t.Fatalf("controls mutated: %+v", controls)
+	}
+}
+
+func TestRDMAStreamControlsFallback(t *testing.T) {
+	controls := []rdmaStreamControlAddr{
+		{Addr: "127.0.0.1:1", Class: TransportLinkLoopback},
+		{Addr: "192.0.2.1:1", Class: TransportLinkWiredLAN},
+	}
+	got := rdmaStreamControlsForLink(RDMALink{LinkLayer: rdmaLinkLayerThunderbolt}, controls, nil)
+	if len(got) != len(controls) {
+		t.Fatalf("thunderbolt fallback controls = %+v, want %+v", got, controls)
+	}
+	got = rdmaStreamControlsForLink(RDMALink{}, controls, nil)
+	if len(got) != len(controls) {
+		t.Fatalf("generic controls = %+v, want %+v", got, controls)
+	}
+}
+
 func TestRDMAStreamTransportDialUnsupported(t *testing.T) {
 	tr, err := NewRDMAStreamTransport(99)
 	if err != nil {

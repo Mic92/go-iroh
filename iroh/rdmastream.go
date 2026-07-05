@@ -60,30 +60,30 @@ func (t *RDMAStreamTransport) Close() error {
 	return err
 }
 
-func (t *RDMAStreamTransport) localControlAddrs() []string {
+func (t *RDMAStreamTransport) localControlAddrs() []rdmaStreamControlAddr {
 	tcpAddr, ok := t.ctrl.Addr().(*net.TCPAddr)
 	if !ok {
-		return []string{t.ctrl.Addr().String()}
+		return []rdmaStreamControlAddr{{Addr: t.ctrl.Addr().String()}}
 	}
 	if !tcpAddr.IP.IsUnspecified() {
-		return []string{t.ctrl.Addr().String()}
+		return []rdmaStreamControlAddr{{Addr: t.ctrl.Addr().String()}}
 	}
 	links, err := LocalTransportLinkAddrs()
 	if err != nil {
-		return []string{t.ctrl.Addr().String()}
+		return []rdmaStreamControlAddr{{Addr: t.ctrl.Addr().String()}}
 	}
-	out := make([]string, 0, len(links))
+	out := make([]rdmaStreamControlAddr, 0, len(links))
 	for _, link := range links {
 		if link.Class != TransportLinkThunderbolt && link.Class != TransportLinkWiredLAN && link.Class != TransportLinkLAN && link.Class != TransportLinkLoopback {
 			continue
 		}
 		control, ok := tcpDialAddrFromLinkAddr(link, tcpAddr.Port)
 		if ok {
-			out = append(out, control)
+			out = append(out, rdmaStreamControlAddr{Addr: control, Class: link.Class})
 		}
 	}
 	if len(out) == 0 {
-		return []string{t.ctrl.Addr().String()}
+		return []rdmaStreamControlAddr{{Addr: t.ctrl.Addr().String()}}
 	}
 	return out
 }

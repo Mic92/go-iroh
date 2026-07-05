@@ -12,8 +12,7 @@ import (
 )
 
 const (
-	rdmaPortActive           int32 = 4
-	rdmaLinkLayerThunderbolt uint8 = 100
+	rdmaPortActive int32 = 4
 )
 
 // RDMAAvailable reports whether an active Apple Thunderbolt RDMA interface exists.
