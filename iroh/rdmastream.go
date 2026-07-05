@@ -33,8 +33,7 @@ func (t *RDMAStreamTransport) ID() uint64 { return t.id }
 func (t *RDMAStreamTransport) LinkClass() TransportLinkClass { return TransportLinkRDMA }
 
 func (t *RDMAStreamTransport) LocalAddrs(ctx context.Context) ([]netaddr.CustomAddr, error) {
-	_ = ctx
-	return nil, ErrRDMAUnsupported
+	return localRDMAStreamAddrs(ctx, t.id)
 }
 
 func (t *RDMAStreamTransport) DialStream(ctx context.Context, remote netaddr.CustomAddr, opts StreamOptions) (net.Conn, error) {

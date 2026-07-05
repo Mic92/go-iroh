@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"slices"
 	"strings"
 
 	"github.com/tmc/go-iroh/netaddr"
@@ -161,26 +160,18 @@ func PreferredTransportLinkAddr(a, b []TransportLinkAddr) TransportLinkClass {
 func SelectStreamLink(local, remote []netaddr.CustomAddr) (StreamLinkSelection, bool) {
 	localCandidates := streamLinkCandidates(local)
 	remoteCandidates := streamLinkCandidates(remote)
-	class := preferredCandidateClass(localCandidates, remoteCandidates)
-	for _, preferred := range append([]TransportLinkClass{class}, transportLinkPreference...) {
-		locals := candidatesByClass(localCandidates, preferred)
-		remotes := candidatesByClass(remoteCandidates, preferred)
-		if len(locals) == 0 || len(remotes) == 0 {
-			continue
+	for _, preferred := range transportLinkPreference {
+		localAddr, localOK := selectStreamLinkCandidate(localCandidates, preferred)
+		remoteAddr, remoteOK := selectStreamLinkCandidate(remoteCandidates, preferred)
+		if localOK && remoteOK {
+			return StreamLinkSelection{
+				Local:  localAddr,
+				Remote: remoteAddr,
+				Class:  preferred,
+			}, true
 		}
-		slices.SortFunc(locals, compareStreamLinkCandidate)
-		slices.SortFunc(remotes, compareStreamLinkCandidate)
-		return StreamLinkSelection{
-			Local:  locals[0].Addr,
-			Remote: remotes[0].Addr,
-			Class:  preferred,
-		}, true
 	}
 	return StreamLinkSelection{}, false
-}
-
-func preferredCandidateClass(local, remote []StreamLinkCandidate) TransportLinkClass {
-	return PreferredTransportLink(candidateClasses(local), candidateClasses(remote))
 }
 
 func streamLinkCandidates(addrs []netaddr.CustomAddr) []StreamLinkCandidate {
@@ -195,22 +186,22 @@ func streamLinkCandidates(addrs []netaddr.CustomAddr) []StreamLinkCandidate {
 	return candidates
 }
 
-func candidatesByClass(candidates []StreamLinkCandidate, class TransportLinkClass) []StreamLinkCandidate {
-	var out []StreamLinkCandidate
+func selectStreamLinkCandidate(candidates []StreamLinkCandidate, class TransportLinkClass) (netaddr.CustomAddr, bool) {
+	var best StreamLinkCandidate
+	ok := false
 	for _, c := range candidates {
-		if c.Class == class {
-			out = append(out, c)
+		if c.Class != class {
+			continue
+		}
+		if !ok || compareStreamLinkCandidate(c, best) < 0 {
+			best = c
+			ok = true
 		}
 	}
-	return out
-}
-
-func candidateClasses(candidates []StreamLinkCandidate) []TransportLinkClass {
-	classes := make([]TransportLinkClass, 0, len(candidates))
-	for _, c := range candidates {
-		classes = append(classes, c.Class)
+	if !ok {
+		return netaddr.CustomAddr{}, false
 	}
-	return classes
+	return best.Addr, true
 }
 
 func linkClassSet(classes []TransportLinkClass) map[TransportLinkClass]bool {
