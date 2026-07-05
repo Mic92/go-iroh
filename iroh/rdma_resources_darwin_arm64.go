@@ -118,6 +118,10 @@ func (t *rdmaStreamResourceTransport) postRecv(offset, length int, id uint64) er
 	return postRDMAStreamRecv(t.qp, t.recvMR, offset, length, id)
 }
 
+func (t *rdmaStreamResourceTransport) postRecvs(works *[rdmaStreamMaxRecvSlots]rdmaStreamPostWork, n int) error {
+	return postRDMAStreamMany(t.qp, t.recvMR, works[:n], false)
+}
+
 func (t *rdmaStreamResourceTransport) poll(ctx context.Context, out []rdmaStreamWorkRequest) ([]rdmaStreamWorkRequest, error) {
 	return pollRDMAStreamCompletions(ctx, t.cq, out)
 }

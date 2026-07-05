@@ -350,6 +350,13 @@ func (r *fakeRDMAStreamResource) postRecv(offset, length int, id uint64) error {
 	return nil
 }
 
+func (r *fakeRDMAStreamResource) postRecvs(works *[rdmaStreamMaxRecvSlots]rdmaStreamPostWork, n int) error {
+	r.mu.Lock()
+	r.recvPosted = append(r.recvPosted, works[:n]...)
+	r.mu.Unlock()
+	return nil
+}
+
 func (r *fakeRDMAStreamResource) postSend(offset, length int, id uint64) error {
 	r.mu.Lock()
 	if r.closed {

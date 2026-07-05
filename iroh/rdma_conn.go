@@ -35,6 +35,10 @@ type rdmaStreamConnTransport interface {
 	close() error
 }
 
+type rdmaStreamRecvBatchTransport interface {
+	postRecvs(*[rdmaStreamMaxRecvSlots]rdmaStreamPostWork, int) error
+}
+
 type rdmaStreamConn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -107,21 +111,19 @@ func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransp
 	}
 	c.readDL.Store(newRDMAStreamDeadlineState(ctx, time.Time{}))
 	c.writeDL.Store(newRDMAStreamDeadlineState(ctx, time.Time{}))
-	for i := 0; i < c.nslots; i++ {
-		if err := c.postRecvSlotLocked(i); err != nil {
-			c.readDL.Load().cancel()
-			c.writeDL.Load().cancel()
-			cancel()
-			_ = t.close()
-			return nil, err
-		}
-	}
 	if c.nslots == 0 {
 		c.readDL.Load().cancel()
 		c.writeDL.Load().cancel()
 		cancel()
 		_ = t.close()
 		return nil, errors.New("rdma: no receive slots")
+	}
+	if err := c.postInitialRecvs(); err != nil {
+		c.readDL.Load().cancel()
+		c.writeDL.Load().cancel()
+		cancel()
+		_ = t.close()
+		return nil, err
 	}
 	return c, nil
 }
@@ -272,15 +274,47 @@ func (c *rdmaStreamConn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *rdmaStreamConn) postRecvSlotLocked(slot int) error {
+	work, err := c.nextRecvSlotWork(slot)
+	if err != nil {
+		return err
+	}
+	return c.t.postRecv(work.Offset, work.Length, work.ID)
+}
+
+func (c *rdmaStreamConn) postInitialRecvs() error {
+	if c.nslots == 1 {
+		return c.postRecvSlotLocked(0)
+	}
+	bt, ok := c.t.(rdmaStreamRecvBatchTransport)
+	if !ok {
+		for i := 0; i < c.nslots; i++ {
+			if err := c.postRecvSlotLocked(i); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	var works [rdmaStreamMaxRecvSlots]rdmaStreamPostWork
+	for i := 0; i < c.nslots; i++ {
+		work, err := c.nextRecvSlotWork(i)
+		if err != nil {
+			return err
+		}
+		works[i] = work
+	}
+	return bt.postRecvs(&works, c.nslots)
+}
+
+func (c *rdmaStreamConn) nextRecvSlotWork(slot int) (rdmaStreamPostWork, error) {
 	if slot < 0 || slot >= c.nslots {
-		return fmt.Errorf("rdma: receive slot %d outside slot count %d", slot, c.nslots)
+		return rdmaStreamPostWork{}, fmt.Errorf("rdma: receive slot %d outside slot count %d", slot, c.nslots)
 	}
 	size := rdmaStreamSlotSize(len(c.recv), c.nslots)
 	offset := slot * size
 	id := c.recvID
 	c.recvID++
 	c.slots[slot] = rdmaStreamRecvSlot{id: id, offset: offset}
-	return c.t.postRecv(offset, size, id)
+	return rdmaStreamPostWork{Offset: offset, Length: size, ID: id}, nil
 }
 
 func (c *rdmaStreamConn) pollWorkID(ctx context.Context, id uint64) (rdmaStreamWorkRequest, error) {

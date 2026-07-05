@@ -150,9 +150,14 @@ func TestRDMAStreamConnPrepostsLargeReceiveSlots(t *testing.T) {
 	}
 	b.mu.Lock()
 	posted := append([]rdmaStreamPostWork(nil), b.recvPosted...)
+	recvPosts := b.recvPosts
+	recvBatches := b.recvBatches
 	b.mu.Unlock()
 	if len(posted) != rdmaStreamMaxRecvSlots {
 		t.Fatalf("posted receives = %d, want %d", len(posted), rdmaStreamMaxRecvSlots)
+	}
+	if recvPosts != rdmaStreamMaxRecvSlots || recvBatches != 1 {
+		t.Fatalf("receive posts = %d batches = %d, want %d posts in 1 batch", recvPosts, recvBatches, rdmaStreamMaxRecvSlots)
 	}
 	if posted[0].Offset != 0 || posted[1].Offset != rdmaStreamMinSlotPayload+rdmaStreamFrameHeaderSize {
 		t.Fatalf("posted offsets = %d, %d", posted[0].Offset, posted[1].Offset)
@@ -689,6 +694,8 @@ type memRDMAStreamTransport struct {
 	peer        *memRDMAStreamTransport
 	closed      bool
 	maxPoll     int
+	recvPosts   int
+	recvBatches int
 }
 
 func newMemRDMAStreamTransportPair(size int) (*memRDMAStreamTransport, *memRDMAStreamTransport) {
@@ -705,7 +712,19 @@ func (t *memRDMAStreamTransport) recvBuf() []byte { return t.recv }
 func (t *memRDMAStreamTransport) postRecv(offset, length int, id uint64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.recvPosts++
 	t.recvPosted = append(t.recvPosted, rdmaStreamPostWork{Offset: offset, Length: length, ID: id})
+	return nil
+}
+
+func (t *memRDMAStreamTransport) postRecvs(works *[rdmaStreamMaxRecvSlots]rdmaStreamPostWork, n int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if n > 0 {
+		t.recvBatches++
+		t.recvPosts += n
+	}
+	t.recvPosted = append(t.recvPosted, works[:n]...)
 	return nil
 }
 
