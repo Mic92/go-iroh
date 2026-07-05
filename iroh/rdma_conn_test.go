@@ -268,6 +268,29 @@ func BenchmarkRDMAStreamConnMemoryThroughput(b *testing.B) {
 	bc.Close()
 }
 
+func BenchmarkRDMAStreamConnPendingCompletion(b *testing.B) {
+	tp := &scriptedRDMAStreamTransport{
+		send: make([]byte, 16),
+		recv: make([]byte, 16),
+	}
+	c, err := newRDMAStreamConn(b.Context(), tp)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer c.Close()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		id := uint64(i) + 1
+		c.pending[0] = rdmaStreamWorkRequest{ID: id, Bytes: 4}
+		c.pendingLen = 1
+		if _, err := c.pollWorkID(id); err != nil {
+			b.Fatalf("poll pending rdma completion: %v", err)
+		}
+	}
+}
+
 type memRDMAStreamTransport struct {
 	mu          sync.Mutex
 	send        []byte
