@@ -319,7 +319,11 @@ var errStreamLinkAddrMalformed = errors.New("iroh: malformed stream link address
 
 var streamLinkAddrMagic = []byte{'i', 's', 't', '1'}
 
-func tcpDialAddrFromNetAddr(addr net.Addr, port int) (string, bool) {
+func tcpDialAddrFromLinkAddr(link TransportLinkAddr, port int) (string, bool) {
+	return tcpDialAddrFromNetAddr(link.Interface, link.Addr, port)
+}
+
+func tcpDialAddrFromNetAddr(iface string, addr net.Addr, port int) (string, bool) {
 	ip, ok := addrIP(addr)
 	if !ok {
 		return "", false
@@ -327,6 +331,8 @@ func tcpDialAddrFromNetAddr(addr net.Addr, port int) (string, bool) {
 	host := ip.String()
 	if z := addrZone(addr); z != "" {
 		host += "%" + z
+	} else if ip.To4() == nil && ip.IsLinkLocalUnicast() && iface != "" {
+		host += "%" + iface
 	}
 	return net.JoinHostPort(host, fmt.Sprint(port)), true
 }

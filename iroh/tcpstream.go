@@ -87,7 +87,7 @@ func (t *TCPStreamTransport) localInterfaceAddrs() ([]netaddr.CustomAddr, error)
 	}
 	out := make([]netaddr.CustomAddr, 0, len(links))
 	for _, link := range links {
-		dialAddr, ok := tcpDialAddrFromNetAddr(link.Addr, tcpAddr.Port)
+		dialAddr, ok := tcpDialAddrFromLinkAddr(link, tcpAddr.Port)
 		if !ok {
 			continue
 		}

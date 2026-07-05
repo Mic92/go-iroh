@@ -232,11 +232,25 @@ func TestSelectStreamLinkChangesWithAdvertisedAddrs(t *testing.T) {
 }
 
 func TestTCPDialAddrFromNetAddrPreservesZone(t *testing.T) {
-	got, ok := tcpDialAddrFromNetAddr(&net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "en5"}, 4433)
+	got, ok := tcpDialAddrFromNetAddr("ignored", &net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "en5"}, 4433)
 	if !ok {
 		t.Fatal("tcpDialAddrFromNetAddr failed")
 	}
 	if got != "[fe80::1%en5]:4433" {
+		t.Fatalf("addr = %q, want scoped link-local dial addr", got)
+	}
+}
+
+func TestTCPDialAddrFromLinkAddrUsesInterfaceZone(t *testing.T) {
+	got, ok := tcpDialAddrFromLinkAddr(TransportLinkAddr{
+		Interface: "bridge0",
+		Addr:      ipNet("fe80::1/64"),
+		Class:     TransportLinkThunderbolt,
+	}, 4433)
+	if !ok {
+		t.Fatal("tcpDialAddrFromLinkAddr failed")
+	}
+	if got != "[fe80::1%bridge0]:4433" {
 		t.Fatalf("addr = %q, want scoped link-local dial addr", got)
 	}
 }
