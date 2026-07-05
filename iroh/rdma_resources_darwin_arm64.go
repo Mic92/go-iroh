@@ -50,17 +50,87 @@ type rdmaStreamMemoryRegion struct {
 	once   sync.Once
 }
 
-type rdmaStreamPostWork struct {
-	Offset int
-	Length int
-	ID     uint64
+type rdmaStreamResourceTransport struct {
+	dev    *rdmaStreamDevice
+	pd     *rdmaStreamProtectionDomain
+	cq     *rdmaStreamCompletionQueue
+	qp     *rdmaStreamQueuePair
+	sendMR *rdmaStreamMemoryRegion
+	recvMR *rdmaStreamMemoryRegion
 }
 
-type rdmaStreamWorkRequest struct {
-	ID     uint64
-	Opcode int
-	Bytes  int
-	Status int
+func newRDMAStreamResourceTransport(device string, bufSize int) (*rdmaStreamResourceTransport, error) {
+	dev, err := openRDMAStreamDevice(device)
+	if err != nil {
+		return nil, err
+	}
+	t := &rdmaStreamResourceTransport{dev: dev}
+	if err := t.open(bufSize); err != nil {
+		_ = t.close()
+		return nil, err
+	}
+	return t, nil
+}
+
+func (t *rdmaStreamResourceTransport) open(bufSize int) error {
+	pd, err := newRDMAStreamProtectionDomain(t.dev)
+	if err != nil {
+		return err
+	}
+	t.pd = pd
+	cq, err := newRDMAStreamCompletionQueue(t.dev, 128)
+	if err != nil {
+		return err
+	}
+	t.cq = cq
+	qp, err := newRDMAStreamQueuePair(pd, cq)
+	if err != nil {
+		return err
+	}
+	t.qp = qp
+	if err := initRDMAStreamQueuePair(qp); err != nil {
+		return err
+	}
+	sendMR, err := newRDMAStreamMemoryRegion(pd, bufSize)
+	if err != nil {
+		return err
+	}
+	t.sendMR = sendMR
+	recvMR, err := newRDMAStreamMemoryRegion(pd, bufSize)
+	if err != nil {
+		return err
+	}
+	t.recvMR = recvMR
+	return nil
+}
+
+func (t *rdmaStreamResourceTransport) sendBuf() []byte { return t.sendMR.buf }
+func (t *rdmaStreamResourceTransport) recvBuf() []byte { return t.recvMR.buf }
+
+func (t *rdmaStreamResourceTransport) postSend(offset, length int, id uint64) error {
+	return postRDMAStreamSend(t.qp, t.sendMR, offset, length, id)
+}
+
+func (t *rdmaStreamResourceTransport) postRecv(offset, length int, id uint64) error {
+	return postRDMAStreamRecv(t.qp, t.recvMR, offset, length, id)
+}
+
+func (t *rdmaStreamResourceTransport) poll(ctx context.Context, n int) ([]rdmaStreamWorkRequest, error) {
+	return pollRDMAStreamCompletions(ctx, t.cq, n)
+}
+
+func (t *rdmaStreamResourceTransport) close() error {
+	var err error
+	if t.qp != nil && t.cq != nil {
+		err = errorsJoin(err, drainRDMAStreamQueuePair(t.qp, t.cq))
+	}
+	err = errorsJoin(err, t.sendMR.Close())
+	err = errorsJoin(err, t.recvMR.Close())
+	err = errorsJoin(err, t.qp.Close())
+	err = errorsJoin(err, t.cq.Close())
+	err = errorsJoin(err, t.pd.Close())
+	err = errorsJoin(err, t.dev.Close())
+	return err
 }
 
 func openRDMAStreamDevice(name string) (*rdmaStreamDevice, error) {
@@ -244,6 +314,21 @@ func (q *rdmaStreamQueuePair) number() uint32 {
 	return applerdma.Ibv_qp_num(q.handle)
 }
 
+func localRDMAStreamDestination(qp *rdmaStreamQueuePair) (rdmaStreamDestination, error) {
+	port, gid, gidIndex, err := localRDMAStreamPortGID(qp)
+	if err != nil {
+		return rdmaStreamDestination{}, err
+	}
+	return rdmaStreamDestination{
+		LID:       port.LID,
+		QPN:       qp.number(),
+		PSN:       rdmaStreamDefaultPSN,
+		GIDIndex:  uint8(gidIndex),
+		GID:       [16]byte(gid),
+		ActiveMTU: port.ActiveMTU,
+	}, nil
+}
+
 func initRDMAStreamQueuePair(qp *rdmaStreamQueuePair) error {
 	if qp == nil || qp.handle == 0 {
 		return errorsRDMA("change queue pair to INIT: nil queue pair")
@@ -308,6 +393,91 @@ func modifyRDMAStreamQueuePair(qp *rdmaStreamQueuePair, attr *applerdma.IbvQPAtt
 		return fmt.Errorf("rdma: change queue pair to %s: %w", state, applerdma.NewModifyQPError(qp.handle, attr, mask, rc, err))
 	}
 	return nil
+}
+
+func localRDMAStreamPortGID(qp *rdmaStreamQueuePair) (applerdma.IbvPortAttr, applerdma.IbvGID, int, error) {
+	if qp == nil || qp.handle == 0 || qp.pd == nil || qp.pd.dev == nil {
+		return applerdma.IbvPortAttr{}, applerdma.IbvGID{}, 0, errorsRDMA("local destination: nil queue pair")
+	}
+	port, gids, selected, err := queryRDMAStreamPortGIDs(qp.pd.dev.handle, 0)
+	if err != nil {
+		return applerdma.IbvPortAttr{}, applerdma.IbvGID{}, 0, err
+	}
+	for _, entry := range gids {
+		if entry.index == selected {
+			return port, entry.gid, selected, nil
+		}
+	}
+	return port, applerdma.IbvGID{}, selected, errorsRDMA("local destination: no trusted route gid")
+}
+
+type rdmaStreamPortGID struct {
+	index int
+	gid   applerdma.IbvGID
+}
+
+func queryRDMAStreamPortGIDs(ctx applerdma.RDMAContext, maxGIDs int) (applerdma.IbvPortAttr, []rdmaStreamPortGID, int, error) {
+	var port applerdma.IbvPortAttr
+	if rc, err := applerdma.IbvQueryPortAttr(ctx, 1, &port); err != nil {
+		return applerdma.IbvPortAttr{}, nil, 0, fmt.Errorf("rdma: query port: %w", err)
+	} else if rc != 0 {
+		return applerdma.IbvPortAttr{}, nil, 0, fmt.Errorf("rdma: query port: errno %d", rc)
+	}
+	n := int(port.GIDTblLen)
+	if maxGIDs > 0 && maxGIDs < n {
+		n = maxGIDs
+	}
+	var gids []rdmaStreamPortGID
+	for i := 0; i < n; i++ {
+		var gid applerdma.IbvGID
+		rc, err := applerdma.IbvQueryGidInto(ctx, 1, i, &gid)
+		if err != nil || rc != 0 {
+			continue
+		}
+		gids = append(gids, rdmaStreamPortGID{index: i, gid: gid})
+	}
+	selected := selectRDMAStreamPortGID(gids)
+	return port, gids, selected, nil
+}
+
+func selectRDMAStreamPortGID(gids []rdmaStreamPortGID) int {
+	for _, entry := range gids {
+		if isZeroRDMAStreamGID(entry.gid) || entry.index == 0 {
+			continue
+		}
+		if isIPv4MappedRDMAStreamGID(entry.gid) {
+			return entry.index
+		}
+	}
+	for _, entry := range gids {
+		if entry.index == 1 && !isZeroRDMAStreamGID(entry.gid) {
+			return entry.index
+		}
+	}
+	for _, entry := range gids {
+		if !isZeroRDMAStreamGID(entry.gid) {
+			return entry.index
+		}
+	}
+	return -1
+}
+
+func isZeroRDMAStreamGID(gid applerdma.IbvGID) bool {
+	for _, b := range gid {
+		if b != 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func isIPv4MappedRDMAStreamGID(gid applerdma.IbvGID) bool {
+	for i := 0; i < 10; i++ {
+		if gid[i] != 0 {
+			return false
+		}
+	}
+	return gid[10] == 0xff && gid[11] == 0xff
 }
 
 func newRDMAStreamMemoryRegion(pd *rdmaStreamProtectionDomain, size int) (*rdmaStreamMemoryRegion, error) {
@@ -593,3 +763,12 @@ func roundRDMAStreamPage(n int) int {
 func errorsRDMA(msg string) error {
 	return fmt.Errorf("rdma: %s", msg)
 }
+
+func errorsJoin(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
+}
+
+const rdmaStreamDefaultPSN = 7

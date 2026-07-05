@@ -70,6 +70,29 @@ func TestRDMAStreamWorkRequests(t *testing.T) {
 	}
 }
 
+func TestSelectRDMAStreamPortGID(t *testing.T) {
+	var zero applerdma.IbvGID
+	var ipv4 applerdma.IbvGID
+	ipv4[10], ipv4[11], ipv4[12] = 0xff, 0xff, 192
+	var other applerdma.IbvGID
+	other[15] = 1
+	gids := []rdmaStreamPortGID{
+		{index: 0, gid: other},
+		{index: 1, gid: zero},
+		{index: 2, gid: ipv4},
+	}
+	if got := selectRDMAStreamPortGID(gids); got != 2 {
+		t.Fatalf("selectRDMAStreamPortGID = %d, want 2", got)
+	}
+	gids = []rdmaStreamPortGID{
+		{index: 0, gid: other},
+		{index: 1, gid: other},
+	}
+	if got := selectRDMAStreamPortGID(gids); got != 1 {
+		t.Fatalf("selectRDMAStreamPortGID fallback = %d, want 1", got)
+	}
+}
+
 func TestRoundRDMAStreamPage(t *testing.T) {
 	if got := roundRDMAStreamPage(1); got != 16*1024 {
 		t.Fatalf("roundRDMAStreamPage(1) = %d", got)
