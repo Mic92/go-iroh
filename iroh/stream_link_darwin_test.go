@@ -25,12 +25,11 @@ Ethernet Address: 36:44:6d:68:de:00
 VLAN Configurations
 ===================
 `
-	got := parseAppleNetworkHardwarePortClasses(out)
+	got, skip := parseAppleNetworkHardwarePorts(out)
 	want := map[string]TransportLinkClass{
 		"en4":     TransportLinkWiredLAN,
 		"bridge0": TransportLinkThunderbolt,
 		"en0":     TransportLinkWiFiLAN,
-		"en1":     TransportLinkThunderbolt,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("len(classes) = %d, want %d: %+v", len(got), len(want), got)
@@ -39,5 +38,8 @@ VLAN Configurations
 		if got[dev] != class {
 			t.Fatalf("class[%s] = %v, want %v", dev, got[dev], class)
 		}
+	}
+	if !skip["en1"] {
+		t.Fatalf("skip[en1] = false, want true")
 	}
 }

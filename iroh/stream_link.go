@@ -61,6 +61,9 @@ func classifyTransportLinkAddrs(ifaces []net.Interface, addrs func(net.Interface
 			if !usableInterfaceAddr(a) {
 				continue
 			}
+			if !platformUsableTransportInterfaceAddr(iface.Name, a) {
+				continue
+			}
 			out = append(out, TransportLinkAddr{
 				Interface: iface.Name,
 				Addr:      a,
