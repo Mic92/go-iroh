@@ -204,7 +204,7 @@ func (c *rdmaStreamConn) pollWorkID(id uint64) (rdmaStreamWorkRequest, error) {
 				return work, nil
 			}
 		}
-		works, err := c.t.poll(c.ctx, c.pollBuf[:1])
+		works, err := c.t.poll(c.ctx, c.pollBuf[:])
 		if err != nil {
 			return rdmaStreamWorkRequest{}, err
 		}

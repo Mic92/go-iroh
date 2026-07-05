@@ -87,6 +87,36 @@ func TestRDMAStreamConnPartialRead(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamConnPollBatchesCompletions(t *testing.T) {
+	a, b := newMemRDMAStreamTransportPair(1024)
+	ac, err := newRDMAStreamConn(t.Context(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ac.Close()
+	bc, err := newRDMAStreamConn(t.Context(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := ac.Write([]byte("batch completions"))
+		done <- err
+	}()
+	got := make([]byte, len("batch completions"))
+	if _, err := io.ReadFull(bc, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if n := a.maxPoll; n < 2 {
+		t.Fatalf("max poll size = %d, want at least 2", n)
+	}
+}
+
 func TestRDMAStreamFramePayload(t *testing.T) {
 	buf := make([]byte, 16)
 	buf[3] = 3
@@ -182,6 +212,7 @@ type memRDMAStreamTransport struct {
 	completions []rdmaStreamWorkRequest
 	peer        *memRDMAStreamTransport
 	closed      bool
+	maxPoll     int
 }
 
 func newMemRDMAStreamTransportPair(size int) (*memRDMAStreamTransport, *memRDMAStreamTransport) {
@@ -229,6 +260,9 @@ func (t *memRDMAStreamTransport) postSend(offset, length int, id uint64) error {
 func (t *memRDMAStreamTransport) poll(ctx context.Context, out []rdmaStreamWorkRequest) ([]rdmaStreamWorkRequest, error) {
 	for {
 		t.mu.Lock()
+		if len(out) > t.maxPoll {
+			t.maxPoll = len(out)
+		}
 		if len(t.completions) > 0 {
 			n := len(out)
 			if n > len(t.completions) {
