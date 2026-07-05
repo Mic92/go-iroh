@@ -15,9 +15,10 @@ func TestClassifyTransportLinkAddrs(t *testing.T) {
 		{Name: "bridge0", Flags: net.FlagUp | net.FlagMulticast},
 		{Name: "en5", Flags: net.FlagUp | net.FlagMulticast},
 		{Name: "awdl0", Flags: net.FlagUp | net.FlagMulticast},
-		{Name: "en0", Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast},
+		{Name: "eth0", Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast},
 		{Name: "wlan0", Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast},
 		{Name: "utun0", Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "utun1", Flags: net.FlagUp | net.FlagMulticast},
 		{Name: "down0", Flags: net.FlagBroadcast | net.FlagMulticast},
 	}
 	addrByName := map[string][]net.Addr{
@@ -25,9 +26,10 @@ func TestClassifyTransportLinkAddrs(t *testing.T) {
 		"bridge0": {&net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "bridge0"}},
 		"en5":     {&net.IPAddr{IP: net.ParseIP("fe80::5"), Zone: "en5"}},
 		"awdl0":   {&net.IPAddr{IP: net.ParseIP("fe80::2"), Zone: "awdl0"}},
-		"en0":     {ipNet("192.0.2.10/24")},
+		"eth0":    {ipNet("192.0.2.10/24")},
 		"wlan0":   {ipNet("192.0.2.11/24")},
-		"utun0":   {ipNet("198.51.100.7/24")},
+		"utun0":   {ipNet("100.101.122.47/32")},
+		"utun1":   {&net.IPAddr{IP: net.ParseIP("fe80::7"), Zone: "utun1"}},
 		"down0":   {ipNet("192.0.2.12/24")},
 	}
 
@@ -42,9 +44,10 @@ func TestClassifyTransportLinkAddrs(t *testing.T) {
 		{Interface: "bridge0", Addr: &net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "bridge0"}, Class: TransportLinkThunderbolt},
 		{Interface: "en5", Addr: &net.IPAddr{IP: net.ParseIP("fe80::5"), Zone: "en5"}, Class: TransportLinkThunderbolt},
 		{Interface: "awdl0", Addr: &net.IPAddr{IP: net.ParseIP("fe80::2"), Zone: "awdl0"}, Class: TransportLinkAWDL},
-		{Interface: "en0", Addr: ipNet("192.0.2.10/24"), Class: TransportLinkWiredLAN},
+		{Interface: "eth0", Addr: ipNet("192.0.2.10/24"), Class: TransportLinkWiredLAN},
 		{Interface: "wlan0", Addr: ipNet("192.0.2.11/24"), Class: TransportLinkWiFiLAN},
-		{Interface: "utun0", Addr: ipNet("198.51.100.7/24"), Class: TransportLinkLAN},
+		{Interface: "utun0", Addr: ipNet("100.101.122.47/32"), Class: TransportLinkWAN},
+		{Interface: "utun1", Addr: &net.IPAddr{IP: net.ParseIP("fe80::7"), Zone: "utun1"}, Class: TransportLinkLAN},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("classes = %#v, want %#v", got, want)
@@ -75,9 +78,10 @@ func BenchmarkClassifyTransportLinkAddrs(b *testing.B) {
 		{Name: "bridge0", Flags: net.FlagUp | net.FlagMulticast},
 		{Name: "en5", Flags: net.FlagUp | net.FlagMulticast},
 		{Name: "awdl0", Flags: net.FlagUp | net.FlagMulticast},
-		{Name: "en0", Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast},
+		{Name: "eth0", Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast},
 		{Name: "wlan0", Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast},
 		{Name: "utun0", Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "utun1", Flags: net.FlagUp | net.FlagMulticast},
 		{Name: "down0", Flags: net.FlagBroadcast | net.FlagMulticast},
 	}
 	addrByName := map[string][]net.Addr{
@@ -85,9 +89,10 @@ func BenchmarkClassifyTransportLinkAddrs(b *testing.B) {
 		"bridge0": {&net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "bridge0"}},
 		"en5":     {&net.IPAddr{IP: net.ParseIP("fe80::5"), Zone: "en5"}},
 		"awdl0":   {&net.IPAddr{IP: net.ParseIP("fe80::2"), Zone: "awdl0"}},
-		"en0":     {ipNet("192.0.2.10/24")},
+		"eth0":    {ipNet("192.0.2.10/24")},
 		"wlan0":   {ipNet("192.0.2.11/24")},
-		"utun0":   {ipNet("198.51.100.7/24")},
+		"utun0":   {ipNet("100.101.122.47/32")},
+		"utun1":   {&net.IPAddr{IP: net.ParseIP("fe80::7"), Zone: "utun1"}},
 		"down0":   {ipNet("192.0.2.12/24")},
 	}
 	addrs := func(iface net.Interface) ([]net.Addr, error) {
@@ -99,8 +104,8 @@ func BenchmarkClassifyTransportLinkAddrs(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if len(got) != 7 {
-			b.Fatalf("len(got) = %d, want 7", len(got))
+		if len(got) != 8 {
+			b.Fatalf("len(got) = %d, want 8", len(got))
 		}
 	}
 }
@@ -135,6 +140,18 @@ func TestPreferredTransportLink(t *testing.T) {
 			a:    []TransportLinkClass{TransportLinkLAN, TransportLinkThunderbolt, TransportLinkWiFiLAN},
 			b:    []TransportLinkClass{TransportLinkWiFiLAN, TransportLinkThunderbolt, TransportLinkLAN},
 			want: TransportLinkThunderbolt,
+		},
+		{
+			name: "lan beats wan",
+			a:    []TransportLinkClass{TransportLinkWAN, TransportLinkLAN},
+			b:    []TransportLinkClass{TransportLinkLAN, TransportLinkWAN},
+			want: TransportLinkLAN,
+		},
+		{
+			name: "wan beats loopback",
+			a:    []TransportLinkClass{TransportLinkLoopback, TransportLinkWAN},
+			b:    []TransportLinkClass{TransportLinkWAN, TransportLinkLoopback},
+			want: TransportLinkWAN,
 		},
 	}
 	for _, tt := range cases {
@@ -174,10 +191,12 @@ func BenchmarkPreferredTransportLinkAddr(b *testing.B) {
 		{Interface: "awdl0", Class: TransportLinkAWDL},
 		{Interface: "en0", Class: TransportLinkWiredLAN},
 		{Interface: "bridge0", Class: TransportLinkThunderbolt},
+		{Interface: "utun0", Class: TransportLinkWAN},
 		{Interface: "rdma_en3", Class: TransportLinkRDMA},
 	}
 	remote := []TransportLinkAddr{
-		{Interface: "utun0", Class: TransportLinkLAN},
+		{Interface: "utun0", Class: TransportLinkWAN},
+		{Interface: "utun1", Class: TransportLinkLAN},
 		{Interface: "en0", Class: TransportLinkWiredLAN},
 		{Interface: "bridge0", Class: TransportLinkThunderbolt},
 		{Interface: "rdma_en3", Class: TransportLinkRDMA},
@@ -246,10 +265,12 @@ func BenchmarkParseStreamLinkAddrRawTCP(b *testing.B) {
 
 func TestSelectStreamLink(t *testing.T) {
 	local := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWAN, "utun0", "100.101.122.47:1"),
 		NewStreamLinkAddr(7, TransportLinkWiFiLAN, "wlan0", "192.0.2.11:1"),
 		NewStreamLinkAddr(7, TransportLinkThunderbolt, "bridge0", "[fe80::1%bridge0]:1"),
 	}
 	remote := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWAN, "utun0", "100.101.122.48:1"),
 		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en0", "192.0.2.20:1"),
 		NewStreamLinkAddr(7, TransportLinkThunderbolt, "bridge0", "[fe80::2%bridge0]:1"),
 	}
@@ -266,6 +287,96 @@ func TestSelectStreamLink(t *testing.T) {
 	}
 	if remoteLink.DialAddr != "[fe80::2%bridge0]:1" {
 		t.Fatalf("remote = %q, want thunderbolt addr", remoteLink.DialAddr)
+	}
+}
+
+func TestSelectStreamLinkAppleNetworkingPreference(t *testing.T) {
+	cases := []struct {
+		name       string
+		localOnly  []TransportLinkClass
+		remoteOnly []TransportLinkClass
+		want       TransportLinkClass
+	}{
+		{
+			name: "rdma beats thunderbolt",
+			localOnly: []TransportLinkClass{
+				TransportLinkRDMA,
+				TransportLinkThunderbolt,
+				TransportLinkAWDL,
+				TransportLinkLAN,
+				TransportLinkWAN,
+			},
+			remoteOnly: []TransportLinkClass{
+				TransportLinkRDMA,
+				TransportLinkThunderbolt,
+				TransportLinkAWDL,
+				TransportLinkLAN,
+				TransportLinkWAN,
+			},
+			want: TransportLinkRDMA,
+		},
+		{
+			name: "thunderbolt beats awdl",
+			localOnly: []TransportLinkClass{
+				TransportLinkThunderbolt,
+				TransportLinkAWDL,
+				TransportLinkLAN,
+				TransportLinkWAN,
+			},
+			remoteOnly: []TransportLinkClass{
+				TransportLinkThunderbolt,
+				TransportLinkAWDL,
+				TransportLinkLAN,
+				TransportLinkWAN,
+			},
+			want: TransportLinkThunderbolt,
+		},
+		{
+			name: "awdl beats lan",
+			localOnly: []TransportLinkClass{
+				TransportLinkAWDL,
+				TransportLinkLAN,
+				TransportLinkWAN,
+			},
+			remoteOnly: []TransportLinkClass{
+				TransportLinkAWDL,
+				TransportLinkLAN,
+				TransportLinkWAN,
+			},
+			want: TransportLinkAWDL,
+		},
+		{
+			name: "lan beats wan",
+			localOnly: []TransportLinkClass{
+				TransportLinkLAN,
+				TransportLinkWAN,
+			},
+			remoteOnly: []TransportLinkClass{
+				TransportLinkLAN,
+				TransportLinkWAN,
+			},
+			want: TransportLinkLAN,
+		},
+		{
+			name:       "wan is routable fallback",
+			localOnly:  []TransportLinkClass{TransportLinkWAN},
+			remoteOnly: []TransportLinkClass{TransportLinkWAN},
+			want:       TransportLinkWAN,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			local := streamLinkClassFixtureAddrs(7, tt.localOnly, "local")
+			remote := streamLinkClassFixtureAddrs(7, tt.remoteOnly, "remote")
+			got, ok := SelectStreamLink(local, remote)
+			if !ok {
+				t.Fatal("SelectStreamLink failed")
+			}
+			if got.Class != tt.want {
+				t.Fatalf("class = %v, want %v", got.Class, tt.want)
+			}
+		})
 	}
 }
 
@@ -289,6 +400,16 @@ func TestSelectStreamLinkTieBreaksByAddress(t *testing.T) {
 	if link.DialAddr != "192.0.2.21:1" {
 		t.Fatalf("remote = %q, want lowest encoded address", link.DialAddr)
 	}
+}
+
+func streamLinkClassFixtureAddrs(id uint64, classes []TransportLinkClass, side string) []netaddr.CustomAddr {
+	out := make([]netaddr.CustomAddr, 0, len(classes))
+	for _, class := range classes {
+		iface := string(class) + "0"
+		dialAddr := side + "-" + string(class) + ":1"
+		out = append(out, NewStreamLinkAddr(id, class, iface, dialAddr))
+	}
+	return out
 }
 
 func TestSelectStreamLinkChangesWithAdvertisedAddrs(t *testing.T) {

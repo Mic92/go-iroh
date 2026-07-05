@@ -118,11 +118,17 @@ func classifyTransportInterfaceAddr(iface net.Interface, addr net.Addr) Transpor
 	if strings.HasPrefix(name, "en") && isLinkLocalIPv6(addr) && iface.Flags&net.FlagBroadcast == 0 {
 		return TransportLinkThunderbolt
 	}
+	if class, ok := platformTransportInterfaceClass(iface.Name); ok {
+		return class
+	}
 	if strings.HasPrefix(name, "wl") || strings.HasPrefix(name, "wlan") || strings.HasPrefix(name, "wifi") {
 		return TransportLinkWiFiLAN
 	}
 	if strings.HasPrefix(name, "en") || strings.HasPrefix(name, "eth") {
 		return TransportLinkWiredLAN
+	}
+	if isWANAddr(addr) {
+		return TransportLinkWAN
 	}
 	if iface.Flags&net.FlagBroadcast != 0 || iface.Flags&net.FlagMulticast != 0 {
 		return TransportLinkLAN
@@ -135,10 +141,18 @@ func isLinkLocalIPv6(addr net.Addr) bool {
 	return ok && ip.To4() == nil && ip.IsLinkLocalUnicast()
 }
 
+func isWANAddr(addr net.Addr) bool {
+	ip, ok := addrIP(addr)
+	if !ok {
+		return false
+	}
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast()
+}
+
 // PreferredTransportLink chooses the fastest link class both peers advertise.
 // The preference order is RDMA, Thunderbolt, wired LAN, Wi-Fi or AWDL, generic
-// LAN, loopback, then unknown. Loopback ranks below LAN because it is only useful
-// for same-host peers.
+// LAN, WAN, loopback, then unknown. Loopback ranks below LAN because it is only
+// useful for same-host peers.
 func PreferredTransportLink(a, b []TransportLinkClass) TransportLinkClass {
 	for _, class := range transportLinkPreference {
 		if hasTransportLinkClass(a, class) && hasTransportLinkClass(b, class) {
@@ -238,6 +252,7 @@ var transportLinkPreference = []TransportLinkClass{
 	TransportLinkWiFiLAN,
 	TransportLinkAWDL,
 	TransportLinkLAN,
+	TransportLinkWAN,
 	TransportLinkLoopback,
 	TransportLinkUnknown,
 }
@@ -377,6 +392,8 @@ func streamLinkClassBytes(b []byte) TransportLinkClass {
 		return TransportLinkWiFiLAN
 	case string(TransportLinkLAN):
 		return TransportLinkLAN
+	case string(TransportLinkWAN):
+		return TransportLinkWAN
 	case string(TransportLinkUnknown):
 		return TransportLinkUnknown
 	default:

@@ -22,6 +22,7 @@ const (
 	TransportLinkWiredLAN    TransportLinkClass = "wired-lan"
 	TransportLinkWiFiLAN     TransportLinkClass = "wifi-lan"
 	TransportLinkLAN         TransportLinkClass = "lan"
+	TransportLinkWAN         TransportLinkClass = "wan"
 	TransportLinkUnknown     TransportLinkClass = "unknown"
 )
 
@@ -50,7 +51,7 @@ type StreamAccept struct {
 	Token StreamOpenToken
 }
 
-// StreamTransport is a TCP-like bulk transport for LAN-class links.
+// StreamTransport is a TCP-like bulk transport for negotiated link classes.
 type StreamTransport interface {
 	ID() uint64
 	LocalAddrs(context.Context) ([]netaddr.CustomAddr, error)
