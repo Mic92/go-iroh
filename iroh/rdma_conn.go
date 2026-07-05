@@ -100,9 +100,10 @@ func (c *rdmaStreamConn) Read(p []byte) (int, error) {
 		return 0, nil
 	}
 	c.readMu.Lock()
-	defer c.readMu.Unlock()
 	if len(c.read) > 0 {
-		return c.readBufferedLocked(p)
+		n, err := c.readBufferedLocked(p)
+		c.readMu.Unlock()
+		return n, err
 	}
 	for len(c.read) == 0 {
 		ctx, dl := c.readPollContext()
@@ -112,23 +113,29 @@ func (c *rdmaStreamConn) Read(p []byte) (int, error) {
 			if errors.Is(err, errRDMAStreamDeadlineChanged) {
 				continue
 			}
+			c.readMu.Unlock()
 			return 0, err
 		}
 		frame, err := rdmaStreamFramePayload(c.recv, work.Bytes)
 		if err != nil {
+			c.readMu.Unlock()
 			return 0, err
 		}
 		if len(p) >= len(frame) {
 			n := copy(p, frame)
 			c.recvID++
 			if err := c.postRecvLocked(); err != nil {
+				c.readMu.Unlock()
 				return 0, err
 			}
+			c.readMu.Unlock()
 			return n, nil
 		}
 		c.read = frame
 	}
-	return c.readBufferedLocked(p)
+	n, err := c.readBufferedLocked(p)
+	c.readMu.Unlock()
+	return n, err
 }
 
 func (c *rdmaStreamConn) readBufferedLocked(p []byte) (int, error) {
@@ -148,9 +155,9 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
 	buf := c.send
 	if len(p) > len(buf)-rdmaStreamFrameHeaderSize {
+		c.writeMu.Unlock()
 		return 0, fmt.Errorf("rdma: write size %d exceeds frame payload %d", len(p), len(buf)-rdmaStreamFrameHeaderSize)
 	}
 	binary.BigEndian.PutUint32(buf[:rdmaStreamFrameHeaderSize], uint32(len(p)))
@@ -158,6 +165,7 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 	id := c.sendID
 	c.sendID++
 	if err := c.t.postSend(0, rdmaStreamFrameHeaderSize+len(p), id); err != nil {
+		c.writeMu.Unlock()
 		return 0, err
 	}
 	for {
@@ -170,8 +178,10 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 		if errors.Is(err, errRDMAStreamDeadlineChanged) {
 			continue
 		}
+		c.writeMu.Unlock()
 		return 0, err
 	}
+	c.writeMu.Unlock()
 	return len(p), nil
 }
 
