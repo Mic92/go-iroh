@@ -9,6 +9,7 @@ import (
 	"net"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/tmc/go-iroh/netaddr"
 )
@@ -262,5 +263,13 @@ func (p *streamTokenParser) string() string {
 		p.err = err
 		return ""
 	}
-	return string(b)
+	return stringFromBytes(b)
+}
+
+func stringFromBytes(b []byte) string {
+	if len(b) == 0 {
+		return ""
+	}
+	// b is freshly allocated for one parsed string and is never mutated again.
+	return unsafe.String(unsafe.SliceData(b), len(b))
 }

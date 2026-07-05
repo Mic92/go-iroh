@@ -122,7 +122,7 @@ func readRDMAStreamString(r io.Reader) (string, error) {
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return "", fmt.Errorf("rdma: read string: %w", err)
 	}
-	return string(buf), nil
+	return stringFromBytes(buf), nil
 }
 
 const (

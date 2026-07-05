@@ -226,3 +226,33 @@ func BenchmarkWriteStreamOpenToken(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkReadStreamOpenToken(b *testing.B) {
+	tok := StreamOpenToken{
+		LocalID:     "client",
+		RemoteID:    "server",
+		ALPN:        "test/0",
+		StableID:    7,
+		TransportID: 11,
+		Purpose:     "rdma",
+		Nonce:       "nonce",
+		Expiry:      time.Unix(0, 123456789),
+	}
+	var buf bytes.Buffer
+	if err := writeStreamOpenToken(&buf, tok); err != nil {
+		b.Fatal(err)
+	}
+	data := buf.Bytes()
+	r := bytes.NewReader(data)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		r.Reset(data)
+		got, err := readStreamOpenToken(r)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got != tok {
+			b.Fatalf("token = %+v, want %+v", got, tok)
+		}
+	}
+}
