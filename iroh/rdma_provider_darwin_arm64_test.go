@@ -134,3 +134,32 @@ func TestDarwinRDMALinksFiltersBlockedProvider(t *testing.T) {
 		t.Fatalf("links = %+v, want only rdma_en4", links)
 	}
 }
+
+func BenchmarkParseDarwinRDMALinks(b *testing.B) {
+	out := []byte(`
++-o rdma_en1  <class AppleThunderboltRDMAInterface, id 0x100000001, registered, matched, active, busy 3 (1 ms), retain 10>
+  | {
+  |   "IOPowerManagement" = {"DevicePowerState"=2,"CurrentPowerState"=0,"MaxPowerState"=2}
+  | }
+  +-o IORDMAFamilyUC  <class IORDMAFamilyUC, id 0x100000002, !registered, !matched, inactive, busy 1 (1 ms), retain 5>
+
++-o rdma_en3  <class AppleThunderboltRDMAInterface, id 0x100000003, registered, matched, active, busy 2 (1 ms), retain 20>
+  | {
+  |   "IOPowerManagement" = {"DevicePowerState"=2,"CurrentPowerState"=2,"MaxPowerState"=2}
+  | }
+  +-o AppleThunderboltRDMAProtectionDomain  <class AppleThunderboltRDMAProtectionDomain, id 0x100000004, registered, matched, active, busy 0 (0 ms), retain 6>
+
++-o rdma_en4  <class AppleThunderboltRDMAInterface, id 0x100000005, registered, matched, active, busy 2 (1 ms), retain 20>
+  | {
+  |   "IOPowerManagement" = {"DevicePowerState"=2,"CurrentPowerState"=2,"MaxPowerState"=2}
+  | }
+  +-o AppleThunderboltRDMAProtectionDomain  <class AppleThunderboltRDMAProtectionDomain, id 0x100000006, !registered, !matched, inactive, busy 1 (1 ms), retain 8>
+`)
+	b.ReportAllocs()
+	for b.Loop() {
+		links := parseDarwinRDMALinks(out)
+		if len(links) != 1 {
+			b.Fatalf("len(links) = %d, want 1", len(links))
+		}
+	}
+}

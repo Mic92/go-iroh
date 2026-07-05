@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
-	"strconv"
 )
 
 const (
@@ -140,12 +139,23 @@ func rdmaBlockName(block []byte) string {
 }
 
 func propertyInt(block []byte, name string) int {
-	re := regexp.MustCompile(regexp.QuoteMeta(name) + `"=([0-9]+)`)
-	m := re.FindSubmatch(block)
-	if len(m) != 2 {
+	prefix := []byte(`"` + name + `"=`)
+	i := bytes.Index(block, prefix)
+	if i < 0 {
 		return 0
 	}
-	n, _ := strconv.Atoi(string(m[1]))
+	p := block[i+len(prefix):]
+	j := 0
+	for j < len(p) && '0' <= p[j] && p[j] <= '9' {
+		j++
+	}
+	if j == 0 {
+		return 0
+	}
+	n := 0
+	for _, c := range p[:j] {
+		n = n*10 + int(c-'0')
+	}
 	return n
 }
 
