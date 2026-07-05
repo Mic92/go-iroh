@@ -34,11 +34,11 @@ func LocalRDMALinks(ctx context.Context) ([]RDMALink, error) {
 }
 
 func darwinRDMALinksFromIOReg(out []byte) ([]RDMALink, error) {
-	if reason := parseDarwinRDMAProviderBlocked(out); reason != "" {
-		return nil, fmt.Errorf("%w: %s", ErrRDMAUnsupported, reason)
-	}
 	links := parseDarwinRDMALinks(out)
 	if len(links) == 0 {
+		if reason := parseDarwinRDMAProviderBlocked(out); reason != "" {
+			return nil, fmt.Errorf("%w: %s", ErrRDMAUnsupported, reason)
+		}
 		return nil, ErrRDMAUnsupported
 	}
 	return links, nil
@@ -83,6 +83,9 @@ func parseDarwinRDMALinks(out []byte) []RDMALink {
 		if propertyInt(block, "CurrentPowerState") != 2 {
 			continue
 		}
+		if darwinRDMABlockProviderBlocked(block) != "" {
+			continue
+		}
 		links = append(links, RDMALink{
 			Device:    name,
 			State:     rdmaPortActive,
@@ -107,12 +110,19 @@ func parseDarwinRDMAProviderBlocked(out []byte) string {
 		if name == "" || propertyInt(block, "CurrentPowerState") != 2 {
 			continue
 		}
-		if bytes.Contains(block, []byte("AppleThunderboltRDMAProtectionDomain")) && bytes.Contains(block, []byte("inactive, busy 1")) {
-			return name + " has inactive busy protection domain"
+		if reason := darwinRDMABlockProviderBlocked(block); reason != "" {
+			return name + " " + reason
 		}
-		if bytes.Contains(block, []byte("AppleThunderboltRDMAQueuePair")) && bytes.Contains(block, []byte("inactive, busy 1")) {
-			return name + " has inactive busy queue pair"
-		}
+	}
+	return ""
+}
+
+func darwinRDMABlockProviderBlocked(block []byte) string {
+	if bytes.Contains(block, []byte("AppleThunderboltRDMAProtectionDomain")) && bytes.Contains(block, []byte("inactive, busy 1")) {
+		return "has inactive busy protection domain"
+	}
+	if bytes.Contains(block, []byte("AppleThunderboltRDMAQueuePair")) && bytes.Contains(block, []byte("inactive, busy 1")) {
+		return "has inactive busy queue pair"
 	}
 	return ""
 }

@@ -111,3 +111,26 @@ func TestDarwinRDMALinksRejectsBlockedProvider(t *testing.T) {
 		t.Fatalf("darwinRDMALinksFromIOReg = %+v, %v; want blocked unsupported", links, err)
 	}
 }
+
+func TestDarwinRDMALinksFiltersBlockedProvider(t *testing.T) {
+	out := []byte(`
++-o rdma_en3  <class AppleThunderboltRDMAInterface, id 0x100000004, registered, matched, active, busy 2 (1 ms), retain 20>
+  | {
+  |   "IOPowerManagement" = {"DevicePowerState"=2,"CurrentPowerState"=2,"MaxPowerState"=2}
+  | }
+  +-o AppleThunderboltRDMAProtectionDomain  <class AppleThunderboltRDMAProtectionDomain, id 0x100000005, !registered, !matched, inactive, busy 1 (1 ms), retain 8>
+
++-o rdma_en4  <class AppleThunderboltRDMAInterface, id 0x100000006, registered, matched, active, busy 2 (1 ms), retain 20>
+  | {
+  |   "IOPowerManagement" = {"DevicePowerState"=2,"CurrentPowerState"=2,"MaxPowerState"=2}
+  | }
+  +-o AppleThunderboltRDMAProtectionDomain  <class AppleThunderboltRDMAProtectionDomain, id 0x100000007, registered, matched, active, busy 0 (0 ms), retain 6>
+`)
+	links, err := darwinRDMALinksFromIOReg(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(links) != 1 || links[0].Device != "rdma_en4" {
+		t.Fatalf("links = %+v, want only rdma_en4", links)
+	}
+}
