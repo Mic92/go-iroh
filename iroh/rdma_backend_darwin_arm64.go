@@ -45,7 +45,8 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 	if info.Control == "" {
 		return nil, fmt.Errorf("%w: missing control address", ErrRDMAUnsupported)
 	}
-	rt, err := newRDMAStreamResource(ctx, info.Device, rdmaStreamBufferSize())
+	bufSize := rdmaStreamBufferSize()
+	rt, err := newRDMAStreamResource(ctx, info.Device, bufSize)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +74,16 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 		_ = rt.close()
 		return nil, err
 	}
+	if err := writeRDMAStreamFramePayload(ctrl, bufSize-rdmaStreamFrameHeaderSize); err != nil {
+		_ = rt.close()
+		return nil, err
+	}
 	remoteDst, err := readRDMAStreamDestination(ctrl)
+	if err != nil {
+		_ = rt.close()
+		return nil, err
+	}
+	remotePayload, err := readRDMAStreamFramePayload(ctrl)
 	if err != nil {
 		_ = rt.close()
 		return nil, err
@@ -82,7 +92,7 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 		_ = rt.close()
 		return nil, err
 	}
-	return newRDMAStreamConn(ctx, rt)
+	return newRDMAStreamConnWithMaxPayload(ctx, rt, min(bufSize-rdmaStreamFrameHeaderSize, remotePayload))
 }
 
 func (darwinRDMAStreamBackend) ListenStreams(ctx context.Context, id uint64, ln net.Listener, accept func(StreamAccept) error) error {
@@ -123,7 +133,8 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 	if err != nil {
 		return err
 	}
-	rt, err := newRDMAStreamResource(ctx, device, rdmaStreamBufferSize())
+	bufSize := rdmaStreamBufferSize()
+	rt, err := newRDMAStreamResource(ctx, device, bufSize)
 	if err != nil {
 		return err
 	}
@@ -137,7 +148,16 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 		_ = rt.close()
 		return err
 	}
+	remotePayload, err := readRDMAStreamFramePayload(ctrl)
+	if err != nil {
+		_ = rt.close()
+		return err
+	}
 	if err := writeRDMAStreamDestination(ctrl, local); err != nil {
+		_ = rt.close()
+		return err
+	}
+	if err := writeRDMAStreamFramePayload(ctrl, bufSize-rdmaStreamFrameHeaderSize); err != nil {
 		_ = rt.close()
 		return err
 	}
@@ -145,7 +165,7 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 		_ = rt.close()
 		return err
 	}
-	conn, err := newRDMAStreamConn(ctx, rt)
+	conn, err := newRDMAStreamConnWithMaxPayload(ctx, rt, min(bufSize-rdmaStreamFrameHeaderSize, remotePayload))
 	if err != nil {
 		_ = rt.close()
 		return err

@@ -41,6 +41,7 @@ type rdmaStreamConn struct {
 	t      rdmaStreamConnTransport
 	send   []byte
 	recv   []byte
+	max    int
 
 	readMu sync.Mutex
 	read   []byte
@@ -62,6 +63,10 @@ type rdmaStreamConn struct {
 }
 
 func newRDMAStreamConn(ctx context.Context, t rdmaStreamConnTransport) (*rdmaStreamConn, error) {
+	return newRDMAStreamConnWithMaxPayload(ctx, t, 0)
+}
+
+func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransport, maxPayload int) (*rdmaStreamConn, error) {
 	if t == nil {
 		return nil, errors.New("rdma: nil stream transport")
 	}
@@ -73,6 +78,13 @@ func newRDMAStreamConn(ctx context.Context, t rdmaStreamConnTransport) (*rdmaStr
 	if len(recv) < rdmaStreamFrameHeaderSize+1 {
 		return nil, fmt.Errorf("rdma: receive buffer too small: %d", len(recv))
 	}
+	max := len(send) - rdmaStreamFrameHeaderSize
+	if recvMax := len(recv) - rdmaStreamFrameHeaderSize; recvMax < max {
+		max = recvMax
+	}
+	if maxPayload > 0 && maxPayload < max {
+		max = maxPayload
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	c := &rdmaStreamConn{
 		ctx:    ctx,
@@ -80,6 +92,7 @@ func newRDMAStreamConn(ctx context.Context, t rdmaStreamConnTransport) (*rdmaStr
 		t:      t,
 		send:   send,
 		recv:   recv,
+		max:    max,
 		recvID: rdmaStreamRecvWorkID,
 		sendID: rdmaStreamSendWorkID,
 	}
@@ -156,9 +169,9 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 	}
 	c.writeMu.Lock()
 	buf := c.send
-	if len(p) > len(buf)-rdmaStreamFrameHeaderSize {
+	if len(p) > c.max {
 		c.writeMu.Unlock()
-		return 0, fmt.Errorf("rdma: write size %d exceeds frame payload %d", len(p), len(buf)-rdmaStreamFrameHeaderSize)
+		return 0, fmt.Errorf("rdma: write size %d exceeds frame payload %d", len(p), c.max)
 	}
 	binary.BigEndian.PutUint32(buf[:rdmaStreamFrameHeaderSize], uint32(len(p)))
 	copy(buf[rdmaStreamFrameHeaderSize:], p)

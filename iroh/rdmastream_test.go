@@ -179,3 +179,25 @@ func TestRDMAStreamDestinationRejectsInvalid(t *testing.T) {
 		t.Fatal("writeRDMAStreamDestination succeeded with out-of-range psn")
 	}
 }
+
+func TestRDMAStreamFramePayloadRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeRDMAStreamFramePayload(&buf, 1024); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readRDMAStreamFramePayload(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 1024 {
+		t.Fatalf("frame payload = %d, want 1024", got)
+	}
+	if err := writeRDMAStreamFramePayload(&buf, 0); err == nil {
+		t.Fatal("writeRDMAStreamFramePayload succeeded with zero payload")
+	}
+	buf.Reset()
+	buf.Write([]byte{0, 0, 0, 0})
+	if _, err := readRDMAStreamFramePayload(&buf); err == nil {
+		t.Fatal("readRDMAStreamFramePayload succeeded with zero payload")
+	}
+}

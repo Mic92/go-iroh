@@ -70,6 +70,30 @@ func readRDMAStreamDestination(r io.Reader) (rdmaStreamDestination, error) {
 	return dst, nil
 }
 
+func writeRDMAStreamFramePayload(w io.Writer, n int) error {
+	if n <= 0 {
+		return fmt.Errorf("rdma: frame payload %d must be positive", n)
+	}
+	var b [4]byte
+	binary.BigEndian.PutUint32(b[:], uint32(n))
+	if _, err := w.Write(b[:]); err != nil {
+		return fmt.Errorf("rdma: write frame payload: %w", err)
+	}
+	return nil
+}
+
+func readRDMAStreamFramePayload(r io.Reader) (int, error) {
+	var b [4]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return 0, fmt.Errorf("rdma: read frame payload: %w", err)
+	}
+	n := int(binary.BigEndian.Uint32(b[:]))
+	if n <= 0 {
+		return 0, fmt.Errorf("rdma: frame payload %d must be positive", n)
+	}
+	return n, nil
+}
+
 func writeRDMAStreamString(w io.Writer, s string) error {
 	if len(s) > 0xffff {
 		return errors.New("rdma: string too long")

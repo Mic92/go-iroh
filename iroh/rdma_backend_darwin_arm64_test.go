@@ -96,9 +96,84 @@ func TestDarwinRDMAStreamBackendControlHandshake(t *testing.T) {
 	if clientRT.remote.QPN != serverRT.local.QPN || serverRT.remote.QPN != clientRT.local.QPN {
 		t.Fatalf("destinations not exchanged: client remote=%+v server local=%+v server remote=%+v client local=%+v", clientRT.remote, serverRT.local, serverRT.remote, clientRT.local)
 	}
+	if clientConn, ok := client.(*rdmaStreamConn); !ok || clientConn.max != len(clientRT.send)-rdmaStreamFrameHeaderSize {
+		t.Fatalf("client max payload = %v, want %d", clientConnMax(client), len(clientRT.send)-rdmaStreamFrameHeaderSize)
+	}
+	if serverConn, ok := server.(*rdmaStreamConn); !ok || serverConn.max != len(serverRT.send)-rdmaStreamFrameHeaderSize {
+		t.Fatalf("server max payload = %v, want %d", clientConnMax(server), len(serverRT.send)-rdmaStreamFrameHeaderSize)
+	}
 
 	cancel()
 	_ = ln.Close()
+}
+
+func TestDarwinRDMAStreamBackendNegotiatesFramePayload(t *testing.T) {
+	t.Setenv("GO_IROH_RDMA_BUFFER_SIZE", "4096")
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	factory := newFakeRDMAStreamResourceFactory(2048)
+	oldFactory := newRDMAStreamResource
+	newRDMAStreamResource = factory.new
+	defer func() { newRDMAStreamResource = oldFactory }()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	backend := darwinRDMAStreamBackend{}
+	accepted := make(chan StreamAccept, 1)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- backend.ListenStreams(ctx, 77, ln, func(a StreamAccept) error {
+			accepted <- a
+			return nil
+		})
+	}()
+
+	remote := NewStreamLinkAddr(77, TransportLinkRDMA, "rdma_en3", rdmaStreamDialAddr(RDMALink{Device: "rdma_en3"}, ln.Addr().String()))
+	tok := StreamOpenToken{
+		RemoteID:    "server",
+		ALPN:        "rdma-test/0",
+		StableID:    1,
+		TransportID: 77,
+		Purpose:     "handshake-test",
+		Nonce:       "nonce",
+		Expiry:      time.Now().Add(time.Minute),
+	}
+	client, err := backend.DialStream(ctx, 77, remote, StreamOptions{Token: tok})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	var server net.Conn
+	select {
+	case a := <-accepted:
+		server = a.Conn
+	case err := <-errc:
+		t.Fatal(err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	defer server.Close()
+
+	want := 2048 - rdmaStreamFrameHeaderSize
+	if got := clientConnMax(client); got != want {
+		t.Fatalf("client max payload = %d, want %d", got, want)
+	}
+	if got := clientConnMax(server); got != want {
+		t.Fatalf("server max payload = %d, want %d", got, want)
+	}
+}
+
+func clientConnMax(c any) int {
+	rc, ok := c.(*rdmaStreamConn)
+	if !ok {
+		return -1
+	}
+	return rc.max
 }
 
 func TestRDMAStreamBufferSize(t *testing.T) {
