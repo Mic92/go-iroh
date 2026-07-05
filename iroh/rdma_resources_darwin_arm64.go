@@ -59,7 +59,10 @@ type rdmaStreamResourceTransport struct {
 	recvMR *rdmaStreamMemoryRegion
 }
 
-func newRDMAStreamResourceTransport(device string, bufSize int) (*rdmaStreamResourceTransport, error) {
+func newRDMAStreamResourceTransport(ctx context.Context, device string, bufSize int) (*rdmaStreamResourceTransport, error) {
+	if _, err := checkRDMAStreamDeviceActive(ctx, device); err != nil {
+		return nil, err
+	}
 	dev, err := openRDMAStreamDevice(device)
 	if err != nil {
 		return nil, err

@@ -38,6 +38,26 @@ func LocalRDMALinks(ctx context.Context) ([]RDMALink, error) {
 	return links, nil
 }
 
+func checkRDMAStreamDeviceActive(ctx context.Context, device string) (RDMALink, error) {
+	links, err := LocalRDMALinks(ctx)
+	if err != nil {
+		return RDMALink{}, err
+	}
+	return activeRDMAStreamDevice(links, device)
+}
+
+func activeRDMAStreamDevice(links []RDMALink, device string) (RDMALink, error) {
+	for _, link := range links {
+		if device == "" || link.Device == device {
+			return link, nil
+		}
+	}
+	if device == "" {
+		return RDMALink{}, ErrRDMAUnsupported
+	}
+	return RDMALink{}, fmt.Errorf("rdma: active device %q: %w", device, ErrRDMAUnsupported)
+}
+
 func parseDarwinRDMALinks(out []byte) []RDMALink {
 	blocks := bytes.Split(out, []byte("\n+-o "))
 	links := make([]RDMALink, 0, len(blocks))

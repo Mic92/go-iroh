@@ -108,7 +108,10 @@ func newFakeRDMAStreamResourceFactory(bufSize int) *fakeRDMAStreamResourceFactor
 	return &fakeRDMAStreamResourceFactory{nextQPN: 100, bufSize: bufSize}
 }
 
-func (f *fakeRDMAStreamResourceFactory) new(device string, bufSize int) (rdmaStreamResource, error) {
+func (f *fakeRDMAStreamResourceFactory) new(ctx context.Context, device string, bufSize int) (rdmaStreamResource, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	r := &fakeRDMAStreamResource{

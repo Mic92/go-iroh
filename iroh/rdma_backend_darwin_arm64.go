@@ -25,8 +25,8 @@ type rdmaStreamResource interface {
 	connect(context.Context, rdmaStreamDestination, rdmaStreamDestination) error
 }
 
-var newRDMAStreamResource = func(device string, bufSize int) (rdmaStreamResource, error) {
-	return newRDMAStreamResourceTransport(device, bufSize)
+var newRDMAStreamResource = func(ctx context.Context, device string, bufSize int) (rdmaStreamResource, error) {
+	return newRDMAStreamResourceTransport(ctx, device, bufSize)
 }
 
 func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote netaddr.CustomAddr, opts StreamOptions) (net.Conn, error) {
@@ -44,7 +44,7 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 	if info.Control == "" {
 		return nil, fmt.Errorf("%w: missing control address", ErrRDMAUnsupported)
 	}
-	rt, err := newRDMAStreamResource(info.Device, rdmaStreamBufferSize)
+	rt, err := newRDMAStreamResource(ctx, info.Device, rdmaStreamBufferSize)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +122,7 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 	if err != nil {
 		return err
 	}
-	rt, err := newRDMAStreamResource(device, rdmaStreamBufferSize)
+	rt, err := newRDMAStreamResource(ctx, device, rdmaStreamBufferSize)
 	if err != nil {
 		return err
 	}
