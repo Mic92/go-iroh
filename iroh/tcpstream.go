@@ -135,9 +135,12 @@ func (t *TCPStreamTransport) Close() error {
 }
 
 func writeStreamOpenToken(w io.Writer, tok StreamOpenToken) error {
-	var b []byte
+	n, err := streamOpenTokenLen(tok)
+	if err != nil {
+		return err
+	}
+	b := make([]byte, 0, n)
 	b = append(b, streamOpenTokenVersion)
-	var err error
 	if b, err = appendStreamTokenString(b, tok.LocalID); err != nil {
 		return err
 	}
@@ -160,6 +163,17 @@ func writeStreamOpenToken(w io.Writer, tok StreamOpenToken) error {
 		return fmt.Errorf("iroh: write stream token: %w", err)
 	}
 	return nil
+}
+
+func streamOpenTokenLen(tok StreamOpenToken) (int, error) {
+	n := 1 + 8 + 8 + 8
+	for _, s := range [...]string{tok.LocalID, tok.RemoteID, tok.ALPN, tok.Purpose, tok.Nonce} {
+		if len(s) > 0xffff {
+			return 0, errStreamTokenStringTooLong
+		}
+		n += 2 + len(s)
+	}
+	return n, nil
 }
 
 func readStreamOpenToken(r io.Reader) (StreamOpenToken, error) {

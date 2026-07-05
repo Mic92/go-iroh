@@ -205,3 +205,24 @@ func TestStreamOpenTokenBinaryRejectsOversizedString(t *testing.T) {
 		t.Fatalf("writeStreamOpenToken = %v, want errStreamTokenStringTooLong", err)
 	}
 }
+
+func BenchmarkWriteStreamOpenToken(b *testing.B) {
+	tok := StreamOpenToken{
+		LocalID:     "client",
+		RemoteID:    "server",
+		ALPN:        "test/0",
+		StableID:    7,
+		TransportID: 11,
+		Purpose:     "rdma",
+		Nonce:       "nonce",
+		Expiry:      time.Unix(0, 123456789),
+	}
+	var buf bytes.Buffer
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		buf.Reset()
+		if err := writeStreamOpenToken(&buf, tok); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
