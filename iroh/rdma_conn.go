@@ -29,7 +29,7 @@ type rdmaStreamConnTransport interface {
 	recvBuf() []byte
 	postSend(offset, length int, id uint64) error
 	postRecv(offset, length int, id uint64) error
-	poll(context.Context, int) ([]rdmaStreamWorkRequest, error)
+	poll(context.Context, []rdmaStreamWorkRequest) ([]rdmaStreamWorkRequest, error)
 	close() error
 }
 
@@ -47,6 +47,7 @@ type rdmaStreamConn struct {
 
 	pollMu  sync.Mutex
 	pending []rdmaStreamWorkRequest
+	pollBuf [8]rdmaStreamWorkRequest
 
 	closeOnce sync.Once
 	closeErr  error
@@ -190,7 +191,7 @@ func (c *rdmaStreamConn) pollWork(match func(rdmaStreamWorkRequest) bool) (rdmaS
 				return work, nil
 			}
 		}
-		works, err := c.t.poll(c.ctx, 1)
+		works, err := c.t.poll(c.ctx, c.pollBuf[:1])
 		if err != nil {
 			return rdmaStreamWorkRequest{}, err
 		}

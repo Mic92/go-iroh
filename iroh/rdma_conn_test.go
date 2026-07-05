@@ -106,7 +106,8 @@ type memRDMAStreamTransport struct {
 	mu          sync.Mutex
 	send        []byte
 	recv        []byte
-	recvPosted  *rdmaStreamPostWork
+	recvPosted  rdmaStreamPostWork
+	hasRecv     bool
 	completions []rdmaStreamWorkRequest
 	peer        *memRDMAStreamTransport
 	closed      bool
@@ -126,7 +127,8 @@ func (t *memRDMAStreamTransport) recvBuf() []byte { return t.recv }
 func (t *memRDMAStreamTransport) postRecv(offset, length int, id uint64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.recvPosted = &rdmaStreamPostWork{Offset: offset, Length: length, ID: id}
+	t.recvPosted = rdmaStreamPostWork{Offset: offset, Length: length, ID: id}
+	t.hasRecv = true
 	return nil
 }
 
@@ -143,24 +145,26 @@ func (t *memRDMAStreamTransport) postSend(offset, length int, id uint64) error {
 
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
-	if peer.recvPosted == nil {
+	if !peer.hasRecv {
 		return context.Canceled
 	}
-	work := *peer.recvPosted
-	peer.recvPosted = nil
+	work := peer.recvPosted
+	peer.hasRecv = false
 	copy(peer.recv[work.Offset:], send)
 	peer.completions = append(peer.completions, rdmaStreamWorkRequest{ID: work.ID, Bytes: len(send)})
 	return nil
 }
 
-func (t *memRDMAStreamTransport) poll(ctx context.Context, n int) ([]rdmaStreamWorkRequest, error) {
+func (t *memRDMAStreamTransport) poll(ctx context.Context, out []rdmaStreamWorkRequest) ([]rdmaStreamWorkRequest, error) {
 	for {
 		t.mu.Lock()
 		if len(t.completions) > 0 {
+			n := len(out)
 			if n > len(t.completions) {
 				n = len(t.completions)
 			}
-			out := append([]rdmaStreamWorkRequest(nil), t.completions[:n]...)
+			out = out[:n]
+			copy(out, t.completions[:n])
 			copy(t.completions, t.completions[n:])
 			t.completions = t.completions[:len(t.completions)-n]
 			t.mu.Unlock()
