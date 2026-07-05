@@ -362,22 +362,22 @@ func (p *streamLinkAddrParser) class() TransportLinkClass {
 }
 
 func streamLinkClassBytes(b []byte) TransportLinkClass {
-	switch {
-	case bytes.Equal(b, []byte(TransportLinkRDMA)):
+	switch string(b) {
+	case string(TransportLinkRDMA):
 		return TransportLinkRDMA
-	case bytes.Equal(b, []byte(TransportLinkLoopback)):
+	case string(TransportLinkLoopback):
 		return TransportLinkLoopback
-	case bytes.Equal(b, []byte(TransportLinkThunderbolt)):
+	case string(TransportLinkThunderbolt):
 		return TransportLinkThunderbolt
-	case bytes.Equal(b, []byte(TransportLinkAWDL)):
+	case string(TransportLinkAWDL):
 		return TransportLinkAWDL
-	case bytes.Equal(b, []byte(TransportLinkWiredLAN)):
+	case string(TransportLinkWiredLAN):
 		return TransportLinkWiredLAN
-	case bytes.Equal(b, []byte(TransportLinkWiFiLAN)):
+	case string(TransportLinkWiFiLAN):
 		return TransportLinkWiFiLAN
-	case bytes.Equal(b, []byte(TransportLinkLAN)):
+	case string(TransportLinkLAN):
 		return TransportLinkLAN
-	case bytes.Equal(b, []byte(TransportLinkUnknown)):
+	case string(TransportLinkUnknown):
 		return TransportLinkUnknown
 	default:
 		return TransportLinkClass(string(b))
