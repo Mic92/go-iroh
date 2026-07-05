@@ -201,8 +201,8 @@ func (c *rdmaStreamConn) pollWorkID(id uint64) (rdmaStreamWorkRequest, error) {
 		for i := 0; i < c.pendingLen; i++ {
 			work := c.pending[i]
 			if work.ID == id {
-				copy(c.pending[i:], c.pending[i+1:c.pendingLen])
 				c.pendingLen--
+				c.pending[i] = c.pending[c.pendingLen]
 				return work, nil
 			}
 		}
