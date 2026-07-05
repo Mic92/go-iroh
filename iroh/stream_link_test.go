@@ -169,6 +169,28 @@ func TestPreferredTransportLinkChangesWithInterfaces(t *testing.T) {
 	}
 }
 
+func BenchmarkPreferredTransportLinkAddr(b *testing.B) {
+	local := []TransportLinkAddr{
+		{Interface: "awdl0", Class: TransportLinkAWDL},
+		{Interface: "en0", Class: TransportLinkWiredLAN},
+		{Interface: "bridge0", Class: TransportLinkThunderbolt},
+		{Interface: "rdma_en3", Class: TransportLinkRDMA},
+	}
+	remote := []TransportLinkAddr{
+		{Interface: "utun0", Class: TransportLinkLAN},
+		{Interface: "en0", Class: TransportLinkWiredLAN},
+		{Interface: "bridge0", Class: TransportLinkThunderbolt},
+		{Interface: "rdma_en3", Class: TransportLinkRDMA},
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got := PreferredTransportLinkAddr(local, remote)
+		if got != TransportLinkRDMA {
+			b.Fatalf("class = %v, want %v", got, TransportLinkRDMA)
+		}
+	}
+}
+
 func TestStreamLinkAddrRoundTrip(t *testing.T) {
 	addr := NewStreamLinkAddr(12, TransportLinkThunderbolt, "en5", "[fe80::1%en5]:4433")
 	got, err := ParseStreamLinkAddr(addr)

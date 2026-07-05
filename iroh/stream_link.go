@@ -150,7 +150,12 @@ func PreferredTransportLink(a, b []TransportLinkClass) TransportLinkClass {
 
 // PreferredTransportLinkAddr chooses from classified local and remote addresses.
 func PreferredTransportLinkAddr(a, b []TransportLinkAddr) TransportLinkClass {
-	return PreferredTransportLink(linkAddrClasses(a), linkAddrClasses(b))
+	for _, class := range transportLinkPreference {
+		if hasTransportLinkAddrClass(a, class) && hasTransportLinkAddrClass(b, class) {
+			return class
+		}
+	}
+	return TransportLinkLAN
 }
 
 // SelectStreamLink chooses the fastest mutually advertised link and matching
@@ -217,12 +222,13 @@ func hasTransportLinkClass(classes []TransportLinkClass, want TransportLinkClass
 	return false
 }
 
-func linkAddrClasses(addrs []TransportLinkAddr) []TransportLinkClass {
-	classes := make([]TransportLinkClass, 0, len(addrs))
+func hasTransportLinkAddrClass(addrs []TransportLinkAddr, want TransportLinkClass) bool {
 	for _, addr := range addrs {
-		classes = append(classes, addr.Class)
+		if addr.Class == want {
+			return true
+		}
 	}
-	return classes
+	return false
 }
 
 var transportLinkPreference = []TransportLinkClass{
