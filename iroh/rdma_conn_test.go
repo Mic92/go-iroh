@@ -3,9 +3,12 @@ package iroh
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"os"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestRDMAStreamConnReadWrite(t *testing.T) {
@@ -133,14 +136,14 @@ func TestRDMAStreamConnPollKeepsPendingCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	first, err := c.pollWorkID(1)
+	first, err := c.pollWorkID(c.ctx, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.ID != 1 {
 		t.Fatalf("first id = %d, want 1", first.ID)
 	}
-	second, err := c.pollWorkID(2)
+	second, err := c.pollWorkID(c.ctx, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,6 +152,42 @@ func TestRDMAStreamConnPollKeepsPendingCompletion(t *testing.T) {
 	}
 	if tp.polls != 1 {
 		t.Fatalf("polls = %d, want 1", tp.polls)
+	}
+}
+
+func TestRDMAStreamConnReadDeadline(t *testing.T) {
+	tp := &scriptedRDMAStreamTransport{
+		send: make([]byte, 16),
+		recv: make([]byte, 16),
+	}
+	c, err := newRDMAStreamConn(t.Context(), tp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Read error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestRDMAStreamConnWriteDeadline(t *testing.T) {
+	tp := &scriptedRDMAStreamTransport{
+		send: make([]byte, 16),
+		recv: make([]byte, 16),
+	}
+	c, err := newRDMAStreamConn(t.Context(), tp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if err := c.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Write([]byte("x")); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Write error = %v, want deadline exceeded", err)
 	}
 }
 
@@ -285,7 +324,7 @@ func BenchmarkRDMAStreamConnPendingCompletion(b *testing.B) {
 		id := uint64(i) + 1
 		c.pending[0] = rdmaStreamWorkRequest{ID: id, Bytes: 4}
 		c.pendingLen = 1
-		if _, err := c.pollWorkID(id); err != nil {
+		if _, err := c.pollWorkID(c.ctx, id); err != nil {
 			b.Fatalf("poll pending rdma completion: %v", err)
 		}
 	}
