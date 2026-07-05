@@ -71,18 +71,17 @@ func activeRDMAStreamDevice(links []RDMALink, device string) (RDMALink, error) {
 }
 
 func parseDarwinRDMALinks(out []byte) []RDMALink {
-	blocks := darwinRDMABlocks(out)
-	links := make([]RDMALink, 0, len(blocks))
-	for _, block := range blocks {
+	links := make([]RDMALink, 0, bytes.Count(out, darwinRDMABlockSep))
+	forEachDarwinRDMABlock(out, func(block []byte) bool {
 		name := rdmaBlockName(block)
 		if name == "" {
-			continue
+			return true
 		}
 		if propertyInt(block, "CurrentPowerState") != 2 {
-			continue
+			return true
 		}
 		if darwinRDMABlockProviderBlocked(block) != "" {
-			continue
+			return true
 		}
 		links = append(links, RDMALink{
 			Device:    name,
@@ -90,7 +89,8 @@ func parseDarwinRDMALinks(out []byte) []RDMALink {
 			LinkLayer: rdmaLinkLayerThunderbolt,
 			ActiveMTU: 5,
 		})
-	}
+		return true
+	})
 	return links
 }
 
@@ -103,16 +103,19 @@ func darwinRDMAProviderBlocked(ctx context.Context) (string, error) {
 }
 
 func parseDarwinRDMAProviderBlocked(out []byte) string {
-	for _, block := range darwinRDMABlocks(out) {
+	var blocked string
+	forEachDarwinRDMABlock(out, func(block []byte) bool {
 		name := rdmaBlockName(block)
 		if name == "" || propertyInt(block, "CurrentPowerState") != 2 {
-			continue
+			return true
 		}
 		if reason := darwinRDMABlockProviderBlocked(block); reason != "" {
-			return name + " " + reason
+			blocked = name + " " + reason
+			return false
 		}
-	}
-	return ""
+		return true
+	})
+	return blocked
 }
 
 func darwinRDMABlockProviderBlocked(block []byte) string {
@@ -125,8 +128,20 @@ func darwinRDMABlockProviderBlocked(block []byte) string {
 	return ""
 }
 
-func darwinRDMABlocks(out []byte) [][]byte {
-	return bytes.Split(out, []byte("\n+-o "))
+func forEachDarwinRDMABlock(out []byte, yield func([]byte) bool) {
+	for {
+		i := bytes.Index(out, darwinRDMABlockSep)
+		if i < 0 {
+			if len(out) > 0 {
+				yield(out)
+			}
+			return
+		}
+		if i > 0 && !yield(out[:i]) {
+			return
+		}
+		out = out[i+len(darwinRDMABlockSep):]
+	}
 }
 
 func rdmaBlockName(block []byte) string {
@@ -168,3 +183,5 @@ func propertyInt(block []byte, name string) int {
 	}
 	return n
 }
+
+var darwinRDMABlockSep = []byte("\n+-o ")
