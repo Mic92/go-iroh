@@ -250,7 +250,7 @@ func NewStreamLinkAddr(id uint64, class TransportLinkClass, iface, dialAddr stri
 // ParseStreamLinkAddr parses an encoded stream transport address. Raw address
 // payloads from older TCP stream transports are treated as unknown-class addrs.
 func ParseStreamLinkAddr(addr netaddr.CustomAddr) (StreamLinkCandidate, error) {
-	data := addr.Data()
+	data := addr.RawData()
 	if !bytes.HasPrefix(data, streamLinkAddrMagic) {
 		if len(data) == 0 {
 			return StreamLinkCandidate{}, errStreamLinkAddrMalformed
@@ -277,7 +277,7 @@ func ParseStreamLinkAddr(addr netaddr.CustomAddr) (StreamLinkCandidate, error) {
 }
 
 func streamLinkAddrClass(addr netaddr.CustomAddr) (TransportLinkClass, error) {
-	data := addr.Data()
+	data := addr.RawData()
 	if !bytes.HasPrefix(data, streamLinkAddrMagic) {
 		if len(data) == 0 {
 			return "", errStreamLinkAddrMalformed

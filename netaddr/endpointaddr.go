@@ -163,6 +163,12 @@ func (a CustomAddr) ID() uint64 { return a.id }
 // Data returns the opaque address data.
 func (a CustomAddr) Data() []byte { return slices.Clone(a.data) }
 
+// RawData returns the opaque address data without copying.
+//
+// RawData is for internal package cooperation. Callers must not retain or
+// modify the returned slice.
+func (a CustomAddr) RawData() []byte { return a.data }
+
 func (a CustomAddr) customString() string {
 	return strconv.FormatUint(a.id, 16) + "_" + hex.EncodeToString(a.data)
 }
