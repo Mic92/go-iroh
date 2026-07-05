@@ -217,25 +217,28 @@ func (c *rdmaStreamConn) postRecvLocked() error {
 
 func (c *rdmaStreamConn) pollWorkID(ctx context.Context, id uint64) (rdmaStreamWorkRequest, error) {
 	c.pollMu.Lock()
-	defer c.pollMu.Unlock()
 	for {
 		for i := 0; i < c.pendingLen; i++ {
 			work := c.pending[i]
 			if work.ID == id {
 				c.pendingLen--
 				c.pending[i] = c.pending[c.pendingLen]
+				c.pollMu.Unlock()
 				return work, nil
 			}
 		}
 		works, err := c.t.poll(ctx, c.pollBuf[:])
 		if err != nil {
+			c.pollMu.Unlock()
 			return rdmaStreamWorkRequest{}, err
 		}
 		for _, work := range works {
 			if work.ID == id {
+				c.pollMu.Unlock()
 				return work, nil
 			}
 			if c.pendingLen == len(c.pending) {
+				c.pollMu.Unlock()
 				return rdmaStreamWorkRequest{}, errors.New("rdma: too many pending completions")
 			}
 			c.pending[c.pendingLen] = work
