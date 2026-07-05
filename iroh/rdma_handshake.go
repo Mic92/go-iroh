@@ -1,0 +1,77 @@
+package iroh
+
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+)
+
+// rdmaStreamDestination is the queue-pair metadata exchanged before an RDMA
+// stream can move data.
+type rdmaStreamDestination struct {
+	LID       uint16
+	QPN       uint32
+	PSN       uint32
+	GIDIndex  uint8
+	GID       [16]byte
+	ActiveMTU int32
+}
+
+func writeRDMAStreamDestination(w io.Writer, dst rdmaStreamDestination) error {
+	if dst.QPN == 0 {
+		return errors.New("rdma: destination qpn is zero")
+	}
+	if dst.LID == 0 && dst.GID == ([16]byte{}) {
+		return errors.New("rdma: destination lid and gid are both zero")
+	}
+	if dst.PSN > maxRDMAStreamPSN {
+		return fmt.Errorf("rdma: destination psn %d out of range", dst.PSN)
+	}
+	var b [rdmaStreamDestinationSize]byte
+	b[0] = rdmaStreamHandshakeVersion
+	binary.BigEndian.PutUint16(b[1:3], dst.LID)
+	binary.BigEndian.PutUint32(b[3:7], dst.QPN)
+	binary.BigEndian.PutUint32(b[7:11], dst.PSN)
+	b[11] = dst.GIDIndex
+	copy(b[12:28], dst.GID[:])
+	binary.BigEndian.PutUint32(b[28:32], uint32(dst.ActiveMTU))
+	if _, err := w.Write(b[:]); err != nil {
+		return fmt.Errorf("rdma: write destination: %w", err)
+	}
+	return nil
+}
+
+func readRDMAStreamDestination(r io.Reader) (rdmaStreamDestination, error) {
+	var b [rdmaStreamDestinationSize]byte
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return rdmaStreamDestination{}, fmt.Errorf("rdma: read destination: %w", err)
+	}
+	if b[0] != rdmaStreamHandshakeVersion {
+		return rdmaStreamDestination{}, errors.New("rdma: destination version mismatch")
+	}
+	dst := rdmaStreamDestination{
+		LID:       binary.BigEndian.Uint16(b[1:3]),
+		QPN:       binary.BigEndian.Uint32(b[3:7]),
+		PSN:       binary.BigEndian.Uint32(b[7:11]),
+		GIDIndex:  b[11],
+		ActiveMTU: int32(binary.BigEndian.Uint32(b[28:32])),
+	}
+	copy(dst.GID[:], b[12:28])
+	if dst.QPN == 0 {
+		return rdmaStreamDestination{}, errors.New("rdma: destination qpn is zero")
+	}
+	if dst.LID == 0 && dst.GID == ([16]byte{}) {
+		return rdmaStreamDestination{}, errors.New("rdma: destination lid and gid are both zero")
+	}
+	if dst.PSN > maxRDMAStreamPSN {
+		return rdmaStreamDestination{}, fmt.Errorf("rdma: destination psn %d out of range", dst.PSN)
+	}
+	return dst, nil
+}
+
+const (
+	rdmaStreamHandshakeVersion = 1
+	rdmaStreamDestinationSize  = 32
+	maxRDMAStreamPSN           = 0xffffff
+)

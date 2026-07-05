@@ -158,8 +158,9 @@ func PreferredTransportLinkAddr(a, b []TransportLinkAddr) TransportLinkClass {
 // SelectStreamLink chooses the fastest mutually advertised link and matching
 // local and remote addresses. Ties within a class break by CustomAddr ordering.
 func SelectStreamLink(local, remote []netaddr.CustomAddr) (StreamLinkSelection, bool) {
-	localCandidates := streamLinkCandidates(local)
-	remoteCandidates := streamLinkCandidates(remote)
+	var localBuf, remoteBuf [8]StreamLinkCandidate
+	localCandidates := streamLinkCandidates(local, localBuf[:0])
+	remoteCandidates := streamLinkCandidates(remote, remoteBuf[:0])
 	for _, preferred := range transportLinkPreference {
 		localAddr, localOK := selectStreamLinkCandidate(localCandidates, preferred)
 		remoteAddr, remoteOK := selectStreamLinkCandidate(remoteCandidates, preferred)
@@ -174,14 +175,19 @@ func SelectStreamLink(local, remote []netaddr.CustomAddr) (StreamLinkSelection, 
 	return StreamLinkSelection{}, false
 }
 
-func streamLinkCandidates(addrs []netaddr.CustomAddr) []StreamLinkCandidate {
-	candidates := make([]StreamLinkCandidate, 0, len(addrs))
+func streamLinkCandidates(addrs []netaddr.CustomAddr, candidates []StreamLinkCandidate) []StreamLinkCandidate {
+	if cap(candidates) < len(addrs) {
+		candidates = make([]StreamLinkCandidate, 0, len(addrs))
+	}
 	for _, addr := range addrs {
-		c, err := ParseStreamLinkAddr(addr)
+		class, err := streamLinkAddrClass(addr)
 		if err != nil {
 			continue
 		}
-		candidates = append(candidates, c)
+		candidates = append(candidates, StreamLinkCandidate{
+			Addr:  addr,
+			Class: class,
+		})
 	}
 	return candidates
 }
@@ -270,6 +276,22 @@ func ParseStreamLinkAddr(addr netaddr.CustomAddr) (StreamLinkCandidate, error) {
 	}, nil
 }
 
+func streamLinkAddrClass(addr netaddr.CustomAddr) (TransportLinkClass, error) {
+	data := addr.Data()
+	if !bytes.HasPrefix(data, streamLinkAddrMagic) {
+		if len(data) == 0 {
+			return "", errStreamLinkAddrMalformed
+		}
+		return TransportLinkUnknown, nil
+	}
+	p := streamLinkAddrParser{b: data[len(streamLinkAddrMagic):]}
+	class := p.class()
+	if p.err != nil {
+		return "", errStreamLinkAddrMalformed
+	}
+	return class, nil
+}
+
 func compareStreamLinkCandidate(a, b StreamLinkCandidate) int {
 	if c := a.Addr.Compare(b.Addr); c != 0 {
 		return c
@@ -304,6 +326,48 @@ func (p *streamLinkAddrParser) string() string {
 	s := string(p.b[:n])
 	p.b = p.b[n:]
 	return s
+}
+
+func (p *streamLinkAddrParser) class() TransportLinkClass {
+	if p.err != nil {
+		return ""
+	}
+	if len(p.b) < 2 {
+		p.err = errStreamLinkAddrMalformed
+		return ""
+	}
+	n := int(binary.BigEndian.Uint16(p.b[:2]))
+	p.b = p.b[2:]
+	if len(p.b) < n {
+		p.err = errStreamLinkAddrMalformed
+		return ""
+	}
+	class := streamLinkClassBytes(p.b[:n])
+	p.b = p.b[n:]
+	return class
+}
+
+func streamLinkClassBytes(b []byte) TransportLinkClass {
+	switch {
+	case bytes.Equal(b, []byte(TransportLinkRDMA)):
+		return TransportLinkRDMA
+	case bytes.Equal(b, []byte(TransportLinkLoopback)):
+		return TransportLinkLoopback
+	case bytes.Equal(b, []byte(TransportLinkThunderbolt)):
+		return TransportLinkThunderbolt
+	case bytes.Equal(b, []byte(TransportLinkAWDL)):
+		return TransportLinkAWDL
+	case bytes.Equal(b, []byte(TransportLinkWiredLAN)):
+		return TransportLinkWiredLAN
+	case bytes.Equal(b, []byte(TransportLinkWiFiLAN)):
+		return TransportLinkWiFiLAN
+	case bytes.Equal(b, []byte(TransportLinkLAN)):
+		return TransportLinkLAN
+	case bytes.Equal(b, []byte(TransportLinkUnknown)):
+		return TransportLinkUnknown
+	default:
+		return TransportLinkClass(string(b))
+	}
 }
 
 var errStreamLinkAddrMalformed = errors.New("iroh: malformed stream link address")

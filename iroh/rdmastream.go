@@ -11,16 +11,16 @@ import (
 // ErrRDMAUnsupported reports that no RDMA data path is available.
 var ErrRDMAUnsupported = errors.New("rdma: unsupported on this platform")
 
-// RDMAStreamTransport is a placeholder for an RDMA-backed stream transport.
+// RDMAStreamTransport is an RDMA-backed stream transport.
 //
 // It advertises the RDMA link class so negotiation can prefer RDMA when both
-// peers support it. The data path is unsupported unless a platform-specific
-// libibverbs or RoCE backend is added.
+// peers support it. The data path is available only when a platform backend can
+// open and connect a local RDMA device.
 type RDMAStreamTransport struct {
 	id uint64
 }
 
-// NewRDMAStreamTransport returns an RDMA stream transport stub.
+// NewRDMAStreamTransport returns an RDMA stream transport.
 func NewRDMAStreamTransport(id uint64) (*RDMAStreamTransport, error) {
 	if id == 0 {
 		return nil, errors.New("iroh: zero rdma stream transport id")
@@ -37,11 +37,9 @@ func (t *RDMAStreamTransport) LocalAddrs(ctx context.Context) ([]netaddr.CustomA
 }
 
 func (t *RDMAStreamTransport) DialStream(ctx context.Context, remote netaddr.CustomAddr, opts StreamOptions) (net.Conn, error) {
-	_, _, _ = ctx, remote, opts
-	return nil, ErrRDMAUnsupported
+	return dialRDMAStream(ctx, t.id, remote, opts)
 }
 
 func (t *RDMAStreamTransport) ListenStreams(ctx context.Context, accept func(StreamAccept) error) error {
-	_, _ = ctx, accept
-	return ErrRDMAUnsupported
+	return listenRDMAStreams(ctx, t.id, accept)
 }
