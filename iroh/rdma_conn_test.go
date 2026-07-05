@@ -54,6 +54,41 @@ func TestRDMAStreamConnRejectsOversizedWrite(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamConnMaxPayload(t *testing.T) {
+	a, _ := newMemRDMAStreamTransportPair(32)
+	c, err := newRDMAStreamConnWithMaxPayload(t.Context(), a, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if c.max != 7 {
+		t.Fatalf("max payload = %d, want 7", c.max)
+	}
+	if _, err := c.Write(make([]byte, 8)); err == nil {
+		t.Fatal("Write succeeded above negotiated max payload")
+	}
+}
+
+func TestRDMAStreamConnRejectsNegativeMaxPayload(t *testing.T) {
+	a, _ := newMemRDMAStreamTransportPair(32)
+	if _, err := newRDMAStreamConnWithMaxPayload(t.Context(), a, -1); err == nil {
+		t.Fatal("newRDMAStreamConnWithMaxPayload succeeded with negative max payload")
+	}
+}
+
+func TestRDMAStreamConnCapsMaxPayloadAtBuffer(t *testing.T) {
+	a, _ := newMemRDMAStreamTransportPair(32)
+	c, err := newRDMAStreamConnWithMaxPayload(t.Context(), a, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	want := 32 - rdmaStreamFrameHeaderSize
+	if c.max != want {
+		t.Fatalf("max payload = %d, want %d", c.max, want)
+	}
+}
+
 func TestRDMAStreamConnPartialRead(t *testing.T) {
 	a, b := newMemRDMAStreamTransportPair(1024)
 	ac, err := newRDMAStreamConn(t.Context(), a)

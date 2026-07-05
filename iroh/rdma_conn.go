@@ -70,6 +70,9 @@ func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransp
 	if t == nil {
 		return nil, errors.New("rdma: nil stream transport")
 	}
+	if maxPayload < 0 {
+		return nil, fmt.Errorf("rdma: frame payload %d must be non-negative", maxPayload)
+	}
 	send := t.sendBuf()
 	recv := t.recvBuf()
 	if len(send) < rdmaStreamFrameHeaderSize+1 {
