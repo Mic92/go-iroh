@@ -63,6 +63,10 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 		return nil, fmt.Errorf("rdma: dial control: %w", err)
 	}
 	defer ctrl.Close()
+	if err := setRDMAStreamControlDeadline(ctx, ctrl); err != nil {
+		_ = rt.close()
+		return nil, err
+	}
 	if err := writeStreamOpenToken(ctrl, opts.Token); err != nil {
 		_ = rt.close()
 		return nil, err
@@ -136,6 +140,9 @@ func (darwinRDMAStreamBackend) ListenStreams(ctx context.Context, id uint64, ln 
 }
 
 func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, accept func(StreamAccept) error) error {
+	if err := setRDMAStreamControlDeadline(ctx, ctrl); err != nil {
+		return err
+	}
 	tok, err := readStreamOpenToken(ctrl)
 	if err != nil {
 		return err
@@ -209,6 +216,15 @@ func rdmaStreamBufferSize() int {
 		return defaultRDMAStreamBufferSize
 	}
 	return n
+}
+
+func setRDMAStreamControlDeadline(ctx context.Context, ctrl net.Conn) error {
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := ctrl.SetDeadline(deadline); err != nil {
+			return fmt.Errorf("rdma: set control deadline: %w", err)
+		}
+	}
+	return nil
 }
 
 func dialRDMAStreamWarmupReady(ctrl net.Conn) error {

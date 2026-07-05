@@ -181,6 +181,22 @@ func TestDarwinRDMAStreamBackendNegotiatesFramePayload(t *testing.T) {
 	}
 }
 
+func TestAcceptRDMAStreamControlHonorsContextDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	err := acceptRDMAStreamControl(ctx, 77, server, func(StreamAccept) error {
+		t.Fatal("accept called")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("acceptRDMAStreamControl succeeded")
+	}
+}
+
 func clientConnMax(c any) int {
 	rc, ok := c.(*rdmaStreamConn)
 	if !ok {
