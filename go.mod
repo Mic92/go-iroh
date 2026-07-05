@@ -7,6 +7,7 @@ require filippo.io/edwards25519 v1.2.0
 require (
 	github.com/coder/websocket v1.8.14
 	github.com/quic-go/quic-go v0.59.1
+	github.com/tmc/apple v0.6.14-0.20260702224626-3bb6555763ee
 	golang.org/x/crypto v0.52.0
 	golang.org/x/net v0.55.0
 	golang.org/x/sys v0.45.0
@@ -15,6 +16,7 @@ require (
 )
 
 require (
+	github.com/ebitengine/purego v0.10.1 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
 	golang.org/x/tools v0.44.0 // indirect
 )
