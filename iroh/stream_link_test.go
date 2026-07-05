@@ -305,6 +305,20 @@ func TestTCPDialAddrFromLinkAddrUsesInterfaceZone(t *testing.T) {
 	}
 }
 
+func BenchmarkTCPDialAddrFromNetAddrScopedIPv6(b *testing.B) {
+	addr := &net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "en5"}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got, ok := tcpDialAddrFromNetAddr("ignored", addr, 4433)
+		if !ok {
+			b.Fatal("tcpDialAddrFromNetAddr failed")
+		}
+		if got != "[fe80::1%en5]:4433" {
+			b.Fatalf("addr = %q, want scoped link-local dial addr", got)
+		}
+	}
+}
+
 func TestRDMAStreamTransportUnsupported(t *testing.T) {
 	tr, err := NewRDMAStreamTransport(99)
 	if err != nil {

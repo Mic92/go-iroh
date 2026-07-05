@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
+	"strconv"
 	"strings"
 
 	"github.com/tmc/go-iroh/netaddr"
@@ -397,7 +397,18 @@ func tcpDialAddrFromNetAddr(iface string, addr net.Addr, port int) (string, bool
 	} else if ip.To4() == nil && ip.IsLinkLocalUnicast() && iface != "" {
 		host += "%" + iface
 	}
-	return net.JoinHostPort(host, fmt.Sprint(port)), true
+	var b [128]byte
+	out := b[:0]
+	if ip.To4() == nil {
+		out = append(out, '[')
+		out = append(out, host...)
+		out = append(out, ']')
+	} else {
+		out = append(out, host...)
+	}
+	out = append(out, ':')
+	out = strconv.AppendInt(out, int64(port), 10)
+	return string(out), true
 }
 
 func addrZone(addr net.Addr) string {
