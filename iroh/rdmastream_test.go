@@ -18,6 +18,18 @@ func TestRDMAStreamAddr(t *testing.T) {
 	}
 }
 
+func BenchmarkRDMAStreamAddr(b *testing.B) {
+	link := RDMALink{Device: "rdma_en3", State: 4, LinkLayer: rdmaLinkLayerThunderbolt, ActiveMTU: 5}
+	const control = "[fe80::1%bridge0]:4433"
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		addr := rdmaStreamAddr(99, link, control)
+		if addr.ID() != 99 {
+			b.Fatalf("id = %d, want 99", addr.ID())
+		}
+	}
+}
+
 func TestParseRDMAStreamDialAddr(t *testing.T) {
 	got, err := parseRDMAStreamDialAddr("rdma:rdma_en3@127.0.0.1:1")
 	if err != nil {

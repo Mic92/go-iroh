@@ -2,6 +2,7 @@ package iroh
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"strings"
 
@@ -69,7 +70,27 @@ func rdmaStreamSelectionString(sel StreamLinkSelection) string {
 }
 
 func rdmaStreamAddr(id uint64, link RDMALink, control string) netaddr.CustomAddr {
-	return NewStreamLinkAddr(id, TransportLinkRDMA, link.Device, rdmaStreamDialAddr(link, control))
+	dialLen := len("rdma:") + len(link.Device)
+	if control != "" {
+		dialLen += 1 + len(control)
+	}
+	n := streamLinkAddrLen(string(TransportLinkRDMA), link.Device, "") + dialLen
+	var buf [128]byte
+	b := buf[:0]
+	if n > len(buf) {
+		b = make([]byte, 0, n)
+	}
+	b = append(b, streamLinkAddrMagic...)
+	b = appendStreamLinkString(b, string(TransportLinkRDMA))
+	b = appendStreamLinkString(b, link.Device)
+	b = binary.BigEndian.AppendUint16(b, uint16(dialLen))
+	b = append(b, "rdma:"...)
+	b = append(b, link.Device...)
+	if control != "" {
+		b = append(b, '@')
+		b = append(b, control...)
+	}
+	return netaddr.NewCustomAddr(id, b)
 }
 
 func localRDMAStreamAddrs(ctx context.Context, id uint64, controls []rdmaStreamControlAddr) ([]netaddr.CustomAddr, error) {
