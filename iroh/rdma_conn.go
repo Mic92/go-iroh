@@ -37,6 +37,8 @@ type rdmaStreamConn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	t      rdmaStreamConnTransport
+	send   []byte
+	recv   []byte
 
 	readMu sync.Mutex
 	read   []byte
@@ -57,17 +59,21 @@ func newRDMAStreamConn(ctx context.Context, t rdmaStreamConnTransport) (*rdmaStr
 	if t == nil {
 		return nil, errors.New("rdma: nil stream transport")
 	}
-	if len(t.sendBuf()) < rdmaStreamFrameHeaderSize+1 {
-		return nil, fmt.Errorf("rdma: send buffer too small: %d", len(t.sendBuf()))
+	send := t.sendBuf()
+	recv := t.recvBuf()
+	if len(send) < rdmaStreamFrameHeaderSize+1 {
+		return nil, fmt.Errorf("rdma: send buffer too small: %d", len(send))
 	}
-	if len(t.recvBuf()) < rdmaStreamFrameHeaderSize+1 {
-		return nil, fmt.Errorf("rdma: receive buffer too small: %d", len(t.recvBuf()))
+	if len(recv) < rdmaStreamFrameHeaderSize+1 {
+		return nil, fmt.Errorf("rdma: receive buffer too small: %d", len(recv))
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	c := &rdmaStreamConn{
 		ctx:    ctx,
 		cancel: cancel,
 		t:      t,
+		send:   send,
+		recv:   recv,
 		recvID: rdmaStreamRecvWorkID,
 		sendID: rdmaStreamSendWorkID,
 	}
@@ -96,7 +102,7 @@ func (c *rdmaStreamConn) Read(p []byte) (int, error) {
 			}
 			return 0, err
 		}
-		frame, err := rdmaStreamFramePayload(c.t.recvBuf(), work.Bytes)
+		frame, err := rdmaStreamFramePayload(c.recv, work.Bytes)
 		if err != nil {
 			return 0, err
 		}
@@ -131,7 +137,7 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 	}
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	buf := c.t.sendBuf()
+	buf := c.send
 	if len(p) > len(buf)-rdmaStreamFrameHeaderSize {
 		return 0, fmt.Errorf("rdma: write size %d exceeds frame payload %d", len(p), len(buf)-rdmaStreamFrameHeaderSize)
 	}
@@ -184,7 +190,7 @@ func (c *rdmaStreamConn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *rdmaStreamConn) postRecvLocked() error {
-	return c.t.postRecv(0, len(c.t.recvBuf()), c.recvID)
+	return c.t.postRecv(0, len(c.recv), c.recvID)
 }
 
 func (c *rdmaStreamConn) pollWorkID(id uint64) (rdmaStreamWorkRequest, error) {
