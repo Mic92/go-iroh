@@ -164,7 +164,7 @@ func isRDMABlockNameByte(c byte) bool {
 }
 
 func propertyInt(block []byte, name string) int {
-	prefix := []byte(`"` + name + `"=`)
+	prefix := propertyIntPrefix(name)
 	i := bytes.Index(block, prefix)
 	if i < 0 {
 		return 0
@@ -184,4 +184,13 @@ func propertyInt(block []byte, name string) int {
 	return n
 }
 
+func propertyIntPrefix(name string) []byte {
+	if name == "CurrentPowerState" {
+		return currentPowerStateProperty
+	}
+	return []byte(`"` + name + `"=`)
+}
+
 var darwinRDMABlockSep = []byte("\n+-o ")
+
+var currentPowerStateProperty = []byte(`"CurrentPowerState"=`)
