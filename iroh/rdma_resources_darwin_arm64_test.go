@@ -30,6 +30,23 @@ func TestRDMAStreamPostWorkValidation(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamPostValidation(t *testing.T) {
+	qp := &rdmaStreamQueuePair{handle: 1}
+	mr := &rdmaStreamMemoryRegion{buf: make([]byte, 16), handle: 1}
+	if err := validateRDMAStreamPost(qp, mr, "post send", 4, 8); err != nil {
+		t.Fatalf("valid post: %v", err)
+	}
+	if err := validateRDMAStreamPost(nil, mr, "post send", 4, 8); err == nil {
+		t.Fatal("nil queue pair validation succeeded")
+	}
+	if err := validateRDMAStreamPost(qp, nil, "post send", 4, 8); err == nil {
+		t.Fatal("nil memory region validation succeeded")
+	}
+	if err := validateRDMAStreamPost(qp, mr, "post send", 12, 8); err == nil {
+		t.Fatal("out of range validation succeeded")
+	}
+}
+
 func TestBuildRDMAStreamWorkRequestsSkipZeroLength(t *testing.T) {
 	mr := &rdmaStreamMemoryRegion{buf: make([]byte, 16), handle: 1, lkey: 99}
 	var sendWR [2]applerdma.IbvSendWR

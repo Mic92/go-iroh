@@ -561,11 +561,53 @@ func (m *rdmaStreamMemoryRegion) Close() error {
 }
 
 func postRDMAStreamSend(qp *rdmaStreamQueuePair, mr *rdmaStreamMemoryRegion, offset, length int, id uint64) error {
-	return postRDMAStreamMany(qp, mr, []rdmaStreamPostWork{{Offset: offset, Length: length, ID: id}}, true)
+	if err := validateRDMAStreamPost(qp, mr, "post send", offset, length); err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	sge := applerdma.IbvSGE{
+		Addr:   uint64(uintptr(unsafe.Pointer(&mr.buf[offset]))),
+		Length: uint32(length),
+		LKey:   mr.lkey,
+	}
+	wr := applerdma.IbvSendWR{
+		WRID:      id,
+		SGList:    &sge,
+		NumSGE:    1,
+		Opcode:    applerdma.IBV_WR_SEND,
+		SendFlags: applerdma.IBV_SEND_SIGNALED,
+	}
+	var bad *applerdma.IbvSendWR
+	if rc := qp.poster.PostSend(&wr, &bad); rc != 0 {
+		return fmt.Errorf("rdma: post send: errno %d", rc)
+	}
+	return nil
 }
 
 func postRDMAStreamRecv(qp *rdmaStreamQueuePair, mr *rdmaStreamMemoryRegion, offset, length int, id uint64) error {
-	return postRDMAStreamMany(qp, mr, []rdmaStreamPostWork{{Offset: offset, Length: length, ID: id}}, false)
+	if err := validateRDMAStreamPost(qp, mr, "post recv", offset, length); err != nil {
+		return err
+	}
+	if length == 0 {
+		return nil
+	}
+	sge := applerdma.IbvSGE{
+		Addr:   uint64(uintptr(unsafe.Pointer(&mr.buf[offset]))),
+		Length: uint32(length),
+		LKey:   mr.lkey,
+	}
+	wr := applerdma.IbvRecvWR{
+		WRID:   id,
+		SGList: &sge,
+		NumSGE: 1,
+	}
+	var bad *applerdma.IbvRecvWR
+	if rc := qp.poster.PostRecv(&wr, &bad); rc != 0 {
+		return fmt.Errorf("rdma: post recv: errno %d", rc)
+	}
+	return nil
 }
 
 func postRDMAStreamMany(qp *rdmaStreamQueuePair, mr *rdmaStreamMemoryRegion, works []rdmaStreamPostWork, send bool) error {
@@ -617,6 +659,16 @@ func postRDMAStreamMany(qp *rdmaStreamQueuePair, mr *rdmaStreamMemoryRegion, wor
 		return fmt.Errorf("rdma: %s: errno %d", op, rc)
 	}
 	return nil
+}
+
+func validateRDMAStreamPost(qp *rdmaStreamQueuePair, mr *rdmaStreamMemoryRegion, op string, offset, length int) error {
+	if qp == nil || qp.handle == 0 {
+		return fmt.Errorf("rdma: %s: nil queue pair", op)
+	}
+	if mr == nil || mr.handle == 0 {
+		return fmt.Errorf("rdma: %s: nil memory region", op)
+	}
+	return validateRDMAStreamPostWork("rdma: "+op, mr, 0, rdmaStreamPostWork{Offset: offset, Length: length})
 }
 
 func buildRDMAStreamSendWorkRequests(op string, mr *rdmaStreamMemoryRegion, works []rdmaStreamPostWork, wrs []applerdma.IbvSendWR, sges []applerdma.IbvSGE) (int, error) {
