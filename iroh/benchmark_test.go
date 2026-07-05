@@ -735,6 +735,16 @@ func BenchmarkStreamLinkSelection(b *testing.B) {
 	}
 }
 
+func BenchmarkNewStreamLinkAddr(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		addr := NewStreamLinkAddr(101, TransportLinkRDMA, "rdma_en3", "rdma:rdma_en3@[fe80::1%bridge0]:4433")
+		if addr.ID() != 101 {
+			b.Fatalf("id = %d, want 101", addr.ID())
+		}
+	}
+}
+
 func BenchmarkPreferredTransportLink(b *testing.B) {
 	local := []TransportLinkClass{
 		TransportLinkWiFiLAN,
