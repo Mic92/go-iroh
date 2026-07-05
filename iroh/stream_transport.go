@@ -15,6 +15,7 @@ import (
 type TransportLinkClass string
 
 const (
+	TransportLinkRDMA        TransportLinkClass = "rdma"
 	TransportLinkLoopback    TransportLinkClass = "loopback"
 	TransportLinkThunderbolt TransportLinkClass = "thunderbolt"
 	TransportLinkAWDL        TransportLinkClass = "awdl"
