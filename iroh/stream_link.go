@@ -140,10 +140,8 @@ func isLinkLocalIPv6(addr net.Addr) bool {
 // LAN, loopback, then unknown. Loopback ranks below LAN because it is only useful
 // for same-host peers.
 func PreferredTransportLink(a, b []TransportLinkClass) TransportLinkClass {
-	aset := linkClassSet(a)
-	bset := linkClassSet(b)
 	for _, class := range transportLinkPreference {
-		if aset[class] && bset[class] {
+		if hasTransportLinkClass(a, class) && hasTransportLinkClass(b, class) {
 			return class
 		}
 	}
@@ -210,12 +208,13 @@ func selectStreamLinkCandidate(candidates []StreamLinkCandidate, class Transport
 	return best.Addr, true
 }
 
-func linkClassSet(classes []TransportLinkClass) map[TransportLinkClass]bool {
-	set := make(map[TransportLinkClass]bool, len(classes))
+func hasTransportLinkClass(classes []TransportLinkClass, want TransportLinkClass) bool {
 	for _, class := range classes {
-		set[class] = true
+		if class == want {
+			return true
+		}
 	}
-	return set
+	return false
 }
 
 func linkAddrClasses(addrs []TransportLinkAddr) []TransportLinkClass {

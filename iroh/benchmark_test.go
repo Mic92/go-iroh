@@ -735,6 +735,29 @@ func BenchmarkStreamLinkSelection(b *testing.B) {
 	}
 }
 
+func BenchmarkPreferredTransportLink(b *testing.B) {
+	local := []TransportLinkClass{
+		TransportLinkWiFiLAN,
+		TransportLinkWiredLAN,
+		TransportLinkThunderbolt,
+		TransportLinkRDMA,
+	}
+	remote := []TransportLinkClass{
+		TransportLinkLAN,
+		TransportLinkWiredLAN,
+		TransportLinkThunderbolt,
+		TransportLinkRDMA,
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got := PreferredTransportLink(local, remote)
+		if got != TransportLinkRDMA {
+			b.Fatalf("class = %v, want %v", got, TransportLinkRDMA)
+		}
+	}
+}
+
 func BenchmarkTCPStreamTransportNegotiatedThroughput(b *testing.B) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
