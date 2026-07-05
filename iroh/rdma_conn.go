@@ -47,9 +47,10 @@ type rdmaStreamConn struct {
 	writeMu sync.Mutex
 	sendID  uint64
 
-	pollMu  sync.Mutex
-	pending []rdmaStreamWorkRequest
-	pollBuf [8]rdmaStreamWorkRequest
+	pollMu     sync.Mutex
+	pending    [8]rdmaStreamWorkRequest
+	pendingLen int
+	pollBuf    [8]rdmaStreamWorkRequest
 
 	closeOnce sync.Once
 	closeErr  error
@@ -197,10 +198,11 @@ func (c *rdmaStreamConn) pollWorkID(id uint64) (rdmaStreamWorkRequest, error) {
 	c.pollMu.Lock()
 	defer c.pollMu.Unlock()
 	for {
-		for i, work := range c.pending {
+		for i := 0; i < c.pendingLen; i++ {
+			work := c.pending[i]
 			if work.ID == id {
-				copy(c.pending[i:], c.pending[i+1:])
-				c.pending = c.pending[:len(c.pending)-1]
+				copy(c.pending[i:], c.pending[i+1:c.pendingLen])
+				c.pendingLen--
 				return work, nil
 			}
 		}
@@ -212,7 +214,11 @@ func (c *rdmaStreamConn) pollWorkID(id uint64) (rdmaStreamWorkRequest, error) {
 			if work.ID == id {
 				return work, nil
 			}
-			c.pending = append(c.pending, work)
+			if c.pendingLen == len(c.pending) {
+				return rdmaStreamWorkRequest{}, errors.New("rdma: too many pending completions")
+			}
+			c.pending[c.pendingLen] = work
+			c.pendingLen++
 		}
 	}
 }

@@ -117,6 +117,41 @@ func TestRDMAStreamConnPollBatchesCompletions(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamConnPollKeepsPendingCompletion(t *testing.T) {
+	tp := &scriptedRDMAStreamTransport{
+		send: make([]byte, 16),
+		recv: make([]byte, 16),
+		batches: [][]rdmaStreamWorkRequest{
+			{
+				{ID: 2, Bytes: 4},
+				{ID: 1, Bytes: 4},
+			},
+		},
+	}
+	c, err := newRDMAStreamConn(t.Context(), tp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	first, err := c.pollWorkID(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != 1 {
+		t.Fatalf("first id = %d, want 1", first.ID)
+	}
+	second, err := c.pollWorkID(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID != 2 {
+		t.Fatalf("second id = %d, want 2", second.ID)
+	}
+	if tp.polls != 1 {
+		t.Fatalf("polls = %d, want 1", tp.polls)
+	}
+}
+
 func TestRDMAStreamFramePayload(t *testing.T) {
 	buf := make([]byte, 16)
 	buf[3] = 3
@@ -136,6 +171,36 @@ func TestRDMAStreamFramePayload(t *testing.T) {
 		t.Fatal("rdmaStreamFramePayload succeeded with short payload")
 	}
 }
+
+type scriptedRDMAStreamTransport struct {
+	send    []byte
+	recv    []byte
+	batches [][]rdmaStreamWorkRequest
+	polls   int
+}
+
+func (t *scriptedRDMAStreamTransport) sendBuf() []byte { return t.send }
+func (t *scriptedRDMAStreamTransport) recvBuf() []byte { return t.recv }
+func (t *scriptedRDMAStreamTransport) postSend(offset, length int, id uint64) error {
+	return nil
+}
+func (t *scriptedRDMAStreamTransport) postRecv(offset, length int, id uint64) error {
+	return nil
+}
+func (t *scriptedRDMAStreamTransport) poll(ctx context.Context, out []rdmaStreamWorkRequest) ([]rdmaStreamWorkRequest, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if len(t.batches) == 0 {
+		return nil, context.Canceled
+	}
+	t.polls++
+	batch := t.batches[0]
+	t.batches = t.batches[1:]
+	n := copy(out, batch)
+	return out[:n], nil
+}
+func (t *scriptedRDMAStreamTransport) close() error { return nil }
 
 func BenchmarkRDMAStreamConnMemoryPartialRead(b *testing.B) {
 	a, btr := newMemRDMAStreamTransportPair(128 * 1024)
