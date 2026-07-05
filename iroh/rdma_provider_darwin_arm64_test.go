@@ -2,7 +2,11 @@
 
 package iroh
 
-import "testing"
+import (
+	"errors"
+	"strings"
+	"testing"
+)
 
 func TestParseDarwinRDMALinks(t *testing.T) {
 	out := []byte(`
@@ -91,5 +95,19 @@ func TestParseDarwinRDMAProviderBlockedReady(t *testing.T) {
 `)
 	if got := parseDarwinRDMAProviderBlocked(out); got != "" {
 		t.Fatalf("blocked = %q", got)
+	}
+}
+
+func TestDarwinRDMALinksRejectsBlockedProvider(t *testing.T) {
+	out := []byte(`
++-o rdma_en3  <class AppleThunderboltRDMAInterface, id 0x100000004, registered, matched, active, busy 2 (1 ms), retain 20>
+  | {
+  |   "IOPowerManagement" = {"DevicePowerState"=2,"CurrentPowerState"=2,"MaxPowerState"=2}
+  | }
+  +-o AppleThunderboltRDMAProtectionDomain  <class AppleThunderboltRDMAProtectionDomain, id 0x100000005, !registered, !matched, inactive, busy 1 (1 ms), retain 8>
+`)
+	links, err := darwinRDMALinksFromIOReg(out)
+	if !errors.Is(err, ErrRDMAUnsupported) || !strings.Contains(err.Error(), "rdma_en3 has inactive busy protection domain") {
+		t.Fatalf("darwinRDMALinksFromIOReg = %+v, %v; want blocked unsupported", links, err)
 	}
 }

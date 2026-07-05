@@ -30,6 +30,13 @@ func LocalRDMALinks(ctx context.Context) ([]RDMALink, error) {
 	if err != nil {
 		return nil, err
 	}
+	return darwinRDMALinksFromIOReg(out)
+}
+
+func darwinRDMALinksFromIOReg(out []byte) ([]RDMALink, error) {
+	if reason := parseDarwinRDMAProviderBlocked(out); reason != "" {
+		return nil, fmt.Errorf("%w: %s", ErrRDMAUnsupported, reason)
+	}
 	links := parseDarwinRDMALinks(out)
 	if len(links) == 0 {
 		return nil, ErrRDMAUnsupported
