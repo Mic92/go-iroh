@@ -95,7 +95,7 @@ func readRDMAStreamFramePayload(r io.Reader) (int, error) {
 }
 
 func writeRDMAStreamString(w io.Writer, s string) error {
-	if len(s) > 0xffff {
+	if len(s) > maxRDMAStreamStringLength {
 		return errors.New("rdma: string too long")
 	}
 	var hdr [2]byte
@@ -115,6 +115,9 @@ func readRDMAStreamString(r io.Reader) (string, error) {
 		return "", fmt.Errorf("rdma: read string length: %w", err)
 	}
 	n := int(binary.BigEndian.Uint16(hdr[:]))
+	if n > maxRDMAStreamStringLength {
+		return "", errors.New("rdma: string too long")
+	}
 	buf := make([]byte, n)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return "", fmt.Errorf("rdma: read string: %w", err)
@@ -126,4 +129,5 @@ const (
 	rdmaStreamHandshakeVersion = 1
 	rdmaStreamDestinationSize  = 32
 	maxRDMAStreamPSN           = 0xffffff
+	maxRDMAStreamStringLength  = 255
 )

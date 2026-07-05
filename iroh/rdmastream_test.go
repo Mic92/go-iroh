@@ -201,3 +201,30 @@ func TestRDMAStreamFramePayloadRoundTrip(t *testing.T) {
 		t.Fatal("readRDMAStreamFramePayload succeeded with zero payload")
 	}
 }
+
+func TestRDMAStreamStringRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeRDMAStreamString(&buf, "rdma_en3"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readRDMAStreamString(&buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "rdma_en3" {
+		t.Fatalf("string = %q, want rdma_en3", got)
+	}
+}
+
+func TestRDMAStreamStringRejectsOversized(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeRDMAStreamString(&buf, string(make([]byte, maxRDMAStreamStringLength+1))); err == nil {
+		t.Fatal("writeRDMAStreamString succeeded with oversized string")
+	}
+	n := maxRDMAStreamStringLength + 1
+	buf.WriteByte(byte(n >> 8))
+	buf.WriteByte(byte(n))
+	if _, err := readRDMAStreamString(&buf); err == nil {
+		t.Fatal("readRDMAStreamString succeeded with oversized string")
+	}
+}
