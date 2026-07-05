@@ -158,6 +158,20 @@ func TestStreamLinkAddrParsesRawTCPAddress(t *testing.T) {
 	}
 }
 
+func BenchmarkParseStreamLinkAddr(b *testing.B) {
+	addr := NewStreamLinkAddr(12, TransportLinkThunderbolt, "bridge0", "[fe80::1%bridge0]:4433")
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got, err := ParseStreamLinkAddr(addr)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got.Class != TransportLinkThunderbolt || got.Interface != "bridge0" || got.DialAddr != "[fe80::1%bridge0]:4433" {
+			b.Fatalf("parsed = %+v", got)
+		}
+	}
+}
+
 func TestSelectStreamLink(t *testing.T) {
 	local := []netaddr.CustomAddr{
 		NewStreamLinkAddr(7, TransportLinkWiFiLAN, "wlan0", "192.0.2.11:1"),

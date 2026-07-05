@@ -331,7 +331,7 @@ func (p *streamLinkAddrParser) string() string {
 		p.err = errStreamLinkAddrMalformed
 		return ""
 	}
-	s := string(p.b[:n])
+	s := stringFromBytes(p.b[:n])
 	p.b = p.b[n:]
 	return s
 }
