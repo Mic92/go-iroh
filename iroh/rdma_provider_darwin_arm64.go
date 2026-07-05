@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"regexp"
 )
 
 const (
@@ -131,11 +130,22 @@ func darwinRDMABlocks(out []byte) [][]byte {
 }
 
 func rdmaBlockName(block []byte) string {
-	m := rdmaBlockNameRE.Find(block)
-	if len(m) == 0 {
+	i := bytes.Index(block, []byte("rdma_"))
+	if i < 0 {
 		return ""
 	}
-	return string(m)
+	j := i + len("rdma_")
+	for j < len(block) && isRDMABlockNameByte(block[j]) {
+		j++
+	}
+	if j == i+len("rdma_") {
+		return ""
+	}
+	return string(block[i:j])
+}
+
+func isRDMABlockNameByte(c byte) bool {
+	return '0' <= c && c <= '9' || 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || c == '_'
 }
 
 func propertyInt(block []byte, name string) int {
@@ -158,5 +168,3 @@ func propertyInt(block []byte, name string) int {
 	}
 	return n
 }
-
-var rdmaBlockNameRE = regexp.MustCompile(`rdma_[[:alnum:]_]+`)
