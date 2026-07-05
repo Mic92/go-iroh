@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -53,15 +54,8 @@ type rdmaStreamConn struct {
 	pendingLen int
 	pollBuf    [8]rdmaStreamWorkRequest
 
-	deadlineMu      sync.Mutex
-	readDeadline    time.Time
-	writeDeadline   time.Time
-	readDeadlineID  uint64
-	writeDeadlineID uint64
-	readCtx         context.Context
-	readCancel      context.CancelFunc
-	writeCtx        context.Context
-	writeCancel     context.CancelFunc
+	readDL  atomic.Pointer[rdmaStreamDeadlineState]
+	writeDL atomic.Pointer[rdmaStreamDeadlineState]
 
 	closeOnce sync.Once
 	closeErr  error
@@ -80,24 +74,20 @@ func newRDMAStreamConn(ctx context.Context, t rdmaStreamConnTransport) (*rdmaStr
 		return nil, fmt.Errorf("rdma: receive buffer too small: %d", len(recv))
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	readCtx, readCancel := context.WithCancel(ctx)
-	writeCtx, writeCancel := context.WithCancel(ctx)
 	c := &rdmaStreamConn{
-		ctx:         ctx,
-		cancel:      cancel,
-		t:           t,
-		send:        send,
-		recv:        recv,
-		recvID:      rdmaStreamRecvWorkID,
-		sendID:      rdmaStreamSendWorkID,
-		readCtx:     readCtx,
-		readCancel:  readCancel,
-		writeCtx:    writeCtx,
-		writeCancel: writeCancel,
+		ctx:    ctx,
+		cancel: cancel,
+		t:      t,
+		send:   send,
+		recv:   recv,
+		recvID: rdmaStreamRecvWorkID,
+		sendID: rdmaStreamSendWorkID,
 	}
+	c.readDL.Store(newRDMAStreamDeadlineState(ctx, time.Time{}))
+	c.writeDL.Store(newRDMAStreamDeadlineState(ctx, time.Time{}))
 	if err := c.postRecvLocked(); err != nil {
-		readCancel()
-		writeCancel()
+		c.readDL.Load().cancel()
+		c.writeDL.Load().cancel()
 		cancel()
 		_ = t.close()
 		return nil, err
@@ -115,10 +105,10 @@ func (c *rdmaStreamConn) Read(p []byte) (int, error) {
 		return c.readBufferedLocked(p)
 	}
 	for len(c.read) == 0 {
-		ctx, deadlineID := c.readPollContext()
+		ctx, dl := c.readPollContext()
 		work, err := c.pollWorkID(ctx, c.recvID)
 		if err != nil {
-			err = c.readPollError(deadlineID, err)
+			err = c.readPollError(dl, err)
 			if errors.Is(err, errRDMAStreamDeadlineChanged) {
 				continue
 			}
@@ -171,12 +161,12 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	for {
-		ctx, deadlineID := c.writePollContext()
+		ctx, dl := c.writePollContext()
 		_, err := c.pollWorkID(ctx, id)
 		if err == nil {
 			break
 		}
-		err = c.writePollError(deadlineID, err)
+		err = c.writePollError(dl, err)
 		if errors.Is(err, errRDMAStreamDeadlineChanged) {
 			continue
 		}
@@ -204,22 +194,20 @@ func (c *rdmaStreamConn) SetDeadline(t time.Time) error {
 }
 
 func (c *rdmaStreamConn) SetReadDeadline(t time.Time) error {
-	c.deadlineMu.Lock()
-	defer c.deadlineMu.Unlock()
-	c.readDeadline = t
-	c.readDeadlineID++
-	c.readCancel()
-	c.readCtx, c.readCancel = rdmaStreamDeadlineContext(c.ctx, t)
+	next := newRDMAStreamDeadlineState(c.ctx, t)
+	prev := c.readDL.Swap(next)
+	if prev != nil {
+		prev.cancel()
+	}
 	return nil
 }
 
 func (c *rdmaStreamConn) SetWriteDeadline(t time.Time) error {
-	c.deadlineMu.Lock()
-	defer c.deadlineMu.Unlock()
-	c.writeDeadline = t
-	c.writeDeadlineID++
-	c.writeCancel()
-	c.writeCtx, c.writeCancel = rdmaStreamDeadlineContext(c.ctx, t)
+	next := newRDMAStreamDeadlineState(c.ctx, t)
+	prev := c.writeDL.Swap(next)
+	if prev != nil {
+		prev.cancel()
+	}
 	return nil
 }
 
@@ -256,35 +244,29 @@ func (c *rdmaStreamConn) pollWorkID(ctx context.Context, id uint64) (rdmaStreamW
 	}
 }
 
-func (c *rdmaStreamConn) readPollContext() (context.Context, uint64) {
-	c.deadlineMu.Lock()
-	defer c.deadlineMu.Unlock()
-	return c.readCtx, c.readDeadlineID
+func (c *rdmaStreamConn) readPollContext() (context.Context, *rdmaStreamDeadlineState) {
+	state := c.readDL.Load()
+	return state.ctx, state
 }
 
-func (c *rdmaStreamConn) writePollContext() (context.Context, uint64) {
-	c.deadlineMu.Lock()
-	defer c.deadlineMu.Unlock()
-	return c.writeCtx, c.writeDeadlineID
+func (c *rdmaStreamConn) writePollContext() (context.Context, *rdmaStreamDeadlineState) {
+	state := c.writeDL.Load()
+	return state.ctx, state
 }
 
-func (c *rdmaStreamConn) readPollError(deadlineID uint64, err error) error {
-	c.deadlineMu.Lock()
-	defer c.deadlineMu.Unlock()
-	return c.deadlineErrorLocked(c.readDeadlineID, deadlineID, c.readDeadline, err)
+func (c *rdmaStreamConn) readPollError(state *rdmaStreamDeadlineState, err error) error {
+	return c.deadlineError(c.readDL.Load(), state, err)
 }
 
-func (c *rdmaStreamConn) writePollError(deadlineID uint64, err error) error {
-	c.deadlineMu.Lock()
-	defer c.deadlineMu.Unlock()
-	return c.deadlineErrorLocked(c.writeDeadlineID, deadlineID, c.writeDeadline, err)
+func (c *rdmaStreamConn) writePollError(state *rdmaStreamDeadlineState, err error) error {
+	return c.deadlineError(c.writeDL.Load(), state, err)
 }
 
-func (c *rdmaStreamConn) deadlineErrorLocked(currentID, pollID uint64, deadline time.Time, err error) error {
-	if currentID != pollID {
+func (c *rdmaStreamConn) deadlineError(current, poll *rdmaStreamDeadlineState, err error) error {
+	if current != poll {
 		return errRDMAStreamDeadlineChanged
 	}
-	if errors.Is(err, context.DeadlineExceeded) || !deadline.IsZero() && !time.Now().Before(deadline) {
+	if errors.Is(err, context.DeadlineExceeded) || !poll.deadline.IsZero() && !time.Now().Before(poll.deadline) {
 		return os.ErrDeadlineExceeded
 	}
 	if errors.Is(err, context.Canceled) && c.ctx.Err() != nil {
@@ -293,14 +275,25 @@ func (c *rdmaStreamConn) deadlineErrorLocked(currentID, pollID uint64, deadline 
 	return err
 }
 
+func newRDMAStreamDeadlineState(parent context.Context, t time.Time) *rdmaStreamDeadlineState {
+	ctx, cancel := rdmaStreamDeadlineContext(parent, t)
+	return &rdmaStreamDeadlineState{ctx: ctx, cancel: cancel, deadline: t}
+}
+
+var errRDMAStreamDeadlineChanged = errors.New("rdma: deadline changed")
+
+type rdmaStreamDeadlineState struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	deadline time.Time
+}
+
 func rdmaStreamDeadlineContext(ctx context.Context, t time.Time) (context.Context, context.CancelFunc) {
 	if t.IsZero() {
 		return context.WithCancel(ctx)
 	}
 	return context.WithDeadline(ctx, t)
 }
-
-var errRDMAStreamDeadlineChanged = errors.New("rdma: deadline changed")
 
 func rdmaStreamFramePayload(buf []byte, n int) ([]byte, error) {
 	if n < rdmaStreamFrameHeaderSize {

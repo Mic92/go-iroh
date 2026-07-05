@@ -173,6 +173,31 @@ func TestRDMAStreamConnReadDeadline(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamConnReadDeadlineWakesPoll(t *testing.T) {
+	tp := &blockingRDMAStreamTransport{
+		send: make([]byte, 16),
+		recv: make([]byte, 16),
+	}
+	c, err := newRDMAStreamConn(t.Context(), tp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Read(make([]byte, 1))
+		done <- err
+	}()
+	<-tp.polled
+	if err := c.SetReadDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Read error = %v, want deadline exceeded", err)
+	}
+}
+
 func TestRDMAStreamConnWriteDeadline(t *testing.T) {
 	tp := &scriptedRDMAStreamTransport{
 		send: make([]byte, 16),
@@ -187,6 +212,31 @@ func TestRDMAStreamConnWriteDeadline(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := c.Write([]byte("x")); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Write error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestRDMAStreamConnWriteDeadlineWakesPoll(t *testing.T) {
+	tp := &blockingRDMAStreamTransport{
+		send: make([]byte, 16),
+		recv: make([]byte, 16),
+	}
+	c, err := newRDMAStreamConn(t.Context(), tp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Write([]byte("x"))
+		done <- err
+	}()
+	<-tp.polled
+	if err := c.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("Write error = %v, want deadline exceeded", err)
 	}
 }
@@ -240,6 +290,52 @@ func (t *scriptedRDMAStreamTransport) poll(ctx context.Context, out []rdmaStream
 	return out[:n], nil
 }
 func (t *scriptedRDMAStreamTransport) close() error { return nil }
+
+type blockingRDMAStreamTransport struct {
+	send       []byte
+	recv       []byte
+	once       sync.Once
+	polled     chan struct{}
+	closeOnce  sync.Once
+	closed     chan struct{}
+	initClosed sync.Once
+}
+
+func (t *blockingRDMAStreamTransport) sendBuf() []byte {
+	t.init()
+	return t.send
+}
+func (t *blockingRDMAStreamTransport) recvBuf() []byte {
+	t.init()
+	return t.recv
+}
+func (t *blockingRDMAStreamTransport) postSend(offset, length int, id uint64) error {
+	return nil
+}
+func (t *blockingRDMAStreamTransport) postRecv(offset, length int, id uint64) error {
+	return nil
+}
+func (t *blockingRDMAStreamTransport) poll(ctx context.Context, out []rdmaStreamWorkRequest) ([]rdmaStreamWorkRequest, error) {
+	t.init()
+	t.once.Do(func() { close(t.polled) })
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-t.closed:
+		return nil, context.Canceled
+	}
+}
+func (t *blockingRDMAStreamTransport) close() error {
+	t.init()
+	t.closeOnce.Do(func() { close(t.closed) })
+	return nil
+}
+func (t *blockingRDMAStreamTransport) init() {
+	t.initClosed.Do(func() {
+		t.polled = make(chan struct{})
+		t.closed = make(chan struct{})
+	})
+}
 
 func BenchmarkRDMAStreamConnMemoryPartialRead(b *testing.B) {
 	a, btr := newMemRDMAStreamTransportPair(128 * 1024)
