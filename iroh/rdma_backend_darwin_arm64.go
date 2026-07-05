@@ -47,31 +47,27 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 		return nil, fmt.Errorf("%w: missing control address", ErrRDMAUnsupported)
 	}
 	bufSize := rdmaStreamBufferSize()
+	var d net.Dialer
+	ctrl, err := d.DialContext(ctx, "tcp", info.Control)
+	if err != nil {
+		return nil, fmt.Errorf("rdma: dial control: %w", err)
+	}
+	defer ctrl.Close()
+	if err := setRDMAStreamControlDeadline(ctx, ctrl); err != nil {
+		return nil, err
+	}
+	if err := writeStreamOpenToken(ctrl, opts.Token); err != nil {
+		return nil, err
+	}
+	if err := writeRDMAStreamString(ctrl, info.Device); err != nil {
+		return nil, err
+	}
 	rt, err := newRDMAStreamResource(ctx, info.Device, bufSize)
 	if err != nil {
 		return nil, err
 	}
 	local, err := rt.localDestination()
 	if err != nil {
-		_ = rt.close()
-		return nil, err
-	}
-	var d net.Dialer
-	ctrl, err := d.DialContext(ctx, "tcp", info.Control)
-	if err != nil {
-		_ = rt.close()
-		return nil, fmt.Errorf("rdma: dial control: %w", err)
-	}
-	defer ctrl.Close()
-	if err := setRDMAStreamControlDeadline(ctx, ctrl); err != nil {
-		_ = rt.close()
-		return nil, err
-	}
-	if err := writeStreamOpenToken(ctrl, opts.Token); err != nil {
-		_ = rt.close()
-		return nil, err
-	}
-	if err := writeRDMAStreamString(ctrl, info.Device); err != nil {
 		_ = rt.close()
 		return nil, err
 	}

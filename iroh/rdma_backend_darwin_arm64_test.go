@@ -181,6 +181,29 @@ func TestDarwinRDMAStreamBackendNegotiatesFramePayload(t *testing.T) {
 	}
 }
 
+func TestDarwinRDMAStreamBackendDialFailureDoesNotOpenResource(t *testing.T) {
+	factory := newFakeRDMAStreamResourceFactory(1024)
+	oldFactory := newRDMAStreamResource
+	newRDMAStreamResource = factory.new
+	defer func() { newRDMAStreamResource = oldFactory }()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	backend := darwinRDMAStreamBackend{}
+	remote := NewStreamLinkAddr(77, TransportLinkRDMA, "rdma_en3", rdmaStreamDialAddr(RDMALink{Device: "rdma_en3"}, addr))
+	if _, err := backend.DialStream(t.Context(), 77, remote, StreamOptions{}); err == nil {
+		t.Fatal("DialStream succeeded")
+	}
+	if got := factory.resourceCount(); got != 0 {
+		t.Fatalf("resources = %d, want 0", got)
+	}
+}
+
 func TestAcceptRDMAStreamControlHonorsContextDeadline(t *testing.T) {
 	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
 	defer cancel()
@@ -279,6 +302,12 @@ func (f *fakeRDMAStreamResourceFactory) requestedBufSizes() []int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]int(nil), f.sizes...)
+}
+
+func (f *fakeRDMAStreamResourceFactory) resourceCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.created)
 }
 
 type fakeRDMAStreamResource struct {
