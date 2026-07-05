@@ -40,6 +40,18 @@ func TestParseRDMAStreamDialAddr(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamSelectionString(t *testing.T) {
+	sel := StreamLinkSelection{
+		Remote: rdmaStreamAddr(99, RDMALink{Device: "rdma_en3"}, "[fe80::1%bridge0]:1"),
+		Class:  TransportLinkRDMA,
+	}
+	got := rdmaStreamSelectionString(sel)
+	want := "class=rdma device=rdma_en3 control=[fe80::1%bridge0]:1 interface=rdma_en3"
+	if got != want {
+		t.Fatalf("selection string = %q, want %q", got, want)
+	}
+}
+
 func TestRDMAStreamControlsForThunderboltLink(t *testing.T) {
 	controls := []rdmaStreamControlAddr{
 		{Addr: "127.0.0.1:1", Class: TransportLinkLoopback},

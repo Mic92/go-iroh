@@ -55,6 +55,18 @@ func parseRDMAStreamDialAddr(s string) (rdmaStreamDialInfo, error) {
 	return rdmaStreamDialInfo{Device: device, Control: control}, nil
 }
 
+func rdmaStreamSelectionString(sel StreamLinkSelection) string {
+	remote, err := ParseStreamLinkAddr(sel.Remote)
+	if err != nil {
+		return fmt.Sprintf("class=%s remote=%v", sel.Class, err)
+	}
+	info, err := parseRDMAStreamDialAddr(remote.DialAddr)
+	if err != nil {
+		return fmt.Sprintf("class=%s interface=%s dial=%q parse=%v", sel.Class, remote.Interface, remote.DialAddr, err)
+	}
+	return fmt.Sprintf("class=%s device=%s control=%s interface=%s", sel.Class, info.Device, info.Control, remote.Interface)
+}
+
 func rdmaStreamAddr(id uint64, link RDMALink, control string) netaddr.CustomAddr {
 	return NewStreamLinkAddr(id, TransportLinkRDMA, link.Device, rdmaStreamDialAddr(link, control))
 }

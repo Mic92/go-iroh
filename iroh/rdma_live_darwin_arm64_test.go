@@ -40,7 +40,7 @@ func TestRDMAStreamTransportLiveDialListen(t *testing.T) {
 	}
 	c, err := client.DialStream(ctx, selected.Remote, StreamOptions{Token: tok})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("dial live rdma stream (%s): %v", rdmaStreamSelectionString(selected), err)
 	}
 	defer c.Close()
 	var s io.ReadWriteCloser
@@ -101,7 +101,7 @@ func BenchmarkRDMAStreamTransportLiveThroughput(b *testing.B) {
 	}
 	c, err := client.DialStream(ctx, selected.Remote, StreamOptions{Token: tok})
 	if err != nil {
-		b.Fatal(err)
+		b.Fatalf("dial live rdma stream (%s): %v", rdmaStreamSelectionString(selected), err)
 	}
 	defer c.Close()
 	var s io.ReadWriteCloser
@@ -160,6 +160,7 @@ func liveRDMAStreamTransports(tb testing.TB, ctx context.Context, id uint64) (*R
 		server.Close()
 		tb.Fatalf("SelectStreamLink = %+v, %v; want rdma", selected, ok)
 	}
+	tb.Logf("selected live rdma stream: %s", rdmaStreamSelectionString(selected))
 	return client, server, selected
 }
 
