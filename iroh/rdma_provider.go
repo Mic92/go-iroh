@@ -38,10 +38,11 @@ func rdmaStreamDialAddr(link RDMALink, control string) string {
 }
 
 func parseRDMAStreamDialAddr(s string) (rdmaStreamDialInfo, error) {
-	if !strings.HasPrefix(s, "rdma:") {
+	const prefix = "rdma:"
+	if len(s) < len(prefix) || s[:len(prefix)] != prefix {
 		return rdmaStreamDialInfo{}, fmt.Errorf("rdma: malformed dial address %q", s)
 	}
-	rest := strings.TrimPrefix(s, "rdma:")
+	rest := s[len(prefix):]
 	device, control, ok := strings.Cut(rest, "@")
 	if device == "" {
 		return rdmaStreamDialInfo{}, fmt.Errorf("rdma: malformed dial address %q", s)

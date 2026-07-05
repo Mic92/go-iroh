@@ -40,6 +40,20 @@ func TestParseRDMAStreamDialAddr(t *testing.T) {
 	}
 }
 
+func BenchmarkParseRDMAStreamDialAddr(b *testing.B) {
+	const addr = "rdma:rdma_en3@[fe80::1%bridge0]:4433"
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got, err := parseRDMAStreamDialAddr(addr)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if got.Device != "rdma_en3" || got.Control != "[fe80::1%bridge0]:4433" {
+			b.Fatalf("dial info = %+v", got)
+		}
+	}
+}
+
 func TestRDMAStreamSelectionString(t *testing.T) {
 	sel := StreamLinkSelection{
 		Remote: rdmaStreamAddr(99, RDMALink{Device: "rdma_en3"}, "[fe80::1%bridge0]:1"),
