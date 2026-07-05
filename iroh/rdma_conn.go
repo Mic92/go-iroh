@@ -85,6 +85,9 @@ func (c *rdmaStreamConn) Read(p []byte) (int, error) {
 	}
 	c.readMu.Lock()
 	defer c.readMu.Unlock()
+	if len(c.read) > 0 {
+		return c.readBufferedLocked(p)
+	}
 	for len(c.read) == 0 {
 		work, err := c.pollWorkID(c.recvID)
 		if err != nil {
@@ -105,14 +108,20 @@ func (c *rdmaStreamConn) Read(p []byte) (int, error) {
 			}
 			return n, nil
 		}
-		c.read = append(c.read[:0], frame...)
-		c.recvID++
-		if err := c.postRecvLocked(); err != nil {
-			return 0, err
-		}
+		c.read = frame
 	}
+	return c.readBufferedLocked(p)
+}
+
+func (c *rdmaStreamConn) readBufferedLocked(p []byte) (int, error) {
 	n := copy(p, c.read)
 	c.read = c.read[n:]
+	if len(c.read) == 0 {
+		c.recvID++
+		if err := c.postRecvLocked(); err != nil {
+			return n, err
+		}
+	}
 	return n, nil
 }
 

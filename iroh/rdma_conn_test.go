@@ -51,6 +51,42 @@ func TestRDMAStreamConnRejectsOversizedWrite(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamConnPartialRead(t *testing.T) {
+	a, b := newMemRDMAStreamTransportPair(1024)
+	ac, err := newRDMAStreamConn(t.Context(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ac.Close()
+	bc, err := newRDMAStreamConn(t.Context(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+
+	want := []byte("hello over rdma")
+	done := make(chan error, 1)
+	go func() {
+		_, err := ac.Write(want)
+		done <- err
+	}()
+	var got bytes.Buffer
+	buf := make([]byte, 3)
+	for got.Len() < len(want) {
+		n, err := bc.Read(buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got.Write(buf[:n])
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), want) {
+		t.Fatalf("read = %q, want %q", got.Bytes(), want)
+	}
+}
+
 func TestRDMAStreamFramePayload(t *testing.T) {
 	buf := make([]byte, 16)
 	buf[3] = 3
@@ -69,6 +105,41 @@ func TestRDMAStreamFramePayload(t *testing.T) {
 	if _, err := rdmaStreamFramePayload(buf, 7); err == nil {
 		t.Fatal("rdmaStreamFramePayload succeeded with short payload")
 	}
+}
+
+func BenchmarkRDMAStreamConnMemoryPartialRead(b *testing.B) {
+	a, btr := newMemRDMAStreamTransportPair(128 * 1024)
+	ac, err := newRDMAStreamConn(b.Context(), a)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer ac.Close()
+	bc, err := newRDMAStreamConn(b.Context(), btr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer bc.Close()
+
+	buf := make([]byte, 64*1024)
+	got := make([]byte, 1024)
+	b.SetBytes(int64(len(buf)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ac.Write(buf); err != nil {
+			b.Fatalf("write rdma stream: %v", err)
+		}
+		for nread := 0; nread < len(buf); {
+			n, err := bc.Read(got)
+			if err != nil {
+				b.Fatalf("read rdma stream: %v", err)
+			}
+			nread += n
+		}
+	}
+	b.StopTimer()
+	ac.Close()
+	bc.Close()
 }
 
 func BenchmarkRDMAStreamConnMemoryThroughput(b *testing.B) {
