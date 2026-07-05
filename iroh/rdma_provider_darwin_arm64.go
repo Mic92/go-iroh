@@ -26,15 +26,23 @@ func LocalRDMALinks(ctx context.Context) ([]RDMALink, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	out, err := exec.CommandContext(ctx, "ioreg", "-r", "-c", "AppleThunderboltRDMAInterface", "-l").Output()
+	out, err := localRDMAIOReg(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("rdma: ioreg AppleThunderboltRDMAInterface: %w", err)
+		return nil, err
 	}
 	links := parseDarwinRDMALinks(out)
 	if len(links) == 0 {
 		return nil, ErrRDMAUnsupported
 	}
 	return links, nil
+}
+
+func localRDMAIOReg(ctx context.Context) ([]byte, error) {
+	out, err := exec.CommandContext(ctx, "ioreg", "-r", "-c", "AppleThunderboltRDMAInterface", "-l").Output()
+	if err != nil {
+		return nil, fmt.Errorf("rdma: ioreg AppleThunderboltRDMAInterface: %w", err)
+	}
+	return out, nil
 }
 
 func checkRDMAStreamDeviceActive(ctx context.Context, device string) (RDMALink, error) {
@@ -58,7 +66,7 @@ func activeRDMAStreamDevice(links []RDMALink, device string) (RDMALink, error) {
 }
 
 func parseDarwinRDMALinks(out []byte) []RDMALink {
-	blocks := bytes.Split(out, []byte("\n+-o "))
+	blocks := darwinRDMABlocks(out)
 	links := make([]RDMALink, 0, len(blocks))
 	for _, block := range blocks {
 		name := rdmaBlockName(block)
@@ -76,6 +84,34 @@ func parseDarwinRDMALinks(out []byte) []RDMALink {
 		})
 	}
 	return links
+}
+
+func darwinRDMAProviderBlocked(ctx context.Context) (string, error) {
+	out, err := localRDMAIOReg(ctx)
+	if err != nil {
+		return "", err
+	}
+	return parseDarwinRDMAProviderBlocked(out), nil
+}
+
+func parseDarwinRDMAProviderBlocked(out []byte) string {
+	for _, block := range darwinRDMABlocks(out) {
+		name := rdmaBlockName(block)
+		if name == "" || propertyInt(block, "CurrentPowerState") != 2 {
+			continue
+		}
+		if bytes.Contains(block, []byte("AppleThunderboltRDMAProtectionDomain")) && bytes.Contains(block, []byte("inactive, busy 1")) {
+			return name + " has inactive busy protection domain"
+		}
+		if bytes.Contains(block, []byte("AppleThunderboltRDMAQueuePair")) && bytes.Contains(block, []byte("inactive, busy 1")) {
+			return name + " has inactive busy queue pair"
+		}
+	}
+	return ""
+}
+
+func darwinRDMABlocks(out []byte) [][]byte {
+	return bytes.Split(out, []byte("\n+-o "))
 }
 
 func rdmaBlockName(block []byte) string {

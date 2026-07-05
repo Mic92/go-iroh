@@ -169,4 +169,11 @@ func requireLiveRDMA(tb testing.TB) {
 	if os.Getenv("GO_IROH_RDMA_ENABLE") != "1" || os.Getenv("GO_IROH_RDMA_LIVE") != "1" {
 		tb.Skip("set GO_IROH_RDMA_ENABLE=1 and GO_IROH_RDMA_LIVE=1 to open live RDMA provider")
 	}
+	reason, err := darwinRDMAProviderBlocked(context.Background())
+	if err != nil {
+		tb.Fatalf("check live rdma provider: %v", err)
+	}
+	if reason != "" {
+		tb.Skipf("live rdma provider blocked: %s", reason)
+	}
 }
