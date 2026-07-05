@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -42,30 +43,70 @@ func TestRDMAStreamConnReadWrite(t *testing.T) {
 	}
 }
 
-func TestRDMAStreamConnRejectsOversizedWrite(t *testing.T) {
-	a, _ := newMemRDMAStreamTransportPair(8)
-	c, err := newRDMAStreamConn(t.Context(), a)
+func TestRDMAStreamConnChunksOversizedWrite(t *testing.T) {
+	a, b := newMemRDMAStreamTransportPair(defaultRDMAStreamBufferSize)
+	ac, err := newRDMAStreamConnWithMaxPayload(t.Context(), a, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
-	if _, err := c.Write([]byte("12345")); err == nil {
-		t.Fatal("Write succeeded with oversized frame")
+	defer ac.Close()
+	bc, err := newRDMAStreamConnWithMaxPayload(t.Context(), b, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+
+	want := []byte("12345678")
+	done := make(chan error, 1)
+	go func() {
+		n, err := ac.Write(want)
+		if err == nil && n != len(want) {
+			err = fmt.Errorf("Write = %d, want %d", n, len(want))
+		}
+		done <- err
+	}()
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(bc, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("read = %q, want %q", got, want)
 	}
 }
 
 func TestRDMAStreamConnMaxPayload(t *testing.T) {
-	a, _ := newMemRDMAStreamTransportPair(32)
-	c, err := newRDMAStreamConnWithMaxPayload(t.Context(), a, 7)
+	a, b := newMemRDMAStreamTransportPair(defaultRDMAStreamBufferSize)
+	ac, err := newRDMAStreamConnWithMaxPayload(t.Context(), a, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
-	if c.max != 7 {
-		t.Fatalf("max payload = %d, want 7", c.max)
+	defer ac.Close()
+	bc, err := newRDMAStreamConnWithMaxPayload(t.Context(), b, 7)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := c.Write(make([]byte, 8)); err == nil {
-		t.Fatal("Write succeeded above negotiated max payload")
+	defer bc.Close()
+	if ac.max != 7 {
+		t.Fatalf("max payload = %d, want 7", ac.max)
+	}
+	want := []byte("12345678")
+	done := make(chan error, 1)
+	go func() {
+		_, err := ac.Write(want)
+		done <- err
+	}()
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(bc, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("read = %q, want %q", got, want)
 	}
 }
 
@@ -101,8 +142,8 @@ func TestRDMAStreamConnPrepostsLargeReceiveSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer bc.Close()
-	if len(bc.slots) != rdmaStreamMaxRecvSlots {
-		t.Fatalf("receive slots = %d, want %d", len(bc.slots), rdmaStreamMaxRecvSlots)
+	if bc.nslots != rdmaStreamMaxRecvSlots {
+		t.Fatalf("receive slots = %d, want %d", bc.nslots, rdmaStreamMaxRecvSlots)
 	}
 	if bc.max != rdmaStreamMinSlotPayload {
 		t.Fatalf("max payload = %d, want %d", bc.max, rdmaStreamMinSlotPayload)
@@ -557,6 +598,42 @@ func BenchmarkRDMAStreamConnMemoryThroughput1MiB(b *testing.B) {
 	bc.Close()
 }
 
+func BenchmarkRDMAStreamConnMemoryThroughput2MiBWrite(b *testing.B) {
+	a, btr := newMemRDMAStreamTransportPair(defaultRDMAStreamBufferSize)
+	ac, err := newRDMAStreamConn(b.Context(), a)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer ac.Close()
+	bc, err := newRDMAStreamConn(b.Context(), btr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer bc.Close()
+
+	buf := make([]byte, 2*1024*1024)
+	got := make([]byte, len(buf))
+	b.SetBytes(int64(len(buf)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		done := make(chan error, 1)
+		go func() {
+			_, err := ac.Write(buf)
+			done <- err
+		}()
+		if _, err := io.ReadFull(bc, got); err != nil {
+			b.Fatalf("read rdma stream: %v", err)
+		}
+		if err := <-done; err != nil {
+			b.Fatalf("write rdma stream: %v", err)
+		}
+	}
+	b.StopTimer()
+	ac.Close()
+	bc.Close()
+}
+
 func BenchmarkRDMAStreamConnPendingCompletion(b *testing.B) {
 	tp := &scriptedRDMAStreamTransport{
 		send: make([]byte, 16),
@@ -576,6 +653,23 @@ func BenchmarkRDMAStreamConnPendingCompletion(b *testing.B) {
 		c.pendingLen = 1
 		if _, err := c.pollWorkID(c.ctx, id); err != nil {
 			b.Fatalf("poll pending rdma completion: %v", err)
+		}
+	}
+}
+
+func BenchmarkRDMAStreamConnCreate(b *testing.B) {
+	tp := &scriptedRDMAStreamTransport{
+		send: make([]byte, defaultRDMAStreamBufferSize),
+		recv: make([]byte, defaultRDMAStreamBufferSize),
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		c, err := newRDMAStreamConn(b.Context(), tp)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := c.Close(); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

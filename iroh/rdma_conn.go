@@ -47,7 +47,8 @@ type rdmaStreamConn struct {
 	read     []byte
 	readSlot int
 	recvID   uint64
-	slots    []rdmaStreamRecvSlot
+	nslots   int
+	slots    [rdmaStreamMaxRecvSlots]rdmaStreamRecvSlot
 
 	writeMu sync.Mutex
 	sendID  uint64
@@ -102,11 +103,11 @@ func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransp
 		max:      max,
 		recvID:   rdmaStreamRecvWorkID,
 		sendID:   rdmaStreamSendWorkID,
-		slots:    make([]rdmaStreamRecvSlot, recvSlots),
+		nslots:   recvSlots,
 	}
 	c.readDL.Store(newRDMAStreamDeadlineState(ctx, time.Time{}))
 	c.writeDL.Store(newRDMAStreamDeadlineState(ctx, time.Time{}))
-	for i := range c.slots {
+	for i := 0; i < c.nslots; i++ {
 		if err := c.postRecvSlotLocked(i); err != nil {
 			c.readDL.Load().cancel()
 			c.writeDL.Load().cancel()
@@ -115,7 +116,7 @@ func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransp
 			return nil, err
 		}
 	}
-	if len(c.slots) == 0 {
+	if c.nslots == 0 {
 		c.readDL.Load().cancel()
 		c.writeDL.Load().cancel()
 		cancel()
@@ -186,34 +187,52 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 		return 0, nil
 	}
 	c.writeMu.Lock()
-	buf := c.send
+	defer c.writeMu.Unlock()
+	if c.max <= 0 {
+		return 0, fmt.Errorf("rdma: invalid frame payload %d", c.max)
+	}
+	written := 0
+	for len(p) > 0 {
+		n := len(p)
+		if n > c.max {
+			n = c.max
+		}
+		if err := c.writeFrameLocked(p[:n]); err != nil {
+			return written, err
+		}
+		written += n
+		p = p[n:]
+	}
+	return written, nil
+}
+
+func (c *rdmaStreamConn) writeFrameLocked(p []byte) error {
 	if len(p) > c.max {
-		c.writeMu.Unlock()
-		return 0, fmt.Errorf("rdma: write size %d exceeds frame payload %d", len(p), c.max)
+		return fmt.Errorf("rdma: write size %d exceeds frame payload %d", len(p), c.max)
+	}
+	buf := c.send
+	if rdmaStreamFrameHeaderSize+len(p) > len(buf) {
+		return fmt.Errorf("rdma: write size %d exceeds send buffer %d", len(p), len(buf))
 	}
 	binary.BigEndian.PutUint32(buf[:rdmaStreamFrameHeaderSize], uint32(len(p)))
 	copy(buf[rdmaStreamFrameHeaderSize:], p)
 	id := c.sendID
 	c.sendID++
 	if err := c.t.postSend(0, rdmaStreamFrameHeaderSize+len(p), id); err != nil {
-		c.writeMu.Unlock()
-		return 0, err
+		return err
 	}
 	for {
 		ctx, dl := c.writePollContext()
 		_, err := c.pollWorkID(ctx, id)
 		if err == nil {
-			break
+			return nil
 		}
 		err = c.writePollError(dl, err)
 		if errors.Is(err, errRDMAStreamDeadlineChanged) {
 			continue
 		}
-		c.writeMu.Unlock()
-		return 0, err
+		return err
 	}
-	c.writeMu.Unlock()
-	return len(p), nil
 }
 
 func (c *rdmaStreamConn) Close() error {
@@ -253,10 +272,10 @@ func (c *rdmaStreamConn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *rdmaStreamConn) postRecvSlotLocked(slot int) error {
-	if slot < 0 || slot >= len(c.slots) {
-		return fmt.Errorf("rdma: receive slot %d outside slot count %d", slot, len(c.slots))
+	if slot < 0 || slot >= c.nslots {
+		return fmt.Errorf("rdma: receive slot %d outside slot count %d", slot, c.nslots)
 	}
-	size := rdmaStreamSlotSize(len(c.recv), len(c.slots))
+	size := rdmaStreamSlotSize(len(c.recv), c.nslots)
 	offset := slot * size
 	id := c.recvID
 	c.recvID++
@@ -281,10 +300,13 @@ func (c *rdmaStreamConn) pollWorkID(ctx context.Context, id uint64) (rdmaStreamW
 			c.pollMu.Unlock()
 			return rdmaStreamWorkRequest{}, err
 		}
+		var found rdmaStreamWorkRequest
+		ok := false
 		for _, work := range works {
 			if work.ID == id {
-				c.pollMu.Unlock()
-				return work, nil
+				found = work
+				ok = true
+				continue
 			}
 			if c.pendingLen == len(c.pending) {
 				c.pollMu.Unlock()
@@ -293,11 +315,15 @@ func (c *rdmaStreamConn) pollWorkID(ctx context.Context, id uint64) (rdmaStreamW
 			c.pending[c.pendingLen] = work
 			c.pendingLen++
 		}
+		if ok {
+			c.pollMu.Unlock()
+			return found, nil
+		}
 	}
 }
 
 func (c *rdmaStreamConn) pollRecv(ctx context.Context) (int, rdmaStreamWorkRequest, error) {
-	if len(c.slots) == 1 {
+	if c.nslots == 1 {
 		work, err := c.pollWorkID(ctx, c.slots[0].id)
 		if err != nil {
 			return 0, rdmaStreamWorkRequest{}, err
@@ -320,10 +346,15 @@ func (c *rdmaStreamConn) pollRecv(ctx context.Context) (int, rdmaStreamWorkReque
 			c.pollMu.Unlock()
 			return 0, rdmaStreamWorkRequest{}, err
 		}
+		foundSlot := -1
+		var found rdmaStreamWorkRequest
 		for _, work := range works {
 			if slot := c.recvSlotByID(work.ID); slot >= 0 {
-				c.pollMu.Unlock()
-				return slot, work, nil
+				if foundSlot < 0 {
+					foundSlot = slot
+					found = work
+					continue
+				}
 			}
 			if c.pendingLen == len(c.pending) {
 				c.pollMu.Unlock()
@@ -332,11 +363,15 @@ func (c *rdmaStreamConn) pollRecv(ctx context.Context) (int, rdmaStreamWorkReque
 			c.pending[c.pendingLen] = work
 			c.pendingLen++
 		}
+		if foundSlot >= 0 {
+			c.pollMu.Unlock()
+			return foundSlot, found, nil
+		}
 	}
 }
 
 func (c *rdmaStreamConn) recvSlotByID(id uint64) int {
-	for i := range c.slots {
+	for i := 0; i < c.nslots; i++ {
 		if c.slots[i].id == id {
 			return i
 		}
