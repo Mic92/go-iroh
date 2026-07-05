@@ -398,16 +398,19 @@ func tcpDialAddrFromNetAddr(iface string, addr net.Addr, port int) (string, bool
 		return "", false
 	}
 	host := ip.String()
-	if z := addrZone(addr); z != "" {
-		host += "%" + z
-	} else if ip.To4() == nil && ip.IsLinkLocalUnicast() && iface != "" {
-		host += "%" + iface
+	zone := addrZone(addr)
+	if zone == "" && ip.To4() == nil && ip.IsLinkLocalUnicast() {
+		zone = iface
 	}
 	var b [128]byte
 	out := b[:0]
 	if ip.To4() == nil {
 		out = append(out, '[')
 		out = append(out, host...)
+		if zone != "" {
+			out = append(out, '%')
+			out = append(out, zone...)
+		}
 		out = append(out, ']')
 	} else {
 		out = append(out, host...)
