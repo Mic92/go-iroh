@@ -69,6 +69,42 @@ func TestClassifyTransportLinkAddrsReturnsAddrError(t *testing.T) {
 	}
 }
 
+func BenchmarkClassifyTransportLinkAddrs(b *testing.B) {
+	fixtures := []net.Interface{
+		{Name: "lo0", Flags: net.FlagUp | net.FlagLoopback},
+		{Name: "bridge0", Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "en5", Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "awdl0", Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "en0", Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast},
+		{Name: "wlan0", Flags: net.FlagUp | net.FlagBroadcast | net.FlagMulticast},
+		{Name: "utun0", Flags: net.FlagUp | net.FlagMulticast},
+		{Name: "down0", Flags: net.FlagBroadcast | net.FlagMulticast},
+	}
+	addrByName := map[string][]net.Addr{
+		"lo0":     {ipNet("127.0.0.1/8")},
+		"bridge0": {&net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "bridge0"}},
+		"en5":     {&net.IPAddr{IP: net.ParseIP("fe80::5"), Zone: "en5"}},
+		"awdl0":   {&net.IPAddr{IP: net.ParseIP("fe80::2"), Zone: "awdl0"}},
+		"en0":     {ipNet("192.0.2.10/24")},
+		"wlan0":   {ipNet("192.0.2.11/24")},
+		"utun0":   {ipNet("198.51.100.7/24")},
+		"down0":   {ipNet("192.0.2.12/24")},
+	}
+	addrs := func(iface net.Interface) ([]net.Addr, error) {
+		return addrByName[iface.Name], nil
+	}
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got, err := classifyTransportLinkAddrs(fixtures, addrs)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if len(got) != 7 {
+			b.Fatalf("len(got) = %d, want 7", len(got))
+		}
+	}
+}
+
 func TestPreferredTransportLink(t *testing.T) {
 	cases := []struct {
 		name string

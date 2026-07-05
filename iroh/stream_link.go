@@ -48,7 +48,7 @@ func interfaceAddrs(iface net.Interface) ([]net.Addr, error) {
 }
 
 func classifyTransportLinkAddrs(ifaces []net.Interface, addrs func(net.Interface) ([]net.Addr, error)) ([]TransportLinkAddr, error) {
-	var out []TransportLinkAddr
+	out := make([]TransportLinkAddr, 0, len(ifaces))
 	for _, iface := range ifaces {
 		if !usableInterface(iface) {
 			continue
