@@ -123,10 +123,16 @@ type BindOpts struct {
 }
 
 // QUICTransportConfig configures stable QUIC transport settings used by
-// endpoints. A zero field keeps the default.
+// endpoints. A zero field keeps the qng default. Receive-window defaults are
+// 512 KB initial stream, 6 MB maximum stream, 768 KB initial connection, and
+// 15 MB maximum connection.
 type QUICTransportConfig struct {
-	KeepAlivePeriod time.Duration
-	MaxIdleTimeout  time.Duration
+	KeepAlivePeriod                time.Duration
+	MaxIdleTimeout                 time.Duration
+	InitialStreamReceiveWindow     uint64
+	MaxStreamReceiveWindow         uint64
+	InitialConnectionReceiveWindow uint64
+	MaxConnectionReceiveWindow     uint64
 }
 
 // WithSecretKey sets the endpoint's identity. If unset, [Bind] generates a
@@ -413,6 +419,18 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		}
 		if c.transportConfig.MaxIdleTimeout != 0 {
 			quicConf.MaxIdleTimeout = c.transportConfig.MaxIdleTimeout
+		}
+		if c.transportConfig.InitialStreamReceiveWindow != 0 {
+			quicConf.InitialStreamReceiveWindow = c.transportConfig.InitialStreamReceiveWindow
+		}
+		if c.transportConfig.MaxStreamReceiveWindow != 0 {
+			quicConf.MaxStreamReceiveWindow = c.transportConfig.MaxStreamReceiveWindow
+		}
+		if c.transportConfig.InitialConnectionReceiveWindow != 0 {
+			quicConf.InitialConnectionReceiveWindow = c.transportConfig.InitialConnectionReceiveWindow
+		}
+		if c.transportConfig.MaxConnectionReceiveWindow != 0 {
+			quicConf.MaxConnectionReceiveWindow = c.transportConfig.MaxConnectionReceiveWindow
 		}
 	}
 	// The QUIC transport is driven over the magic socket rather than the raw

@@ -22,6 +22,11 @@
 //	conn, err := ep.Connect(ctx, peerAddr, "my/1")
 //	s, err := conn.OpenStreamSync(ctx)
 //
+// [WithTransportConfig] can tune stable QUIC transport settings, including
+// receive flow-control windows for bulk streams. Window fields keep qng
+// defaults when zero: 512 KB initial stream, 6 MB maximum stream, 768 KB
+// initial connection, and 15 MB maximum connection.
+//
 // This package wraps a fork of quic-go (internal/qng) that drives a vendored
 // crypto/tls with RFC 7250 support (internal/itls/tls).
 package iroh
