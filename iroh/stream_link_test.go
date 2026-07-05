@@ -133,6 +133,114 @@ func TestPreferredTransportLinkChangesWithInterfaces(t *testing.T) {
 	}
 }
 
+func TestStreamLinkAddrRoundTrip(t *testing.T) {
+	addr := NewStreamLinkAddr(12, TransportLinkThunderbolt, "en5", "[fe80::1%en5]:4433")
+	got, err := ParseStreamLinkAddr(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Addr.Compare(addr) != 0 {
+		t.Fatalf("addr = %v, want %v", got.Addr, addr)
+	}
+	if got.Interface != "en5" || got.DialAddr != "[fe80::1%en5]:4433" || got.Class != TransportLinkThunderbolt {
+		t.Fatalf("parsed = %+v", got)
+	}
+}
+
+func TestStreamLinkAddrParsesRawTCPAddress(t *testing.T) {
+	addr := netaddr.NewCustomAddr(12, []byte("127.0.0.1:4433"))
+	got, err := ParseStreamLinkAddr(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DialAddr != "127.0.0.1:4433" || got.Class != TransportLinkUnknown {
+		t.Fatalf("parsed = %+v", got)
+	}
+}
+
+func TestSelectStreamLink(t *testing.T) {
+	local := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWiFiLAN, "wlan0", "192.0.2.11:1"),
+		NewStreamLinkAddr(7, TransportLinkThunderbolt, "bridge0", "[fe80::1%bridge0]:1"),
+	}
+	remote := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en0", "192.0.2.20:1"),
+		NewStreamLinkAddr(7, TransportLinkThunderbolt, "bridge0", "[fe80::2%bridge0]:1"),
+	}
+	got, ok := SelectStreamLink(local, remote)
+	if !ok {
+		t.Fatal("SelectStreamLink failed")
+	}
+	if got.Class != TransportLinkThunderbolt {
+		t.Fatalf("class = %v, want %v", got.Class, TransportLinkThunderbolt)
+	}
+	remoteLink, err := ParseStreamLinkAddr(got.Remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteLink.DialAddr != "[fe80::2%bridge0]:1" {
+		t.Fatalf("remote = %q, want thunderbolt addr", remoteLink.DialAddr)
+	}
+}
+
+func TestSelectStreamLinkTieBreaksByAddress(t *testing.T) {
+	local := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en1", "192.0.2.12:1"),
+		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en0", "192.0.2.11:1"),
+	}
+	remote := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en1", "192.0.2.22:1"),
+		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en0", "192.0.2.21:1"),
+	}
+	got, ok := SelectStreamLink(local, remote)
+	if !ok {
+		t.Fatal("SelectStreamLink failed")
+	}
+	link, err := ParseStreamLinkAddr(got.Remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.DialAddr != "192.0.2.21:1" {
+		t.Fatalf("remote = %q, want lowest encoded address", link.DialAddr)
+	}
+}
+
+func TestSelectStreamLinkChangesWithAdvertisedAddrs(t *testing.T) {
+	local := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en0", "192.0.2.11:1"),
+	}
+	remoteBefore := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en0", "192.0.2.20:1"),
+	}
+	remoteAfter := []netaddr.CustomAddr{
+		NewStreamLinkAddr(7, TransportLinkWiredLAN, "en0", "192.0.2.20:1"),
+		NewStreamLinkAddr(7, TransportLinkRDMA, "rdma0", "rdma://peer"),
+	}
+	localAfter := append(local, NewStreamLinkAddr(7, TransportLinkRDMA, "rdma0", "rdma://local"))
+
+	before, ok := SelectStreamLink(local, remoteBefore)
+	if !ok {
+		t.Fatal("SelectStreamLink before failed")
+	}
+	after, ok := SelectStreamLink(localAfter, remoteAfter)
+	if !ok {
+		t.Fatal("SelectStreamLink after failed")
+	}
+	if before.Class != TransportLinkWiredLAN || after.Class != TransportLinkRDMA {
+		t.Fatalf("class = %v then %v, want wired then rdma", before.Class, after.Class)
+	}
+}
+
+func TestTCPDialAddrFromNetAddrPreservesZone(t *testing.T) {
+	got, ok := tcpDialAddrFromNetAddr(&net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "en5"}, 4433)
+	if !ok {
+		t.Fatal("tcpDialAddrFromNetAddr failed")
+	}
+	if got != "[fe80::1%en5]:4433" {
+		t.Fatalf("addr = %q, want scoped link-local dial addr", got)
+	}
+}
+
 func TestRDMAStreamTransportUnsupported(t *testing.T) {
 	tr, err := NewRDMAStreamTransport(99)
 	if err != nil {

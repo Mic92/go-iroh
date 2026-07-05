@@ -711,6 +711,110 @@ func BenchmarkTCPStreamTransportThroughput(b *testing.B) {
 	cleanupOnce.Do(cleanup)
 }
 
+func BenchmarkStreamLinkSelection(b *testing.B) {
+	local := []netaddr.CustomAddr{
+		NewStreamLinkAddr(101, TransportLinkWiFiLAN, "wlan0", "192.0.2.11:1"),
+		NewStreamLinkAddr(101, TransportLinkWiredLAN, "en0", "192.0.2.10:1"),
+		NewStreamLinkAddr(101, TransportLinkThunderbolt, "bridge0", "[fe80::1%bridge0]:1"),
+	}
+	remote := []netaddr.CustomAddr{
+		NewStreamLinkAddr(101, TransportLinkLAN, "utun0", "198.51.100.20:1"),
+		NewStreamLinkAddr(101, TransportLinkWiredLAN, "en0", "192.0.2.20:1"),
+		NewStreamLinkAddr(101, TransportLinkThunderbolt, "bridge0", "[fe80::2%bridge0]:1"),
+	}
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		got, ok := SelectStreamLink(local, remote)
+		if !ok {
+			b.Fatal("SelectStreamLink failed")
+		}
+		if got.Class != TransportLinkThunderbolt {
+			b.Fatalf("class = %v, want %v", got.Class, TransportLinkThunderbolt)
+		}
+	}
+}
+
+func BenchmarkTCPStreamTransportNegotiatedThroughput(b *testing.B) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	tr, err := ListenTCPStreamTransport(102, "[::1]:0", TransportLinkLoopback)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer tr.Close()
+	addrs, err := tr.LocalAddrs(ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	selected, ok := SelectStreamLink(addrs, addrs)
+	if !ok {
+		b.Fatal("SelectStreamLink failed")
+	}
+
+	accepted := make(chan StreamAccept, 1)
+	errc := make(chan error, 1)
+	go func() {
+		errc <- tr.ListenStreams(ctx, func(a StreamAccept) error {
+			accepted <- a
+			return nil
+		})
+	}()
+
+	tok := StreamOpenToken{
+		LocalID:     "client",
+		RemoteID:    "server",
+		ALPN:        "bench/0",
+		StableID:    1,
+		TransportID: tr.ID(),
+		Purpose:     "throughput",
+		Nonce:       "bench",
+		Expiry:      time.Now().Add(time.Minute),
+	}
+	client, err := tr.DialStream(ctx, selected.Remote, StreamOptions{Token: tok})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer client.Close()
+
+	var server net.Conn
+	select {
+	case a := <-accepted:
+		server = a.Conn
+	case err := <-errc:
+		b.Fatal(err)
+	case <-ctx.Done():
+		b.Fatal(ctx.Err())
+	}
+	defer server.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, server)
+		done <- err
+	}()
+	var cleanupOnce sync.Once
+	cleanup := func() {
+		client.Close()
+		server.Close()
+		<-done
+	}
+	b.Cleanup(func() { cleanupOnce.Do(cleanup) })
+
+	buf := make([]byte, 64*1024)
+	b.SetBytes(int64(len(buf)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := client.Write(buf); err != nil {
+			b.Fatalf("write negotiated tcp stream: %v", err)
+		}
+	}
+	b.StopTimer()
+	cleanupOnce.Do(cleanup)
+}
+
 func benchmarkUDPConnPair(b *testing.B) (client, server *net.UDPConn) {
 	b.Helper()
 	server, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))

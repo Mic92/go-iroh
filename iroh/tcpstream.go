@@ -38,7 +38,7 @@ func ListenTCPStreamTransport(id uint64, bind string, link TransportLinkClass) (
 	return &TCPStreamTransport{
 		id:   id,
 		ln:   ln,
-		addr: netaddr.NewCustomAddr(id, []byte(ln.Addr().String())),
+		addr: NewStreamLinkAddr(id, link, "", ln.Addr().String()),
 		link: link,
 	}, nil
 }
@@ -49,6 +49,9 @@ func (t *TCPStreamTransport) LinkClass() TransportLinkClass { return t.link }
 
 func (t *TCPStreamTransport) LocalAddrs(ctx context.Context) ([]netaddr.CustomAddr, error) {
 	_ = ctx
+	if addrs, err := t.localInterfaceAddrs(); err == nil && len(addrs) > 0 {
+		return addrs, nil
+	}
 	return []netaddr.CustomAddr{t.addr}, nil
 }
 
@@ -56,7 +59,11 @@ func (t *TCPStreamTransport) DialStream(ctx context.Context, remote netaddr.Cust
 	if remote.ID() != t.id {
 		return nil, fmt.Errorf("iroh: tcp stream transport id %d, want %d", remote.ID(), t.id)
 	}
-	addr := string(remote.Data())
+	linkAddr, err := ParseStreamLinkAddr(remote)
+	if err != nil {
+		return nil, err
+	}
+	addr := linkAddr.DialAddr
 	var d net.Dialer
 	c, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
@@ -67,6 +74,26 @@ func (t *TCPStreamTransport) DialStream(ctx context.Context, remote netaddr.Cust
 		return nil, err
 	}
 	return c, nil
+}
+
+func (t *TCPStreamTransport) localInterfaceAddrs() ([]netaddr.CustomAddr, error) {
+	tcpAddr, ok := t.ln.Addr().(*net.TCPAddr)
+	if !ok || !tcpAddr.IP.IsUnspecified() {
+		return nil, nil
+	}
+	links, err := LocalTransportLinkAddrs()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]netaddr.CustomAddr, 0, len(links))
+	for _, link := range links {
+		dialAddr, ok := tcpDialAddrFromNetAddr(link.Addr, tcpAddr.Port)
+		if !ok {
+			continue
+		}
+		out = append(out, NewStreamLinkAddr(t.id, link.Class, link.Interface, dialAddr))
+	}
+	return out, nil
 }
 
 func (t *TCPStreamTransport) ListenStreams(ctx context.Context, accept func(StreamAccept) error) error {

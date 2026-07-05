@@ -83,6 +83,34 @@ func TestTCPStreamTransportDialListen(t *testing.T) {
 	<-done
 }
 
+func TestTCPStreamTransportLocalAddrsCarryLinkClass(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	tr, err := ListenTCPStreamTransport(78, "[::1]:0", TransportLinkLoopback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tr.Close()
+	addrs, err := tr.LocalAddrs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(addrs) != 1 {
+		t.Fatalf("len(addrs) = %d, want 1", len(addrs))
+	}
+	got, err := ParseStreamLinkAddr(addrs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Class != TransportLinkLoopback {
+		t.Fatalf("class = %v, want %v", got.Class, TransportLinkLoopback)
+	}
+	if got.DialAddr == "" {
+		t.Fatal("empty dial addr")
+	}
+}
+
 func TestStreamOpenTokenBinaryRoundTrip(t *testing.T) {
 	want := StreamOpenToken{
 		LocalID:     "client",
