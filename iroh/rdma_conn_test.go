@@ -403,6 +403,37 @@ func BenchmarkRDMAStreamConnMemoryThroughput(b *testing.B) {
 	bc.Close()
 }
 
+func BenchmarkRDMAStreamConnMemoryThroughput1MiB(b *testing.B) {
+	a, btr := newMemRDMAStreamTransportPair(2 * 1024 * 1024)
+	ac, err := newRDMAStreamConn(b.Context(), a)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer ac.Close()
+	bc, err := newRDMAStreamConn(b.Context(), btr)
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer bc.Close()
+
+	buf := make([]byte, 1024*1024)
+	got := make([]byte, len(buf))
+	b.SetBytes(int64(len(buf)))
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := ac.Write(buf); err != nil {
+			b.Fatalf("write rdma stream: %v", err)
+		}
+		if _, err := io.ReadFull(bc, got); err != nil {
+			b.Fatalf("read rdma stream: %v", err)
+		}
+	}
+	b.StopTimer()
+	ac.Close()
+	bc.Close()
+}
+
 func BenchmarkRDMAStreamConnPendingCompletion(b *testing.B) {
 	tp := &scriptedRDMAStreamTransport{
 		send: make([]byte, 16),

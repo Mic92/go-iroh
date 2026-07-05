@@ -156,4 +156,4 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 	return nil
 }
 
-const rdmaStreamBufferSize = 128 * 1024
+const rdmaStreamBufferSize = 1024 * 1024

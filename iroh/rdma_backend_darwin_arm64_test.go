@@ -88,6 +88,11 @@ func TestDarwinRDMAStreamBackendControlHandshake(t *testing.T) {
 	if !clientRT.connected || !serverRT.connected {
 		t.Fatalf("connected = client %v server %v, want both true", clientRT.connected, serverRT.connected)
 	}
+	for i, size := range factory.requestedBufSizes() {
+		if size != rdmaStreamBufferSize {
+			t.Fatalf("resource %d buffer size = %d, want %d", i, size, rdmaStreamBufferSize)
+		}
+	}
 	if clientRT.remote.QPN != serverRT.local.QPN || serverRT.remote.QPN != clientRT.local.QPN {
 		t.Fatalf("destinations not exchanged: client remote=%+v server local=%+v server remote=%+v client local=%+v", clientRT.remote, serverRT.local, serverRT.remote, clientRT.local)
 	}
@@ -102,6 +107,7 @@ type fakeRDMAStreamResourceFactory struct {
 	pending *fakeRDMAStreamResource
 	created []*fakeRDMAStreamResource
 	bufSize int
+	sizes   []int
 }
 
 func newFakeRDMAStreamResourceFactory(bufSize int) *fakeRDMAStreamResourceFactory {
@@ -114,6 +120,7 @@ func (f *fakeRDMAStreamResourceFactory) new(ctx context.Context, device string, 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.sizes = append(f.sizes, bufSize)
 	r := &fakeRDMAStreamResource{
 		device: device,
 		local: rdmaStreamDestination{
@@ -143,6 +150,12 @@ func (f *fakeRDMAStreamResourceFactory) resources() (*fakeRDMAStreamResource, *f
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.created[0], f.created[1]
+}
+
+func (f *fakeRDMAStreamResourceFactory) requestedBufSizes() []int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]int(nil), f.sizes...)
 }
 
 type fakeRDMAStreamResource struct {
