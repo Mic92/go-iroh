@@ -271,7 +271,7 @@ func ParseStreamLinkAddr(addr netaddr.CustomAddr) (StreamLinkCandidate, error) {
 		}
 		return StreamLinkCandidate{
 			Addr:     addr,
-			DialAddr: string(data),
+			DialAddr: stringFromBytes(data),
 			Class:    TransportLinkUnknown,
 		}, nil
 	}
