@@ -238,7 +238,12 @@ var transportLinkPreference = []TransportLinkClass{
 
 // NewStreamLinkAddr returns an encoded stream transport address.
 func NewStreamLinkAddr(id uint64, class TransportLinkClass, iface, dialAddr string) netaddr.CustomAddr {
-	b := make([]byte, 0, streamLinkAddrLen(string(class), iface, dialAddr))
+	n := streamLinkAddrLen(string(class), iface, dialAddr)
+	var buf [128]byte
+	b := buf[:0]
+	if n > len(buf) {
+		b = make([]byte, 0, n)
+	}
 	b = append(b, streamLinkAddrMagic...)
 	b = appendStreamLinkString(b, string(class))
 	b = appendStreamLinkString(b, iface)
