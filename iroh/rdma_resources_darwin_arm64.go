@@ -741,11 +741,10 @@ func pollRDMAStreamCompletions(ctx context.Context, cq *rdmaStreamCompletionQueu
 	if len(out) == 0 {
 		return out, nil
 	}
-	want := len(out)
 	var wc [8]applerdma.IbvWC
 	works := out[:0]
 	spins := 0
-	for len(works) < want {
+	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -767,9 +766,8 @@ func pollRDMAStreamCompletions(ctx context.Context, cq *rdmaStreamCompletionQueu
 		if err != nil {
 			return nil, err
 		}
-		works = next
+		return next, nil
 	}
-	return works, nil
 }
 
 func rdmaStreamWorkRequests(wc []applerdma.IbvWC, n int) ([]rdmaStreamWorkRequest, error) {
