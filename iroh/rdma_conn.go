@@ -81,8 +81,8 @@ func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransp
 	if len(recv) < rdmaStreamFrameHeaderSize+1 {
 		return nil, fmt.Errorf("rdma: receive buffer too small: %d", len(recv))
 	}
-	max := len(send) - rdmaStreamFrameHeaderSize
-	if recvMax := len(recv) - rdmaStreamFrameHeaderSize; recvMax < max {
+	max := rdmaStreamSlotPayload(len(send), rdmaStreamDefaultSlots)
+	if recvMax := rdmaStreamSlotPayload(len(recv), rdmaStreamDefaultSlots); recvMax < max {
 		max = recvMax
 	}
 	if maxPayload > 0 && maxPayload < max {
@@ -132,7 +132,7 @@ func (c *rdmaStreamConn) Read(p []byte) (int, error) {
 			c.readMu.Unlock()
 			return 0, err
 		}
-		frame, err := rdmaStreamFramePayload(c.recv, work.Bytes)
+		frame, err := rdmaStreamFramePayloadAt(c.recv, 0, work.Bytes)
 		if err != nil {
 			c.readMu.Unlock()
 			return 0, err
@@ -238,7 +238,7 @@ func (c *rdmaStreamConn) SetWriteDeadline(t time.Time) error {
 }
 
 func (c *rdmaStreamConn) postRecvLocked() error {
-	return c.t.postRecv(0, len(c.recv), c.recvID)
+	return c.t.postRecv(0, rdmaStreamSlotSize(len(c.recv), rdmaStreamDefaultSlots), c.recvID)
 }
 
 func (c *rdmaStreamConn) pollWorkID(ctx context.Context, id uint64) (rdmaStreamWorkRequest, error) {
@@ -325,6 +325,14 @@ func rdmaStreamDeadlineContext(ctx context.Context, t time.Time) (context.Contex
 }
 
 func rdmaStreamFramePayload(buf []byte, n int) ([]byte, error) {
+	return rdmaStreamFramePayloadAt(buf, 0, n)
+}
+
+func rdmaStreamFramePayloadAt(buf []byte, offset, n int) ([]byte, error) {
+	if offset < 0 || offset > len(buf) {
+		return nil, fmt.Errorf("rdma: frame offset %d outside receive buffer %d", offset, len(buf))
+	}
+	buf = buf[offset:]
 	if n < rdmaStreamFrameHeaderSize {
 		return nil, io.ErrShortBuffer
 	}
@@ -347,4 +355,20 @@ const (
 	rdmaStreamFrameHeaderSize = 4
 	rdmaStreamSendWorkID      = 1
 	rdmaStreamRecvWorkID      = 1 << 32
+	rdmaStreamDefaultSlots    = 1
 )
+
+func rdmaStreamSlotSize(n, slots int) int {
+	if slots <= 0 {
+		return 0
+	}
+	return n / slots
+}
+
+func rdmaStreamSlotPayload(n, slots int) int {
+	size := rdmaStreamSlotSize(n, slots)
+	if size < rdmaStreamFrameHeaderSize {
+		return 0
+	}
+	return size - rdmaStreamFrameHeaderSize
+}

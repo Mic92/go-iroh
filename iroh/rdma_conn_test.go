@@ -296,6 +296,48 @@ func TestRDMAStreamFramePayload(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamFramePayloadAt(t *testing.T) {
+	buf := make([]byte, 32)
+	off := 16
+	buf[off+3] = 3
+	copy(buf[off+4:], "abc")
+	got, err := rdmaStreamFramePayloadAt(buf, off, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "abc" {
+		t.Fatalf("payload = %q, want abc", got)
+	}
+	for _, off := range []int{-1, len(buf) + 1} {
+		if _, err := rdmaStreamFramePayloadAt(buf, off, 7); err == nil {
+			t.Fatalf("rdmaStreamFramePayloadAt succeeded with offset %d", off)
+		}
+	}
+}
+
+func TestRDMAStreamSlotPayload(t *testing.T) {
+	tests := []struct {
+		name      string
+		size      int
+		slots     int
+		wantSize  int
+		wantFrame int
+	}{
+		{"single", 1024, 1, 1024, 1020},
+		{"four slots", 1024, 4, 256, 252},
+		{"short", 3, 1, 3, 0},
+		{"invalid slots", 1024, 0, 0, 0},
+	}
+	for _, tt := range tests {
+		if got := rdmaStreamSlotSize(tt.size, tt.slots); got != tt.wantSize {
+			t.Fatalf("%s: slot size = %d, want %d", tt.name, got, tt.wantSize)
+		}
+		if got := rdmaStreamSlotPayload(tt.size, tt.slots); got != tt.wantFrame {
+			t.Fatalf("%s: slot payload = %d, want %d", tt.name, got, tt.wantFrame)
+		}
+	}
+}
+
 type scriptedRDMAStreamTransport struct {
 	send    []byte
 	recv    []byte
