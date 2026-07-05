@@ -318,8 +318,7 @@ type fakeRDMAStreamResource struct {
 	connected   bool
 	send        []byte
 	recv        []byte
-	recvPosted  rdmaStreamPostWork
-	hasRecv     bool
+	recvPosted  []rdmaStreamPostWork
 	completions []rdmaStreamWorkRequest
 	peer        *fakeRDMAStreamResource
 	closed      bool
@@ -346,8 +345,7 @@ func (r *fakeRDMAStreamResource) recvBuf() []byte { return r.recv }
 
 func (r *fakeRDMAStreamResource) postRecv(offset, length int, id uint64) error {
 	r.mu.Lock()
-	r.recvPosted = rdmaStreamPostWork{Offset: offset, Length: length, ID: id}
-	r.hasRecv = true
+	r.recvPosted = append(r.recvPosted, rdmaStreamPostWork{Offset: offset, Length: length, ID: id})
 	r.mu.Unlock()
 	return nil
 }
@@ -366,11 +364,12 @@ func (r *fakeRDMAStreamResource) postSend(offset, length int, id uint64) error {
 
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
-	if !peer.hasRecv {
+	if len(peer.recvPosted) == 0 {
 		return context.Canceled
 	}
-	work := peer.recvPosted
-	peer.hasRecv = false
+	work := peer.recvPosted[0]
+	copy(peer.recvPosted, peer.recvPosted[1:])
+	peer.recvPosted = peer.recvPosted[:len(peer.recvPosted)-1]
 	copy(peer.recv[work.Offset:], send)
 	peer.completions = append(peer.completions, rdmaStreamWorkRequest{ID: work.ID, Bytes: len(send)})
 	return nil

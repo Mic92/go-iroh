@@ -75,7 +75,7 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 		_ = rt.close()
 		return nil, err
 	}
-	if err := writeRDMAStreamFramePayload(ctrl, bufSize-rdmaStreamFrameHeaderSize); err != nil {
+	if err := writeRDMAStreamFramePayload(ctrl, rdmaStreamPayloadForBuffer(bufSize)); err != nil {
 		_ = rt.close()
 		return nil, err
 	}
@@ -93,7 +93,7 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 		_ = rt.close()
 		return nil, err
 	}
-	conn, err := newRDMAStreamConnWithMaxPayload(ctx, rt, min(bufSize-rdmaStreamFrameHeaderSize, remotePayload))
+	conn, err := newRDMAStreamConnWithMaxPayload(ctx, rt, min(rdmaStreamPayloadForBuffer(bufSize), remotePayload))
 	if err != nil {
 		_ = rt.close()
 		return nil, err
@@ -174,7 +174,7 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 		_ = rt.close()
 		return err
 	}
-	if err := writeRDMAStreamFramePayload(ctrl, bufSize-rdmaStreamFrameHeaderSize); err != nil {
+	if err := writeRDMAStreamFramePayload(ctrl, rdmaStreamPayloadForBuffer(bufSize)); err != nil {
 		_ = rt.close()
 		return err
 	}
@@ -182,7 +182,7 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 		_ = rt.close()
 		return err
 	}
-	conn, err := newRDMAStreamConnWithMaxPayload(ctx, rt, min(bufSize-rdmaStreamFrameHeaderSize, remotePayload))
+	conn, err := newRDMAStreamConnWithMaxPayload(ctx, rt, min(rdmaStreamPayloadForBuffer(bufSize), remotePayload))
 	if err != nil {
 		_ = rt.close()
 		return err
@@ -212,6 +212,10 @@ func rdmaStreamBufferSize() int {
 		return defaultRDMAStreamBufferSize
 	}
 	return n
+}
+
+func rdmaStreamPayloadForBuffer(n int) int {
+	return rdmaStreamSlotPayload(n, rdmaStreamRecvSlotCount(n))
 }
 
 func setRDMAStreamControlDeadline(ctx context.Context, ctrl net.Conn) error {
@@ -259,4 +263,4 @@ func warmupRDMAStreamConn(ctx context.Context, conn *rdmaStreamConn) error {
 	return nil
 }
 
-const defaultRDMAStreamBufferSize = 1024 * 1024
+const defaultRDMAStreamBufferSize = rdmaStreamMaxRecvSlots * (rdmaStreamMinSlotPayload + rdmaStreamFrameHeaderSize)

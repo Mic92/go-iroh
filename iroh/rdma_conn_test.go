@@ -89,6 +89,52 @@ func TestRDMAStreamConnCapsMaxPayloadAtBuffer(t *testing.T) {
 	}
 }
 
+func TestRDMAStreamConnPrepostsLargeReceiveSlots(t *testing.T) {
+	a, b := newMemRDMAStreamTransportPair(defaultRDMAStreamBufferSize)
+	ac, err := newRDMAStreamConn(t.Context(), a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ac.Close()
+	bc, err := newRDMAStreamConn(t.Context(), b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bc.Close()
+	if len(bc.slots) != rdmaStreamMaxRecvSlots {
+		t.Fatalf("receive slots = %d, want %d", len(bc.slots), rdmaStreamMaxRecvSlots)
+	}
+	if bc.max != rdmaStreamMinSlotPayload {
+		t.Fatalf("max payload = %d, want %d", bc.max, rdmaStreamMinSlotPayload)
+	}
+	b.mu.Lock()
+	posted := append([]rdmaStreamPostWork(nil), b.recvPosted...)
+	b.mu.Unlock()
+	if len(posted) != rdmaStreamMaxRecvSlots {
+		t.Fatalf("posted receives = %d, want %d", len(posted), rdmaStreamMaxRecvSlots)
+	}
+	if posted[0].Offset != 0 || posted[1].Offset != rdmaStreamMinSlotPayload+rdmaStreamFrameHeaderSize {
+		t.Fatalf("posted offsets = %d, %d", posted[0].Offset, posted[1].Offset)
+	}
+
+	want := []byte("large slot receive")
+	done := make(chan error, 1)
+	go func() {
+		_, err := ac.Write(want)
+		done <- err
+	}()
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(bc, got); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("read = %q, want %q", got, want)
+	}
+}
+
 func TestRDMAStreamConnPartialRead(t *testing.T) {
 	a, b := newMemRDMAStreamTransportPair(1024)
 	ac, err := newRDMAStreamConn(t.Context(), a)
@@ -538,8 +584,7 @@ type memRDMAStreamTransport struct {
 	mu          sync.Mutex
 	send        []byte
 	recv        []byte
-	recvPosted  rdmaStreamPostWork
-	hasRecv     bool
+	recvPosted  []rdmaStreamPostWork
 	completions []rdmaStreamWorkRequest
 	peer        *memRDMAStreamTransport
 	closed      bool
@@ -560,8 +605,7 @@ func (t *memRDMAStreamTransport) recvBuf() []byte { return t.recv }
 func (t *memRDMAStreamTransport) postRecv(offset, length int, id uint64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.recvPosted = rdmaStreamPostWork{Offset: offset, Length: length, ID: id}
-	t.hasRecv = true
+	t.recvPosted = append(t.recvPosted, rdmaStreamPostWork{Offset: offset, Length: length, ID: id})
 	return nil
 }
 
@@ -578,11 +622,12 @@ func (t *memRDMAStreamTransport) postSend(offset, length int, id uint64) error {
 
 	peer.mu.Lock()
 	defer peer.mu.Unlock()
-	if !peer.hasRecv {
+	if len(peer.recvPosted) == 0 {
 		return context.Canceled
 	}
-	work := peer.recvPosted
-	peer.hasRecv = false
+	work := peer.recvPosted[0]
+	copy(peer.recvPosted, peer.recvPosted[1:])
+	peer.recvPosted = peer.recvPosted[:len(peer.recvPosted)-1]
 	copy(peer.recv[work.Offset:], send)
 	peer.completions = append(peer.completions, rdmaStreamWorkRequest{ID: work.ID, Bytes: len(send)})
 	return nil
