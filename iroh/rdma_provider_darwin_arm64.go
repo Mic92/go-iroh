@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 const (
@@ -119,13 +120,19 @@ func parseDarwinRDMAProviderBlocked(out []byte) string {
 }
 
 func darwinRDMABlockProviderBlocked(block []byte) string {
+	var reason string
 	if bytes.Contains(block, []byte("AppleThunderboltRDMAProtectionDomain")) && bytes.Contains(block, []byte("inactive, busy 1")) {
-		return "has inactive busy protection domain"
+		reason = "has inactive busy protection domain"
+	} else if bytes.Contains(block, []byte("AppleThunderboltRDMAQueuePair")) && bytes.Contains(block, []byte("inactive, busy 1")) {
+		reason = "has inactive busy queue pair"
 	}
-	if bytes.Contains(block, []byte("AppleThunderboltRDMAQueuePair")) && bytes.Contains(block, []byte("inactive, busy 1")) {
-		return "has inactive busy queue pair"
+	if reason == "" {
+		return ""
 	}
-	return ""
+	if creators := rdmaBlockUserClientCreators(block); len(creators) > 0 {
+		return reason + " from " + strings.Join(creators, ", ")
+	}
+	return reason
 }
 
 func forEachDarwinRDMABlock(out []byte, yield func([]byte) bool) {
@@ -161,6 +168,26 @@ func rdmaBlockName(block []byte) string {
 
 func isRDMABlockNameByte(c byte) bool {
 	return '0' <= c && c <= '9' || 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || c == '_'
+}
+
+func rdmaBlockUserClientCreators(block []byte) []string {
+	const prefix = `"IOUserClientCreator" = "`
+	var out []string
+	for {
+		i := bytes.Index(block, []byte(prefix))
+		if i < 0 {
+			return out
+		}
+		block = block[i+len(prefix):]
+		j := bytes.IndexByte(block, '"')
+		if j < 0 {
+			return out
+		}
+		if j > 0 {
+			out = append(out, string(block[:j]))
+		}
+		block = block[j+1:]
+	}
 }
 
 func propertyInt(block []byte, name string) int {

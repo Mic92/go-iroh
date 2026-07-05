@@ -77,11 +77,40 @@ func TestParseDarwinRDMAProviderBlocked(t *testing.T) {
   |   "IOPowerManagement" = {"DevicePowerState"=2,"CurrentPowerState"=2,"MaxPowerState"=2}
   | }
   +-o AppleThunderboltRDMAProtectionDomain  <class AppleThunderboltRDMAProtectionDomain, id 0x100000005, !registered, !matched, inactive, busy 1 (1 ms), retain 8>
+  |   {
+  |   }
+  +-o IORDMAFamilyUC  <class IORDMAFamilyUC, id 0x100000006, !registered, !matched, active, busy 0, retain 7>
+  |   {
+  |     "IOUserClientCreator" = "pid 3428, ibv_uc_pingpong"
+  |   }
   +-o AppleThunderboltRDMAQueuePair  <class AppleThunderboltRDMAQueuePair, id 0x100000006, !registered, !matched, inactive, busy 1 (1 ms), retain 10>
 `)
 	got := parseDarwinRDMAProviderBlocked(out)
-	if got != "rdma_en3 has inactive busy protection domain" {
+	if got != "rdma_en3 has inactive busy protection domain from pid 3428, ibv_uc_pingpong" {
 		t.Fatalf("blocked = %q", got)
+	}
+}
+
+func TestRDMAProviderBlockedIncludesUserClientCreators(t *testing.T) {
+	block := []byte(`
++-o rdma_en3  <class AppleThunderboltRDMAInterface, id 0x100000004, registered, matched, active, busy 2 (1 ms), retain 20>
+  | {
+  |   "IOPowerManagement" = {"DevicePowerState"=2,"CurrentPowerState"=2,"MaxPowerState"=2}
+  | }
+  +-o IORDMAFamilyUC  <class IORDMAFamilyUC, id 0x100000005, !registered, !matched, active, busy 0, retain 7>
+  |   {
+  |     "IOUserClientCreator" = "pid 3428, ibv_uc_pingpong"
+  |   }
+  +-o AppleThunderboltRDMAQueuePair  <class AppleThunderboltRDMAQueuePair, id 0x100000006, !registered, !matched, inactive, busy 1 (1 ms), retain 10>
+  +-o IORDMAFamilyUC  <class IORDMAFamilyUC, id 0x100000007, !registered, !matched, active, busy 0, retain 7>
+      {
+        "IOUserClientCreator" = "pid 31272, iroh.test"
+      }
+`)
+	got := darwinRDMABlockProviderBlocked(block)
+	want := "has inactive busy queue pair from pid 3428, ibv_uc_pingpong, pid 31272, iroh.test"
+	if got != want {
+		t.Fatalf("blocked = %q, want %q", got, want)
 	}
 }
 
