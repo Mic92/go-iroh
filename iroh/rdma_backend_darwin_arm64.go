@@ -5,6 +5,7 @@ package iroh
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"strconv"
@@ -92,7 +93,20 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 		_ = rt.close()
 		return nil, err
 	}
-	return newRDMAStreamConnWithMaxPayload(ctx, rt, min(bufSize-rdmaStreamFrameHeaderSize, remotePayload))
+	conn, err := newRDMAStreamConnWithMaxPayload(ctx, rt, min(bufSize-rdmaStreamFrameHeaderSize, remotePayload))
+	if err != nil {
+		_ = rt.close()
+		return nil, err
+	}
+	if err := dialRDMAStreamWarmupReady(ctrl); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := warmupRDMAStreamConn(ctx, conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
 }
 
 func (darwinRDMAStreamBackend) ListenStreams(ctx context.Context, id uint64, ln net.Listener, accept func(StreamAccept) error) error {
@@ -170,6 +184,14 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 		_ = rt.close()
 		return err
 	}
+	if err := acceptRDMAStreamWarmupReady(ctrl); err != nil {
+		conn.Close()
+		return err
+	}
+	if err := warmupRDMAStreamConn(ctx, conn); err != nil {
+		conn.Close()
+		return err
+	}
 	if err := accept(StreamAccept{Conn: conn, Token: tok}); err != nil {
 		conn.Close()
 		return err
@@ -187,6 +209,42 @@ func rdmaStreamBufferSize() int {
 		return defaultRDMAStreamBufferSize
 	}
 	return n
+}
+
+func dialRDMAStreamWarmupReady(ctrl net.Conn) error {
+	if _, err := ctrl.Write([]byte{0}); err != nil {
+		return fmt.Errorf("rdma: warmup ready write: %w", err)
+	}
+	var b [1]byte
+	if _, err := io.ReadFull(ctrl, b[:]); err != nil {
+		return fmt.Errorf("rdma: warmup ready read: %w", err)
+	}
+	return nil
+}
+
+func acceptRDMAStreamWarmupReady(ctrl net.Conn) error {
+	var b [1]byte
+	if _, err := io.ReadFull(ctrl, b[:]); err != nil {
+		return fmt.Errorf("rdma: warmup ready read: %w", err)
+	}
+	if _, err := ctrl.Write([]byte{0}); err != nil {
+		return fmt.Errorf("rdma: warmup ready write: %w", err)
+	}
+	return nil
+}
+
+func warmupRDMAStreamConn(ctx context.Context, conn *rdmaStreamConn) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("rdma: warmup stream: %w", err)
+	}
+	if _, err := conn.Write([]byte{0}); err != nil {
+		return fmt.Errorf("rdma: warmup stream write: %w", err)
+	}
+	var b [1]byte
+	if _, err := io.ReadFull(conn, b[:]); err != nil {
+		return fmt.Errorf("rdma: warmup stream read: %w", err)
+	}
+	return nil
 }
 
 const defaultRDMAStreamBufferSize = 1024 * 1024

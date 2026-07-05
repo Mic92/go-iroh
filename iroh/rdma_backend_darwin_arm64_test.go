@@ -102,6 +102,12 @@ func TestDarwinRDMAStreamBackendControlHandshake(t *testing.T) {
 	if serverConn, ok := server.(*rdmaStreamConn); !ok || serverConn.max != len(serverRT.send)-rdmaStreamFrameHeaderSize {
 		t.Fatalf("server max payload = %v, want %d", clientConnMax(server), len(serverRT.send)-rdmaStreamFrameHeaderSize)
 	}
+	if got := clientRT.postSendCount(); got != 2 {
+		t.Fatalf("client post sends = %d, want 2", got)
+	}
+	if got := serverRT.postSendCount(); got != 1 {
+		t.Fatalf("server post sends = %d, want 1", got)
+	}
 
 	cancel()
 	_ = ln.Close()
@@ -165,6 +171,13 @@ func TestDarwinRDMAStreamBackendNegotiatesFramePayload(t *testing.T) {
 	}
 	if got := clientConnMax(server); got != want {
 		t.Fatalf("server max payload = %d, want %d", got, want)
+	}
+	clientRT, serverRT := factory.resources()
+	if got := clientRT.postSendCount(); got != 1 {
+		t.Fatalf("client post sends = %d, want 1", got)
+	}
+	if got := serverRT.postSendCount(); got != 1 {
+		t.Fatalf("server post sends = %d, want 1", got)
 	}
 }
 
@@ -265,6 +278,7 @@ type fakeRDMAStreamResource struct {
 	completions []rdmaStreamWorkRequest
 	peer        *fakeRDMAStreamResource
 	closed      bool
+	postSends   int
 }
 
 func (r *fakeRDMAStreamResource) localDestination() (rdmaStreamDestination, error) {
@@ -299,6 +313,7 @@ func (r *fakeRDMAStreamResource) postSend(offset, length int, id uint64) error {
 		r.mu.Unlock()
 		return context.Canceled
 	}
+	r.postSends++
 	r.completions = append(r.completions, rdmaStreamWorkRequest{ID: id, Bytes: length})
 	peer := r.peer
 	send := r.send[offset : offset+length]
@@ -314,6 +329,12 @@ func (r *fakeRDMAStreamResource) postSend(offset, length int, id uint64) error {
 	copy(peer.recv[work.Offset:], send)
 	peer.completions = append(peer.completions, rdmaStreamWorkRequest{ID: work.ID, Bytes: len(send)})
 	return nil
+}
+
+func (r *fakeRDMAStreamResource) postSendCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.postSends
 }
 
 func (r *fakeRDMAStreamResource) poll(ctx context.Context, out []rdmaStreamWorkRequest) ([]rdmaStreamWorkRequest, error) {
