@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 
 	"github.com/tmc/go-iroh/netaddr"
 )
@@ -44,7 +45,7 @@ func (darwinRDMAStreamBackend) DialStream(ctx context.Context, id uint64, remote
 	if info.Control == "" {
 		return nil, fmt.Errorf("%w: missing control address", ErrRDMAUnsupported)
 	}
-	rt, err := newRDMAStreamResource(ctx, info.Device, rdmaStreamBufferSize)
+	rt, err := newRDMAStreamResource(ctx, info.Device, rdmaStreamBufferSize())
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +123,7 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 	if err != nil {
 		return err
 	}
-	rt, err := newRDMAStreamResource(ctx, device, rdmaStreamBufferSize)
+	rt, err := newRDMAStreamResource(ctx, device, rdmaStreamBufferSize())
 	if err != nil {
 		return err
 	}
@@ -156,4 +157,16 @@ func acceptRDMAStreamControl(ctx context.Context, id uint64, ctrl net.Conn, acce
 	return nil
 }
 
-const rdmaStreamBufferSize = 1024 * 1024
+func rdmaStreamBufferSize() int {
+	s := os.Getenv("GO_IROH_RDMA_BUFFER_SIZE")
+	if s == "" {
+		return defaultRDMAStreamBufferSize
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < rdmaStreamFrameHeaderSize+1 {
+		return defaultRDMAStreamBufferSize
+	}
+	return n
+}
+
+const defaultRDMAStreamBufferSize = 1024 * 1024

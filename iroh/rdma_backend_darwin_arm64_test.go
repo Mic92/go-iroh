@@ -89,8 +89,8 @@ func TestDarwinRDMAStreamBackendControlHandshake(t *testing.T) {
 		t.Fatalf("connected = client %v server %v, want both true", clientRT.connected, serverRT.connected)
 	}
 	for i, size := range factory.requestedBufSizes() {
-		if size != rdmaStreamBufferSize {
-			t.Fatalf("resource %d buffer size = %d, want %d", i, size, rdmaStreamBufferSize)
+		if size != defaultRDMAStreamBufferSize {
+			t.Fatalf("resource %d buffer size = %d, want %d", i, size, defaultRDMAStreamBufferSize)
 		}
 	}
 	if clientRT.remote.QPN != serverRT.local.QPN || serverRT.remote.QPN != clientRT.local.QPN {
@@ -99,6 +99,25 @@ func TestDarwinRDMAStreamBackendControlHandshake(t *testing.T) {
 
 	cancel()
 	_ = ln.Close()
+}
+
+func TestRDMAStreamBufferSize(t *testing.T) {
+	t.Setenv("GO_IROH_RDMA_BUFFER_SIZE", "")
+	if got := rdmaStreamBufferSize(); got != defaultRDMAStreamBufferSize {
+		t.Fatalf("default buffer size = %d, want %d", got, defaultRDMAStreamBufferSize)
+	}
+	t.Setenv("GO_IROH_RDMA_BUFFER_SIZE", "2097152")
+	if got := rdmaStreamBufferSize(); got != 2097152 {
+		t.Fatalf("configured buffer size = %d, want 2097152", got)
+	}
+	t.Setenv("GO_IROH_RDMA_BUFFER_SIZE", "4")
+	if got := rdmaStreamBufferSize(); got != defaultRDMAStreamBufferSize {
+		t.Fatalf("tiny buffer size = %d, want default %d", got, defaultRDMAStreamBufferSize)
+	}
+	t.Setenv("GO_IROH_RDMA_BUFFER_SIZE", "bad")
+	if got := rdmaStreamBufferSize(); got != defaultRDMAStreamBufferSize {
+		t.Fatalf("bad buffer size = %d, want default %d", got, defaultRDMAStreamBufferSize)
+	}
 }
 
 type fakeRDMAStreamResourceFactory struct {
