@@ -39,6 +39,10 @@ type rdmaStreamRecvBatchTransport interface {
 	postRecvs(*[rdmaStreamMaxRecvSlots]rdmaStreamPostWork, int) error
 }
 
+type rdmaStreamSendBatchTransport interface {
+	postSends(*[rdmaStreamMaxSendSlots]rdmaStreamPostWork, int) error
+}
+
 type rdmaStreamConn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -56,6 +60,8 @@ type rdmaStreamConn struct {
 
 	writeMu sync.Mutex
 	sendID  uint64
+	nsend   int
+	sends   [rdmaStreamMaxSendSlots]rdmaStreamPostWork
 
 	pollMu     sync.Mutex
 	pending    [8]rdmaStreamWorkRequest
@@ -89,7 +95,8 @@ func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransp
 		return nil, fmt.Errorf("rdma: receive buffer too small: %d", len(recv))
 	}
 	recvSlots := rdmaStreamRecvSlotCount(len(recv))
-	max := rdmaStreamSlotPayload(len(send), rdmaStreamSendSlots)
+	sendSlots := rdmaStreamSendSlotCount(len(send))
+	max := rdmaStreamSlotPayload(len(send), sendSlots)
 	if recvMax := rdmaStreamSlotPayload(len(recv), recvSlots); recvMax < max {
 		max = recvMax
 	}
@@ -107,6 +114,7 @@ func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransp
 		max:      max,
 		recvID:   rdmaStreamRecvWorkID,
 		sendID:   rdmaStreamSendWorkID,
+		nsend:    sendSlots,
 		nslots:   recvSlots,
 	}
 	c.readDL.Store(newRDMAStreamDeadlineState(ctx, time.Time{}))
@@ -117,6 +125,13 @@ func newRDMAStreamConnWithMaxPayload(ctx context.Context, t rdmaStreamConnTransp
 		cancel()
 		_ = t.close()
 		return nil, errors.New("rdma: no receive slots")
+	}
+	if c.nsend == 0 {
+		c.readDL.Load().cancel()
+		c.writeDL.Load().cancel()
+		cancel()
+		_ = t.close()
+		return nil, errors.New("rdma: no send slots")
 	}
 	if err := c.postInitialRecvs(); err != nil {
 		c.readDL.Load().cancel()
@@ -195,11 +210,20 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 	}
 	written := 0
 	for len(p) > 0 {
+		if c.nsend > 1 && len(p) > c.max {
+			n, err := c.writeBatchLocked(p)
+			if err != nil {
+				return written, err
+			}
+			written += n
+			p = p[n:]
+			continue
+		}
 		n := len(p)
 		if n > c.max {
 			n = c.max
 		}
-		if err := c.writeFrameLocked(p[:n]); err != nil {
+		if err := c.writeFrameLocked(0, p[:n]); err != nil {
 			return written, err
 		}
 		written += n
@@ -208,21 +232,72 @@ func (c *rdmaStreamConn) Write(p []byte) (int, error) {
 	return written, nil
 }
 
-func (c *rdmaStreamConn) writeFrameLocked(p []byte) error {
+func (c *rdmaStreamConn) writeFrameLocked(slot int, p []byte) error {
 	if len(p) > c.max {
 		return fmt.Errorf("rdma: write size %d exceeds frame payload %d", len(p), c.max)
 	}
+	size := rdmaStreamSlotSize(len(c.send), c.nsend)
+	if slot < 0 || slot >= c.nsend {
+		return fmt.Errorf("rdma: send slot %d outside slot count %d", slot, c.nsend)
+	}
+	offset := slot * size
 	buf := c.send
-	if rdmaStreamFrameHeaderSize+len(p) > len(buf) {
+	if rdmaStreamFrameHeaderSize+len(p) > size {
 		return fmt.Errorf("rdma: write size %d exceeds send buffer %d", len(p), len(buf))
 	}
-	binary.BigEndian.PutUint32(buf[:rdmaStreamFrameHeaderSize], uint32(len(p)))
-	copy(buf[rdmaStreamFrameHeaderSize:], p)
+	frame := buf[offset : offset+size]
+	binary.BigEndian.PutUint32(frame[:rdmaStreamFrameHeaderSize], uint32(len(p)))
+	copy(frame[rdmaStreamFrameHeaderSize:], p)
 	id := c.sendID
 	c.sendID++
-	if err := c.t.postSend(0, rdmaStreamFrameHeaderSize+len(p), id); err != nil {
+	if err := c.t.postSend(offset, rdmaStreamFrameHeaderSize+len(p), id); err != nil {
 		return err
 	}
+	return c.waitWorkLocked(id)
+}
+
+func (c *rdmaStreamConn) writeBatchLocked(p []byte) (int, error) {
+	size := rdmaStreamSlotSize(len(c.send), c.nsend)
+	works := &c.sends
+	nwork := 0
+	written := 0
+	for nwork < c.nsend && len(p) > 0 {
+		n := len(p)
+		if n > c.max {
+			n = c.max
+		}
+		offset := nwork * size
+		frame := c.send[offset : offset+size]
+		binary.BigEndian.PutUint32(frame[:rdmaStreamFrameHeaderSize], uint32(n))
+		copy(frame[rdmaStreamFrameHeaderSize:], p[:n])
+		id := c.sendID
+		c.sendID++
+		works[nwork] = rdmaStreamPostWork{Offset: offset, Length: rdmaStreamFrameHeaderSize + n, ID: id}
+		nwork++
+		written += n
+		p = p[n:]
+	}
+	if bt, ok := c.t.(rdmaStreamSendBatchTransport); ok {
+		if err := bt.postSends(works, nwork); err != nil {
+			return 0, err
+		}
+	} else {
+		for i := 0; i < nwork; i++ {
+			work := works[i]
+			if err := c.t.postSend(work.Offset, work.Length, work.ID); err != nil {
+				return 0, err
+			}
+		}
+	}
+	for i := 0; i < nwork; i++ {
+		if err := c.waitWorkLocked(works[i].ID); err != nil {
+			return 0, err
+		}
+	}
+	return written, nil
+}
+
+func (c *rdmaStreamConn) waitWorkLocked(id uint64) error {
 	for {
 		ctx, dl := c.writePollContext()
 		_, err := c.pollWorkID(ctx, id)
@@ -495,7 +570,7 @@ const (
 	rdmaStreamFrameHeaderSize = 4
 	rdmaStreamSendWorkID      = 1
 	rdmaStreamRecvWorkID      = 1 << 32
-	rdmaStreamSendSlots       = 1
+	rdmaStreamMaxSendSlots    = 2
 	rdmaStreamMaxRecvSlots    = 2
 	rdmaStreamMinSlotPayload  = 1024 * 1024
 )
@@ -508,6 +583,13 @@ type rdmaStreamRecvSlot struct {
 func rdmaStreamRecvSlotCount(n int) int {
 	if rdmaStreamSlotPayload(n, rdmaStreamMaxRecvSlots) >= rdmaStreamMinSlotPayload {
 		return rdmaStreamMaxRecvSlots
+	}
+	return 1
+}
+
+func rdmaStreamSendSlotCount(n int) int {
+	if rdmaStreamSlotPayload(n, rdmaStreamMaxSendSlots) >= rdmaStreamMinSlotPayload {
+		return rdmaStreamMaxSendSlots
 	}
 	return 1
 }

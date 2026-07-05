@@ -114,6 +114,10 @@ func (t *rdmaStreamResourceTransport) postSend(offset, length int, id uint64) er
 	return postRDMAStreamSend(t.qp, t.sendMR, offset, length, id)
 }
 
+func (t *rdmaStreamResourceTransport) postSends(works *[rdmaStreamMaxSendSlots]rdmaStreamPostWork, n int) error {
+	return postRDMAStreamMany(t.qp, t.sendMR, works[:n], true)
+}
+
 func (t *rdmaStreamResourceTransport) postRecv(offset, length int, id uint64) error {
 	return postRDMAStreamRecv(t.qp, t.recvMR, offset, length, id)
 }

@@ -322,7 +322,7 @@ type fakeRDMAStreamResource struct {
 	completions []rdmaStreamWorkRequest
 	peer        *fakeRDMAStreamResource
 	closed      bool
-	postSends   int
+	sendPosts   int
 }
 
 func (r *fakeRDMAStreamResource) localDestination() (rdmaStreamDestination, error) {
@@ -358,15 +358,28 @@ func (r *fakeRDMAStreamResource) postRecvs(works *[rdmaStreamMaxRecvSlots]rdmaSt
 }
 
 func (r *fakeRDMAStreamResource) postSend(offset, length int, id uint64) error {
+	return r.postSendWork(rdmaStreamPostWork{Offset: offset, Length: length, ID: id})
+}
+
+func (r *fakeRDMAStreamResource) postSends(works *[rdmaStreamMaxSendSlots]rdmaStreamPostWork, n int) error {
+	for i := 0; i < n; i++ {
+		if err := r.postSendWork(works[i]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *fakeRDMAStreamResource) postSendWork(sendWork rdmaStreamPostWork) error {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
 		return context.Canceled
 	}
-	r.postSends++
-	r.completions = append(r.completions, rdmaStreamWorkRequest{ID: id, Bytes: length})
+	r.sendPosts++
+	r.completions = append(r.completions, rdmaStreamWorkRequest{ID: sendWork.ID, Bytes: sendWork.Length})
 	peer := r.peer
-	send := r.send[offset : offset+length]
+	send := r.send[sendWork.Offset : sendWork.Offset+sendWork.Length]
 	r.mu.Unlock()
 
 	peer.mu.Lock()
@@ -374,18 +387,18 @@ func (r *fakeRDMAStreamResource) postSend(offset, length int, id uint64) error {
 	if len(peer.recvPosted) == 0 {
 		return context.Canceled
 	}
-	work := peer.recvPosted[0]
+	recvWork := peer.recvPosted[0]
 	copy(peer.recvPosted, peer.recvPosted[1:])
 	peer.recvPosted = peer.recvPosted[:len(peer.recvPosted)-1]
-	copy(peer.recv[work.Offset:], send)
-	peer.completions = append(peer.completions, rdmaStreamWorkRequest{ID: work.ID, Bytes: len(send)})
+	copy(peer.recv[recvWork.Offset:], send)
+	peer.completions = append(peer.completions, rdmaStreamWorkRequest{ID: recvWork.ID, Bytes: len(send)})
 	return nil
 }
 
 func (r *fakeRDMAStreamResource) postSendCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.postSends
+	return r.sendPosts
 }
 
 func (r *fakeRDMAStreamResource) poll(ctx context.Context, out []rdmaStreamWorkRequest) ([]rdmaStreamWorkRequest, error) {

@@ -75,6 +75,13 @@ func TestRDMAStreamConnChunksOversizedWrite(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("read = %q, want %q", got, want)
 	}
+	a.mu.Lock()
+	sendPosts := a.sendPosts
+	sendBatches := a.sendBatches
+	a.mu.Unlock()
+	if sendPosts != 2 || sendBatches != 1 {
+		t.Fatalf("send posts = %d batches = %d, want 2 posts in 1 batch", sendPosts, sendBatches)
+	}
 }
 
 func TestRDMAStreamConnMaxPayload(t *testing.T) {
@@ -696,6 +703,8 @@ type memRDMAStreamTransport struct {
 	maxPoll     int
 	recvPosts   int
 	recvBatches int
+	sendPosts   int
+	sendBatches int
 }
 
 func newMemRDMAStreamTransportPair(size int) (*memRDMAStreamTransport, *memRDMAStreamTransport) {
@@ -729,14 +738,31 @@ func (t *memRDMAStreamTransport) postRecvs(works *[rdmaStreamMaxRecvSlots]rdmaSt
 }
 
 func (t *memRDMAStreamTransport) postSend(offset, length int, id uint64) error {
+	return t.postSendWork(rdmaStreamPostWork{Offset: offset, Length: length, ID: id})
+}
+
+func (t *memRDMAStreamTransport) postSends(works *[rdmaStreamMaxSendSlots]rdmaStreamPostWork, n int) error {
+	for i := 0; i < n; i++ {
+		if err := t.postSendWork(works[i]); err != nil {
+			return err
+		}
+	}
+	t.mu.Lock()
+	t.sendBatches++
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *memRDMAStreamTransport) postSendWork(sendWork rdmaStreamPostWork) error {
 	t.mu.Lock()
 	if t.closed {
 		t.mu.Unlock()
 		return context.Canceled
 	}
-	t.completions = append(t.completions, rdmaStreamWorkRequest{ID: id, Bytes: length})
+	t.sendPosts++
+	t.completions = append(t.completions, rdmaStreamWorkRequest{ID: sendWork.ID, Bytes: sendWork.Length})
 	peer := t.peer
-	send := t.send[offset : offset+length]
+	send := t.send[sendWork.Offset : sendWork.Offset+sendWork.Length]
 	t.mu.Unlock()
 
 	peer.mu.Lock()
@@ -744,11 +770,11 @@ func (t *memRDMAStreamTransport) postSend(offset, length int, id uint64) error {
 	if len(peer.recvPosted) == 0 {
 		return context.Canceled
 	}
-	work := peer.recvPosted[0]
+	recvWork := peer.recvPosted[0]
 	copy(peer.recvPosted, peer.recvPosted[1:])
 	peer.recvPosted = peer.recvPosted[:len(peer.recvPosted)-1]
-	copy(peer.recv[work.Offset:], send)
-	peer.completions = append(peer.completions, rdmaStreamWorkRequest{ID: work.ID, Bytes: len(send)})
+	copy(peer.recv[recvWork.Offset:], send)
+	peer.completions = append(peer.completions, rdmaStreamWorkRequest{ID: recvWork.ID, Bytes: len(send)})
 	return nil
 }
 
