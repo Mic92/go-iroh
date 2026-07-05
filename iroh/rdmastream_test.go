@@ -70,6 +70,58 @@ func TestRDMAStreamControlsFallback(t *testing.T) {
 	}
 }
 
+func TestLocalRDMAStreamAddrsPrefersThunderboltControls(t *testing.T) {
+	old := rdmaLocalLinks
+	rdmaLocalLinks = func(ctx context.Context) ([]RDMALink, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []RDMALink{{Device: "rdma_en3", LinkLayer: rdmaLinkLayerThunderbolt}}, nil
+	}
+	defer func() { rdmaLocalLinks = old }()
+
+	addrs, err := localRDMAStreamAddrs(context.Background(), 99, []rdmaStreamControlAddr{
+		{Addr: "127.0.0.1:1", Class: TransportLinkLoopback},
+		{Addr: "[fe80::1%bridge0]:1", Class: TransportLinkThunderbolt},
+		{Addr: "192.0.2.1:1", Class: TransportLinkWiredLAN},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(addrs) != 1 {
+		t.Fatalf("len(addrs) = %d, want 1", len(addrs))
+	}
+	got, err := ParseStreamLinkAddr(addrs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DialAddr != "rdma:rdma_en3@[fe80::1%bridge0]:1" {
+		t.Fatalf("dial addr = %q, want thunderbolt control", got.DialAddr)
+	}
+}
+
+func TestLocalRDMAStreamAddrsKeepsFallbackControls(t *testing.T) {
+	old := rdmaLocalLinks
+	rdmaLocalLinks = func(ctx context.Context) ([]RDMALink, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []RDMALink{{Device: "rdma_en3", LinkLayer: rdmaLinkLayerThunderbolt}}, nil
+	}
+	defer func() { rdmaLocalLinks = old }()
+
+	addrs, err := localRDMAStreamAddrs(context.Background(), 99, []rdmaStreamControlAddr{
+		{Addr: "127.0.0.1:1", Class: TransportLinkLoopback},
+		{Addr: "192.0.2.1:1", Class: TransportLinkWiredLAN},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(addrs) != 2 {
+		t.Fatalf("len(addrs) = %d, want 2", len(addrs))
+	}
+}
+
 func TestRDMAStreamTransportDialUnsupported(t *testing.T) {
 	tr, err := NewRDMAStreamTransport(99)
 	if err != nil {

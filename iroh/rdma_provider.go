@@ -28,6 +28,8 @@ type rdmaStreamControlAddr struct {
 	Class TransportLinkClass
 }
 
+var rdmaLocalLinks = LocalRDMALinks
+
 func rdmaStreamDialAddr(link RDMALink, control string) string {
 	if control == "" {
 		return "rdma:" + link.Device
@@ -58,7 +60,7 @@ func rdmaStreamAddr(id uint64, link RDMALink, control string) netaddr.CustomAddr
 }
 
 func localRDMAStreamAddrs(ctx context.Context, id uint64, controls []rdmaStreamControlAddr) ([]netaddr.CustomAddr, error) {
-	links, err := LocalRDMALinks(ctx)
+	links, err := rdmaLocalLinks(ctx)
 	if err != nil {
 		return nil, err
 	}
