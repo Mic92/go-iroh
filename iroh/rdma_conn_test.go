@@ -613,15 +613,21 @@ func BenchmarkRDMAStreamConnMemoryThroughput2MiBWrite(b *testing.B) {
 
 	buf := make([]byte, 2*1024*1024)
 	got := make([]byte, len(buf))
+	writec := make(chan []byte)
+	done := make(chan error)
+	go func() {
+		for p := range writec {
+			_, err := ac.Write(p)
+			done <- err
+		}
+	}()
+	defer close(writec)
+
 	b.SetBytes(int64(len(buf)))
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		done := make(chan error, 1)
-		go func() {
-			_, err := ac.Write(buf)
-			done <- err
-		}()
+		writec <- buf
 		if _, err := io.ReadFull(bc, got); err != nil {
 			b.Fatalf("read rdma stream: %v", err)
 		}
