@@ -166,6 +166,23 @@ func runClient(ctx context.Context, ba netip.AddrPort, rm relay.Mode, idStr, pee
 	}
 
 	start := time.Now()
+	// Periodic path dump so a stalled transfer shows which path is selected
+	// and whether bytes are moving (per-path counters), without debug logs.
+	dumpDone := make(chan struct{})
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-dumpDone:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				dumpPaths(conn, fmt.Sprintf("t+%s", time.Since(start).Truncate(time.Second)))
+			}
+		}
+	}()
 	for off := 0; off < len(payload); {
 		end := off + 64*1024
 		if end > len(payload) {
@@ -177,6 +194,7 @@ func runClient(ctx context.Context, ba netip.AddrPort, rm relay.Mode, idStr, pee
 		}
 		off += nw
 	}
+	close(dumpDone)
 	if err := st.Close(); err != nil {
 		log.Fatalf("close send: %v", err)
 	}
@@ -239,7 +257,7 @@ func dumpPaths(conn *iroh.Conn, label string) {
 		if p.HasAddr {
 			addr = p.Addr.String()
 		}
-		fmt.Printf("  id=%d validated=%v selected=%v relayed=%v addr=%s rtt=%s\n",
-			p.ID, p.Validated, p.Selected, p.Relayed, addr, p.RTT)
+		fmt.Printf("  id=%d validated=%v selected=%v relayed=%v addr=%s rtt=%s sent=%d recv=%d\n",
+			p.ID, p.Validated, p.Selected, p.Relayed, addr, p.RTT, p.BytesSent, p.BytesReceived)
 	}
 }

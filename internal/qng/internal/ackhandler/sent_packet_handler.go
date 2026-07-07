@@ -1068,8 +1068,10 @@ func (h *sentPacketHandler) getScaledPTO(includeMaxAckDelay bool) time.Duration 
 	return pto
 }
 
-// same logic as getLossTimeAndSpace, but for lastAckElicitingPacketTime instead of lossTime
-func (h *sentPacketHandler) getPTOTimeAndSpace(now monotime.Time) (pto monotime.Time, encLevel protocol.EncryptionLevel) {
+// same logic as getLossTimeAndSpace, but for lastAckElicitingPacketTime instead of lossTime.
+// For Encryption1RTT the returned pid is the application-data path whose
+// deadline expires first; for all other levels it is PathIDZero.
+func (h *sentPacketHandler) getPTOTimeAndSpace(now monotime.Time) (pto monotime.Time, encLevel protocol.EncryptionLevel, pid protocol.PathID) {
 	// We only send application data probe packets once the handshake is confirmed,
 	// because before that, we don't have the keys to decrypt ACKs sent in 1-RTT packets.
 	if !h.handshakeConfirmed && !h.hasOutstandingCryptoPackets() {
@@ -1078,9 +1080,9 @@ func (h *sentPacketHandler) getPTOTimeAndSpace(now monotime.Time) (pto monotime.
 		}
 		t := now.Add(h.getScaledPTO(false))
 		if h.initialPackets != nil {
-			return t, protocol.EncryptionInitial
+			return t, protocol.EncryptionInitial, protocol.PathIDZero
 		}
-		return t, protocol.EncryptionHandshake
+		return t, protocol.EncryptionHandshake, protocol.PathIDZero
 	}
 
 	if h.initialPackets != nil && h.initialPackets.history.HasOutstandingPackets() &&
@@ -1101,7 +1103,7 @@ func (h *sentPacketHandler) getPTOTimeAndSpace(now monotime.Time) (pto monotime.
 	// Fan out over the application-data paths. With one path (PathIDZero) this
 	// is the same single appData PTO computation as before.
 	if h.handshakeConfirmed {
-		for _, p := range h.appDataPaths {
+		for pathID, p := range h.appDataPaths {
 			if !p.space.history.HasOutstandingPackets() || p.space.lastAckElicitingPacketTime.IsZero() {
 				continue
 			}
@@ -1109,10 +1111,11 @@ func (h *sentPacketHandler) getPTOTimeAndSpace(now monotime.Time) (pto monotime.
 			if pto.IsZero() || (!t.IsZero() && t.Before(pto)) {
 				pto = t
 				encLevel = protocol.Encryption1RTT
+				pid = pathID
 			}
 		}
 	}
-	return pto, encLevel
+	return pto, encLevel, pid
 }
 
 func (h *sentPacketHandler) hasOutstandingCryptoPackets() bool {
@@ -1179,7 +1182,7 @@ func (h *sentPacketHandler) lossDetectionTime(now monotime.Time) alarmTimer {
 			EncryptionLevel: encLevel,
 		}
 	}
-	ptoTime, encLevel := h.getPTOTimeAndSpace(now)
+	ptoTime, encLevel, _ := h.getPTOTimeAndSpace(now)
 	if !ptoTime.IsZero() && (pathProbeLossTime.IsZero() || ptoTime.Before(pathProbeLossTime)) {
 		return alarmTimer{
 			Time:            ptoTime,
@@ -1365,8 +1368,19 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 		return nil
 	}
 
-	ptoTime, encLevel := h.getPTOTimeAndSpace(now)
+	ptoTime, encLevel, ptoPathID := h.getPTOTimeAndSpace(now)
 	if ptoTime.IsZero() {
+		return nil
+	}
+	if encLevel == protocol.Encryption1RTT && ptoPathID != protocol.PathIDZero {
+		// PTO probes are only ever sent on path 0, so a probe can never
+		// refresh this path's lastAckElicitingPacketTime: once its PTO
+		// deadline has expired, re-arming the timer would fire it again
+		// immediately, forever. The path has gone a full PTO backoff without
+		// an acknowledgment; declare its outstanding packets lost so their
+		// frames retransmit on path 0 and the path stops arming the timer.
+		h.declareAppDataPathLost(ptoPathID)
+		h.setLossDetectionTimer(now)
 		return nil
 	}
 	ps := h.getPacketNumberSpace(encLevel)
@@ -1650,6 +1664,29 @@ func (h *sentPacketHandler) ResetForRetry(now monotime.Time) {
 		}
 	}
 	appData.ptoCount = 0
+}
+
+// declareAppDataPathLost declares every outstanding packet on the given
+// application-data path lost, requeueing the frames of ack-eliciting packets
+// for retransmission (they will be resent on path 0), and drops the path's
+// outstanding path probes.
+func (h *sentPacketHandler) declareAppDataPathLost(pid protocol.PathID) {
+	path, ok := h.appDataPaths[pid]
+	if !ok {
+		return
+	}
+	for pn, p := range path.space.history.Packets() {
+		path.space.history.DeclareLost(pn)
+		if !p.isPathProbePacket {
+			h.removeFromBytesInFlight(p)
+			if p.IsAckEliciting() {
+				h.queueFramesForRetransmission(p)
+			}
+		}
+	}
+	for pn := range path.space.history.PathProbes() {
+		path.space.history.RemovePathProbe(pn)
+	}
 }
 
 func (h *sentPacketHandler) MigratedPath(now monotime.Time, initialMaxDatagramSize protocol.ByteCount) {

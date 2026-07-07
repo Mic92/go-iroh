@@ -438,13 +438,13 @@ func TestSentPacketHandlerLossTimeAndSpaceSinglePath(t *testing.T) {
 	if lt, _, _ := h.getLossTimeAndSpace(); !lt.IsZero() {
 		t.Errorf("getLossTimeAndSpace with nothing sent = %v, want zero", lt)
 	}
-	if pt, _ := h.getPTOTimeAndSpace(now); !pt.IsZero() {
+	if pt, _, _ := h.getPTOTimeAndSpace(now); !pt.IsZero() {
 		t.Errorf("getPTOTimeAndSpace with nothing sent = %v, want zero", pt)
 	}
 
 	// Send a packet: PTO time/space should reference the 1-RTT space.
 	sendAppDataPacket(h, now, 1000)
-	ptoTime, ptoEncLevel := h.getPTOTimeAndSpace(now)
+	ptoTime, ptoEncLevel, _ := h.getPTOTimeAndSpace(now)
 	if ptoTime.IsZero() {
 		t.Fatalf("expected non-zero PTO time after sending an ack-eliciting packet")
 	}
@@ -675,4 +675,54 @@ func equalPNs(a, b []protocol.PacketNumber) bool {
 		}
 	}
 	return true
+}
+
+// TestPTOOnNonZeroPathDrainsPath is the regression gate for the PTO spin loop:
+// PTO probes are only ever sent on path 0, so a probe can never refresh a
+// non-zero path's lastAckElicitingPacketTime. When such a path's PTO deadline
+// expires, the handler must drain the path (declare its outstanding packets
+// lost) rather than arm path-0 probes — otherwise the expired deadline
+// re-fires the alarm immediately, forever (observed live as the PTO count
+// climbing ~1000/s until the tracked-packet limit killed the connection).
+func TestPTOOnNonZeroPathDrainsPath(t *testing.T) {
+	h, _ := newOracleSentHandler(t)
+	now := monotime.Now()
+
+	if err := h.AddPath(protocol.PathID(1)); err != nil {
+		t.Fatalf("AddPath(1): %v", err)
+	}
+	// One ack-eliciting packet on path 1, never acknowledged.
+	pn := h.PopPacketNumberForPath(protocol.PathID(1))
+	h.SentPacketForPath(now, pn, protocol.InvalidPacketNumber, protocol.PathID(1), nil,
+		[]Frame{ackElicitingFrame()}, protocol.ECNNon, 1200, false)
+
+	path1 := h.getAppDataPath(protocol.PathID(1))
+	if !path1.space.history.HasOutstandingPackets() {
+		t.Fatalf("path 1 has no outstanding packets after SentPacketForPath")
+	}
+
+	ptoTime, encLevel, pid := h.getPTOTimeAndSpace(now)
+	if ptoTime.IsZero() || encLevel != protocol.Encryption1RTT || pid != protocol.PathID(1) {
+		t.Fatalf("getPTOTimeAndSpace = (%v, %v, %v), want non-zero 1-RTT deadline on path 1",
+			ptoTime, encLevel, pid)
+	}
+
+	// Fire the PTO past the deadline: the path must drain, not probe.
+	late := ptoTime.Add(time.Second)
+	if err := h.OnLossDetectionTimeout(late); err != nil {
+		t.Fatalf("OnLossDetectionTimeout: %v", err)
+	}
+	if path1.space.history.HasOutstandingPackets() {
+		t.Errorf("path 1 still has outstanding packets after its PTO fired; an expired deadline would re-fire forever")
+	}
+	if path1.bytesInFlight != 0 {
+		t.Errorf("path 1 bytesInFlight = %d after drain, want 0", path1.bytesInFlight)
+	}
+	if n := h.getAppDataPath(protocol.PathIDZero).numProbesToSend; n != 0 {
+		t.Errorf("PTO on a non-zero path armed %d path-0 probes, want 0", n)
+	}
+	// The re-armed alarm must not be stuck in the past.
+	if alarm := h.GetLossDetectionTimeout(); !alarm.IsZero() && !alarm.After(late) {
+		t.Errorf("loss detection alarm %v not after %v; the alarm would re-fire immediately", alarm, late)
+	}
 }

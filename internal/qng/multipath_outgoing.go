@@ -113,10 +113,22 @@ type multipathOutgoing struct {
 	// QNT migration. For the relay-first path this is the relay-mapped address;
 	// for direct-first dials Endpoint may seed a relay fallback explicitly.
 	premigrationRemote net.Addr
-	// migrationDisabled is set after a revert so a flapping direct link cannot
-	// oscillate the ordinary send path within one connection.
-	migrationDisabled bool
+	// revertedRoute / revertedRouteUntil impose a cooldown on re-migrating to
+	// a route that was recently reverted. A fresh QNT validation is evidence a
+	// route came back (the challenge round-tripped on the exact 4-tuple), but
+	// validated candidates from the same round can arrive seconds apart, and
+	// re-migrating into a link that is still flapping would churn the
+	// connection through repeated congestion resets. After the cooldown a
+	// freshly validated route is trusted again, so a transient flap does not
+	// forfeit the direct path for the connection's lifetime.
+	revertedRoute      netip.AddrPort
+	revertedRouteUntil monotime.Time
 }
+
+// qntRemigrationCooldown is how long after a revert a reverted route is
+// refused re-migration. QNT re-validates routes on the holepunch upgrade
+// cadence, so one cooldown window typically spans a full validation round.
+const qntRemigrationCooldown = 30 * time.Second
 
 func newMultipathOutgoing() *multipathOutgoing {
 	return &multipathOutgoing{
@@ -481,8 +493,11 @@ func (c *Conn) migrateOrdinarySendToQNTRoute(route netip.AddrPort, now monotime.
 	if !route.IsValid() || route.Port() == 0 {
 		return
 	}
-	if c.multipathOut != nil && (c.multipathOut.migratedRemote == route || c.multipathOut.migrationDisabled) {
-		return
+	if m := c.multipathOut; m != nil {
+		if m.migratedRemote == route ||
+			(m.revertedRoute == route && now.Before(m.revertedRouteUntil)) {
+			return
+		}
 	}
 	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
@@ -549,8 +564,9 @@ func (c *Conn) revertQNTMigration(now monotime.Time) {
 	c.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
 	c.mtuDiscoverer.Reset(now, initialPacketSize, maxPacketSize)
 	c.conn.ChangeRemoteAddr(m.premigrationRemote, packetInfo{})
+	m.revertedRoute = m.migratedRemote
+	m.revertedRouteUntil = now.Add(qntRemigrationCooldown)
 	m.migratedRemote = netip.AddrPort{}
-	m.migrationDisabled = true
 	c.scheduleSending()
 }
 
