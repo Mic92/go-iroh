@@ -13,6 +13,7 @@ import (
 type sendConn interface {
 	Write(b []byte, gsoSize uint16, ecn protocol.ECN) error
 	WriteTo([]byte, net.Addr) error
+	WriteToInfo([]byte, net.Addr, packetInfo) error
 	Close() error
 	LocalAddr() net.Addr
 	RemoteAddr() net.Addr
@@ -118,6 +119,13 @@ func (c *sconn) WriteTo(b []byte, addr net.Addr) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
 	_, err := c.WritePacket(b, addr, nil, 0, protocol.ECNUnsupported)
+	return err
+}
+
+func (c *sconn) WriteToInfo(b []byte, addr net.Addr, info packetInfo) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	_, err := c.WritePacket(b, addr, info.OOB(), 0, protocol.ECNUnsupported)
 	return err
 }
 

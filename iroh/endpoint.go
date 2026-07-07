@@ -43,6 +43,7 @@ type Endpoint struct {
 	keyLogWriter io.Writer
 	sessionCache *SessionCache
 	disableIP    bool
+	relayFirst   bool
 	verifySource func(net.Addr) bool
 	hooks        []EndpointHooks
 	custom       []CustomTransport
@@ -96,6 +97,7 @@ type config struct {
 	keyLogWriter    io.Writer
 	transportConfig *QUICTransportConfig
 	pathSelector    socket.PathSelector
+	relayFirst      bool
 	verifySource    func(net.Addr) bool
 	hooks           []EndpointHooks
 	custom          []CustomTransport
@@ -219,6 +221,17 @@ func WithoutIPTransports() Option {
 func WithoutRelayTransports() Option {
 	return func(c *config) error {
 		c.relayMode = relay.ModeDisabled()
+		return nil
+	}
+}
+
+// WithRelayFirstDial makes Connect try relay addresses before direct IP
+// addresses when both are present. Direct IP addresses are still registered as
+// QNT candidates after the handshake, so a connection can establish through a
+// relay and then migrate ordinary traffic to a validated direct path.
+func WithRelayFirstDial() Option {
+	return func(c *config) error {
+		c.relayFirst = true
 		return nil
 	}
 }
@@ -447,6 +460,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		// build where bindPacketConn never returns a socket), so IP addresses
 		// must not be advertised regardless of the requested disableIP.
 		disableIP:    c.disableIP || udp == nil,
+		relayFirst:   c.relayFirst,
 		verifySource: c.verifySource,
 		hooks:        append([]EndpointHooks(nil), c.hooks...),
 		custom:       append([]CustomTransport(nil), c.custom...),
@@ -1060,6 +1074,11 @@ var ErrConnectRejected = errors.New("iroh: connect rejected by hook")
 // handshake.
 var ErrHandshakeRejected = errors.New("iroh: handshake rejected by hook")
 
+// ErrConnClosedDuringHandshake is returned when an incoming connection attempt
+// dies before completing its handshake (for example, a handshake timeout).
+// [Endpoint.Accept] skips such attempts and keeps accepting.
+var ErrConnClosedDuringHandshake = errors.New("iroh: connection closed during handshake")
+
 // Connect dials the endpoint identified by addr and negotiates alpn, returning
 // an established [Conn]. It tries the direct IP addresses in addr in order, then
 // (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
@@ -1186,10 +1205,10 @@ func (e *Endpoint) Dial(ctx context.Context, addr netaddr.EndpointAddr, alpn str
 // mapped-address table so the magic socket routes its QUIC packets to the
 // selected transport.
 func (e *Endpoint) dialTargets(addr netaddr.EndpointAddr) []net.Addr {
-	var targets []net.Addr
+	var ips, customs, relays []net.Addr
 	if !e.disableIP {
 		for _, ip := range addr.IPAddrs() {
-			targets = append(targets, net.UDPAddrFromAddrPort(ip))
+			ips = append(ips, net.UDPAddrFromAddrPort(ip))
 		}
 	}
 	for _, ta := range addr.Addrs() {
@@ -1198,13 +1217,24 @@ func (e *Endpoint) dialTargets(addr netaddr.EndpointAddr) []net.Addr {
 			continue
 		}
 		m := e.sock.CustomMappedAddrFor(c)
-		targets = append(targets, net.UDPAddrFromAddrPort(m.AddrPort()))
+		customs = append(customs, net.UDPAddrFromAddrPort(m.AddrPort()))
 	}
 	if e.relay != nil {
 		for _, u := range addr.RelayURLs() {
 			m := e.sock.RelayMappedAddrFor(u, addr.ID)
-			targets = append(targets, net.UDPAddrFromAddrPort(m.AddrPort()))
+			relays = append(relays, net.UDPAddrFromAddrPort(m.AddrPort()))
 		}
+	}
+	var targets []net.Addr
+	if e.relayFirst {
+		targets = append(targets, relays...)
+		targets = append(targets, ips...)
+	} else {
+		targets = append(targets, ips...)
+	}
+	targets = append(targets, customs...)
+	if !e.relayFirst {
+		targets = append(targets, relays...)
 	}
 	return targets
 }
@@ -1257,19 +1287,27 @@ func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 }
 
 func (e *Endpoint) accept(ctx context.Context) (*Conn, error) {
-	in, err := e.acceptIncoming(ctx)
-	if err != nil {
-		return nil, err
+	for {
+		in, err := e.acceptIncoming(ctx)
+		if err != nil {
+			return nil, err
+		}
+		accepting, err := in.Accept()
+		if err != nil {
+			return nil, err
+		}
+		conn, err := accepting.Connection(ctx)
+		if errors.Is(err, ErrConnClosedDuringHandshake) {
+			// A connection attempt dying before its handshake completes must
+			// not tear down the acceptor; wait for the next incoming
+			// connection instead.
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return conn, nil
 	}
-	accepting, err := in.Accept()
-	if err != nil {
-		return nil, err
-	}
-	conn, err := accepting.Connection(ctx)
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
 }
 
 func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, error) {
@@ -1280,10 +1318,24 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 	// and surface through Accept{,Uni}Stream after this returns.
 	select {
 	case <-qc.HandshakeComplete():
+		return e.connFromHandshake(ctx, qc)
+	default:
+	}
+	select {
+	case <-qc.HandshakeComplete():
+	case <-qc.Context().Done():
+		// The connection attempt died before completing its handshake
+		// (e.g. handshake timeout). HandshakeComplete only closes on
+		// success, so without this case the accept would block forever.
+		return nil, fmt.Errorf("%w: %w", ErrConnClosedDuringHandshake, context.Cause(qc.Context()))
 	case <-ctx.Done():
 		qc.CloseWithError(0, "")
 		return nil, ctx.Err()
 	}
+	return e.connFromHandshake(ctx, qc)
+}
+
+func (e *Endpoint) connFromHandshake(ctx context.Context, qc *quic.Conn) (*Conn, error) {
 	remote, err := peerEndpointID(qc.ConnectionState().TLS)
 	if err != nil {
 		qc.CloseWithError(0, "bad peer certificate")
@@ -1342,6 +1394,13 @@ func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn, remoteAddr
 	}
 	pathAddr := e.sock.PathAddr(remote, qc.RemoteAddr())
 	adapter := newConnAdapter(qc, pathAddr)
+	if pathAddr.Kind() == socket.AddrIP {
+		for _, u := range remoteAddr.RelayURLs() {
+			m := e.sock.RelayMappedAddrFor(u, remote)
+			qc.SetMigrationFallbackRemote(net.UDPAddrFromAddrPort(m.AddrPort()))
+			break
+		}
+	}
 	_, actor := e.remotes.AddConnectionActor(remote, adapter)
 	go func() {
 		_ = e.remotes.ResolveRemote(remoteAddr)

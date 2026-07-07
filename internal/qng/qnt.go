@@ -611,6 +611,30 @@ func qntHasProbeLocked(st *qntLocalState, addr netip.AddrPort) bool {
 	return false
 }
 
+// qntKnownCandidate reports whether source is a QNT candidate this connection
+// is aware of: a probe target (pending/sent/validated) or an advertised remote
+// address. A PATH_CHALLENGE arriving from such an address is a QNT probe on a
+// new candidate 4-tuple and must be answered on that same 4-tuple so the peer
+// can validate it, independent of RFC 9000 migration perspective rules.
+func (c *Conn) qntKnownCandidate(source netip.AddrPort) bool {
+	source = canonicalNATTraversalAddr(source)
+	if !source.IsValid() {
+		return false
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if qntHasProbeLocked(st, source) {
+		return true
+	}
+	for _, addr := range st.remote.addresses() {
+		if addr == source {
+			return true
+		}
+	}
+	return false
+}
+
 func qntProbeCountLocked(st *qntLocalState) int {
 	n := len(st.pendingProbes) + len(st.validatedProbes)
 	for _, sent := range st.sentProbes {

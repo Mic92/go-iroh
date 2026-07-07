@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"sort"
 	"time"
@@ -103,6 +104,18 @@ type multipathOutgoing struct {
 	// nextPathID is the PathID to assign to the next opened path. PathIDZero is
 	// the always-present initial path, so non-zero paths start at 1.
 	nextPathID protocol.PathID
+	// migratedRemote is the direct route the ordinary (path-0) send conn has been
+	// migrated onto after a QNT route was validated+selected. Zero until the first
+	// migration; guards processQNTValidatedPathOpen against re-migrating every
+	// round. Ordinary stream frames egress here, not the relay-mapped remote.
+	migratedRemote netip.AddrPort
+	// premigrationRemote is the ordinary send remote captured before the first
+	// QNT migration. For the relay-first path this is the relay-mapped address;
+	// for direct-first dials Endpoint may seed a relay fallback explicitly.
+	premigrationRemote net.Addr
+	// migrationDisabled is set after a revert so a flapping direct link cannot
+	// oscillate the ordinary send path within one connection.
+	migrationDisabled bool
 }
 
 func newMultipathOutgoing() *multipathOutgoing {
@@ -310,6 +323,49 @@ func (c *Conn) Paths() []PathInfo {
 	}
 }
 
+// SetMigrationFallbackRemote records a fallback remote for QNT active
+// migration. It is used when the connection was established directly but the
+// caller also knows a relay route for the peer.
+func (c *Conn) SetMigrationFallbackRemote(addr net.Addr) {
+	if addr == nil {
+		return
+	}
+	req := &setMigrationFallbackRequest{addr: addr, done: make(chan struct{})}
+	select {
+	case c.setMigrationFallbackQueue <- req:
+	case <-c.ctx.Done():
+		return
+	}
+	c.scheduleSending()
+	select {
+	case <-req.done:
+	case <-c.ctx.Done():
+	}
+}
+
+type setMigrationFallbackRequest struct {
+	addr net.Addr
+	done chan struct{}
+}
+
+func (c *Conn) processSetMigrationFallbackRequests() {
+	for {
+		select {
+		case req := <-c.setMigrationFallbackQueue:
+			if c.multipathOut == nil {
+				c.multipathOut = newMultipathOutgoing()
+			}
+			if c.multipathOut.premigrationRemote == nil ||
+				(c.conn != nil && addrsEqual(c.multipathOut.premigrationRemote, c.conn.RemoteAddr())) {
+				c.multipathOut.premigrationRemote = req.addr
+			}
+			close(req.done)
+		default:
+			return
+		}
+	}
+}
+
 // processPathSnapshotRequests answers pending Paths queries. Run goroutine
 // only (called from the run loop), so reading multipathOut is safe.
 func (c *Conn) processPathSnapshotRequests() {
@@ -385,18 +441,117 @@ func (c *Conn) processOpenPathRequests() error {
 
 // processQNTValidatedPathOpen consumes at most one validated QNT candidate and
 // provisions a route-bearing multipath path for it. Run goroutine only.
-func (c *Conn) processQNTValidatedPathOpen() error {
-	_, _, ok, err := c.qntOpenValidatedPathLocked()
+//
+// A QNT route provisioned here carries per-path DATAGRAM sends, but ordinary
+// QUIC stream frames egress through the connection's path-0 send conn, which
+// still targets the relay-mapped remote set at establishment. On the client,
+// once a direct route is validated+selected we also migrate the ordinary send
+// conn onto it (RFC 9000 §9 connection migration): change the send remote to
+// the direct 4-tuple and reset MTU for the new path. This makes stream payload
+// follow the selected direct path instead of staying on relay. The server then
+// observes app data on the direct path and completes its existing passive
+// migration.
+func (c *Conn) processQNTValidatedPathOpen(now monotime.Time) error {
+	_, route, ok, err := c.qntOpenValidatedPathLocked()
 	if errors.Is(err, ErrPathLimit) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if ok {
+	if ok && c.perspective == protocol.PerspectiveClient {
+		c.migrateOrdinarySendToQNTRoute(route, now)
 		c.scheduleSending()
 	}
 	return nil
+}
+
+// migrateOrdinarySendToQNTRoute points the connection's path-0 send conn at a
+// validated direct route so ordinary stream frames egress there. It mirrors the
+// server-side passive-migration block (handlePathChallenge) and runs at most
+// once per route, in the run goroutine.
+func (c *Conn) migrateOrdinarySendToQNTRoute(route netip.AddrPort, now monotime.Time) {
+	// Migrating the ordinary send conn touches the send-side recovery state and
+	// the live send conn, which only exist once the handshake is confirmed. The
+	// same gate guards driveMultipath. A QNT route only validates well after the
+	// handshake in practice, so this never skips a real migration.
+	if !c.handshakeConfirmed || c.conn == nil {
+		return
+	}
+	if !route.IsValid() || route.Port() == 0 {
+		return
+	}
+	if c.multipathOut != nil && (c.multipathOut.migratedRemote == route || c.multipathOut.migrationDisabled) {
+		return
+	}
+	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
+	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
+	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
+		maxPacketSize = c.peerParams.MaxUDPPayloadSize
+	}
+	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
+	c.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
+	c.mtuDiscoverer.Reset(now, initialPacketSize, maxPacketSize)
+	if c.multipathOut != nil && c.multipathOut.premigrationRemote == nil {
+		c.multipathOut.premigrationRemote = c.conn.RemoteAddr()
+	}
+	c.conn.ChangeRemoteAddr(net.UDPAddrFromAddrPort(route), packetInfo{})
+	// Send one ordinary non-probing frame on the migrated direct remote before
+	// application streams depend on it. The peer's existing RFC 9000 passive
+	// migration path switches its return address only after observing non-probing
+	// traffic on the new 4-tuple.
+	c.framer.QueueControlFrame(&wire.PingFrame{})
+	if c.multipathOut != nil {
+		c.multipathOut.migratedRemote = route
+	}
+}
+
+func (c *Conn) maybeRevertQNTMigrationOnPTO(now monotime.Time) {
+	const revertPTOThreshold = 3
+	m := c.multipathOut
+	if m == nil || !m.migratedRemote.IsValid() || m.premigrationRemote == nil {
+		return
+	}
+	if c.sentPacketHandler.PTOCount() < revertPTOThreshold {
+		return
+	}
+	c.revertQNTMigration(now)
+}
+
+func (c *Conn) maybeRevertQNTMigrationOnIdle(now monotime.Time) {
+	deadline := c.qntMigrationFallbackDeadline()
+	if deadline.IsZero() || now.Before(deadline) {
+		return
+	}
+	c.revertQNTMigration(now)
+}
+
+func (c *Conn) qntMigrationFallbackDeadline() monotime.Time {
+	m := c.multipathOut
+	if m == nil || !m.migratedRemote.IsValid() || m.premigrationRemote == nil {
+		return 0
+	}
+	threshold := max(5*time.Second, c.rttStats.PTO(true)*3)
+	return c.lastPacketReceivedTime.Add(threshold)
+}
+
+func (c *Conn) revertQNTMigration(now monotime.Time) {
+	m := c.multipathOut
+	if m == nil || !m.migratedRemote.IsValid() || m.premigrationRemote == nil {
+		return
+	}
+	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
+	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
+	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
+		maxPacketSize = c.peerParams.MaxUDPPayloadSize
+	}
+	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
+	c.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
+	c.mtuDiscoverer.Reset(now, initialPacketSize, maxPacketSize)
+	c.conn.ChangeRemoteAddr(m.premigrationRemote, packetInfo{})
+	m.migratedRemote = netip.AddrPort{}
+	m.migrationDisabled = true
+	c.scheduleSending()
 }
 
 // openPathLocked provisions a new non-zero path. Invariant: run goroutine only.
@@ -439,7 +594,8 @@ func (c *Conn) qntOpenValidatedPathLocked() (protocol.PathID, netip.AddrPort, bo
 		return protocol.PathIDZero, netip.AddrPort{}, false, nil
 	}
 	c.multipathOut.nextPathID++
-	st := &pathOpenState{id: pid, validatedChan: make(chan struct{}), qntRoute: route}
+	st := &pathOpenState{id: pid, validated: true, validatedChan: make(chan struct{}), qntRoute: route}
+	close(st.validatedChan)
 	c.multipathOut.paths[pid] = st
 	return pid, route, true, nil
 }

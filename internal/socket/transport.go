@@ -181,9 +181,11 @@ func (m *MagicConn) ReadFrom(p []byte) (int, net.Addr, error) {
 
 func (m *MagicConn) recvBatchAddr(b recvBatch) (net.Addr, bool) {
 	if b.ip.IsValid() {
-		return m.udpAddr(b.ip), true
+		addr := m.udpAddr(b.ip)
+		return addr, true
 	}
-	return m.recvAddr(b.info)
+	addr, ok := m.recvAddr(b.info)
+	return addr, ok
 }
 
 // Metrics returns a point-in-time copy of magic-socket counters.
@@ -217,13 +219,18 @@ func (m *MagicConn) recvAddr(info RecvInfo) (net.Addr, bool) {
 	switch info.Remote.kind {
 	case AddrIP:
 		ap, _ := info.Remote.IP()
-		return m.udpAddr(ap), true
+		addr := m.udpAddr(ap)
+		return addr, true
 	case AddrRelay:
 		url, eid, _ := info.Remote.Relay()
-		return m.udpAddr(m.sock.RelayMappedAddrFor(url, eid).AddrPort()), true
+		mapped := m.sock.RelayMappedAddrFor(url, eid).AddrPort()
+		addr := m.udpAddr(mapped)
+		return addr, true
 	case AddrCustom:
 		c, _ := info.Remote.Custom()
-		return m.udpAddr(m.sock.CustomMappedAddrFor(c).AddrPort()), true
+		mapped := m.sock.CustomMappedAddrFor(c).AddrPort()
+		addr := m.udpAddr(mapped)
+		return addr, true
 	default:
 		return nil, false
 	}

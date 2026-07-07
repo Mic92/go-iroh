@@ -3,6 +3,7 @@ package iroh
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -299,6 +300,15 @@ func (a *Accepting) ALPN(ctx context.Context) (string, error) {
 	}
 	select {
 	case <-a.qc.HandshakeComplete():
+		return a.qc.ConnectionState().TLS.NegotiatedProtocol, nil
+	default:
+	}
+	select {
+	case <-a.qc.HandshakeComplete():
+	case <-a.qc.Context().Done():
+		// HandshakeComplete only closes on success; unblock when the
+		// connection attempt dies before finishing its handshake.
+		return "", fmt.Errorf("%w: %w", ErrConnClosedDuringHandshake, context.Cause(a.qc.Context()))
 	case <-ctx.Done():
 		a.qc.CloseWithError(0, "")
 		return "", ctx.Err()

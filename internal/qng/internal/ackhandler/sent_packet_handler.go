@@ -1407,6 +1407,12 @@ func (h *sentPacketHandler) GetLossDetectionTimeout() monotime.Time {
 	return h.alarm.Time
 }
 
+// PTOCount reports the consecutive PTOs on the application-data path since the
+// last acknowledgment.
+func (h *sentPacketHandler) PTOCount() uint32 {
+	return h.getAppDataPath(protocol.PathIDZero).ptoCount
+}
+
 func (h *sentPacketHandler) ECNMode(isShortHeaderPacket bool) protocol.ECN {
 	if !h.enableECN {
 		return protocol.ECNUnsupported

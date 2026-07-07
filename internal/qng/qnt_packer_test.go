@@ -510,12 +510,15 @@ type qntProbeSendConn struct{}
 
 func (qntProbeSendConn) Write([]byte, uint16, protocol.ECN) error { return nil }
 func (qntProbeSendConn) WriteTo([]byte, net.Addr) error           { return nil }
-func (qntProbeSendConn) Close() error                             { return nil }
-func (qntProbeSendConn) LocalAddr() net.Addr                      { return &net.UDPAddr{} }
-func (qntProbeSendConn) RemoteAddr() net.Addr                     { return &net.UDPAddr{} }
-func (qntProbeSendConn) ChangeRemoteAddr(net.Addr, packetInfo)    {}
-func (qntProbeSendConn) capabilities() connCapabilities           { return connCapabilities{} }
-func (qntProbeSendConn) SetReadDeadline(time.Time) error          { return nil }
+func (qntProbeSendConn) WriteToInfo([]byte, net.Addr, packetInfo) error {
+	return nil
+}
+func (qntProbeSendConn) Close() error                          { return nil }
+func (qntProbeSendConn) LocalAddr() net.Addr                   { return &net.UDPAddr{} }
+func (qntProbeSendConn) RemoteAddr() net.Addr                  { return &net.UDPAddr{} }
+func (qntProbeSendConn) ChangeRemoteAddr(net.Addr, packetInfo) {}
+func (qntProbeSendConn) capabilities() connCapabilities        { return connCapabilities{} }
+func (qntProbeSendConn) SetReadDeadline(time.Time) error       { return nil }
 
 type noAckFrameSource struct{}
 

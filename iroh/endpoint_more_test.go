@@ -379,6 +379,33 @@ func TestEndpointTransportModeOptions(t *testing.T) {
 		t.Fatalf("WithoutIPTransports dialTargets = %v, want relay-only target", targets)
 	}
 
+	relayFirst, err := Bind(ctx,
+		WithRelayMode(relay.ModeCustom(relay.MapFromURLs(rurl))),
+		WithRelayFirstDial(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer relayFirst.Shutdown(ctx)
+	targets = relayFirst.dialTargets(addr)
+	if len(targets) != 2 {
+		t.Fatalf("WithRelayFirstDial dialTargets len = %d, want 2: %v", len(targets), targets)
+	}
+	first, ok := targets[0].(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("WithRelayFirstDial first target = %T, want *net.UDPAddr", targets[0])
+	}
+	if got := socket.Classify(netip.MustParseAddrPort(first.String()).Addr()); got != socket.KindRelay {
+		t.Fatalf("WithRelayFirstDial first target kind = %v, want relay", got)
+	}
+	second, ok := targets[1].(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("WithRelayFirstDial second target = %T, want *net.UDPAddr", targets[1])
+	}
+	if got := socket.Classify(netip.MustParseAddrPort(second.String()).Addr()); got != socket.KindIP {
+		t.Fatalf("WithRelayFirstDial second target kind = %v, want ip", got)
+	}
+
 	noRelay, err := Bind(ctx,
 		WithRelayMode(relay.ModeCustom(relay.MapFromURLs(rurl))),
 		WithoutRelayTransports(),

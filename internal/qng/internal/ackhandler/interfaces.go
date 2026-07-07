@@ -67,6 +67,9 @@ type SentPacketHandler interface {
 
 	GetLossDetectionTimeout() monotime.Time
 	OnLossDetectionTimeout(now monotime.Time) error
+	// PTOCount is the number of consecutive PTOs on the application-data path
+	// since the last acknowledgment.
+	PTOCount() uint32
 
 	MigratedPath(now monotime.Time, initialMaxPacketSize protocol.ByteCount)
 

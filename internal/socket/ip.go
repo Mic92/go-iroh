@@ -62,7 +62,8 @@ func (t *IpTransport) Serve(ctx context.Context) {
 		}
 		// The transport address is internal to iroh and is always the canonical
 		// (unmapped) form. iroh/src/socket/transports/ip.rs:219.
-		b := recvBatch{data: buf[:n], ip: canonicalAddrPort(ap), releaseIP: true}
+		cap := canonicalAddrPort(ap)
+		b := recvBatch{data: buf[:n], ip: cap, releaseIP: true}
 		if !t.enqueue(ctx, b) {
 			return
 		}
@@ -108,7 +109,9 @@ func putIPRecvBuffer(buf []byte) {
 // iroh/src/socket/transports/ip.rs:310 canonical_addr. It reports the number of
 // bytes written.
 func (t *IpTransport) send(p []byte, dst netip.AddrPort) (int, error) {
-	return t.conn.WriteToUDPAddrPort(p, canonicalAddrPort(dst))
+	dst = canonicalAddrPort(dst)
+	n, err := t.conn.WriteToUDPAddrPort(p, dst)
+	return n, err
 }
 
 func canonicalAddrPort(ap netip.AddrPort) netip.AddrPort {

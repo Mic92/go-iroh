@@ -1,12 +1,16 @@
 package iroh
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +19,14 @@ import (
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 )
+
+func TestMain(m *testing.M) {
+	if os.Getenv("GO_IROH_TWOPROC_SERVER") == "1" {
+		runTwoProcessDirectPathServer()
+		return
+	}
+	os.Exit(m.Run())
+}
 
 // connPair binds a server and client endpoint on loopback, dials, and returns
 // the dialed (client-side) and accepted (server-side) connections. Both
@@ -365,7 +377,7 @@ func TestConnTicketIPSeedsDirectPath(t *testing.T) {
 	}()
 
 	serverAddr := server.LocalAddr()
-	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(serverAddr), alpn)
+	conn, err := connectWithRetry(ctx, client, netaddr.NewEndpointAddr(server.ID()).WithIP(serverAddr), alpn)
 	if err != nil {
 		t.Fatalf("connect: %v", err)
 	}
@@ -396,6 +408,147 @@ func TestConnTicketIPSeedsDirectPath(t *testing.T) {
 	}
 }
 
+func TestConnTicketIPSeedsDirectPathTwoProcess(t *testing.T) {
+	ip := localNonLoopbackIPv4(t)
+	if !ip.IsValid() {
+		t.Skip("no non-loopback IPv4 address")
+	}
+	bind := netip.AddrPortFrom(ip, 0)
+	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	cmd.Env = append(os.Environ(),
+		"GO_IROH_TWOPROC_SERVER=1",
+		"GO_IROH_TWOPROC_BIND="+bind.String(),
+	)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	var idStr string
+	var serverAddr netip.AddrPort
+	scan := bufio.NewScanner(stdout)
+	deadline := time.After(5 * time.Second)
+	for idStr == "" || !serverAddr.IsValid() {
+		linec := make(chan string, 1)
+		errc := make(chan error, 1)
+		go func() {
+			if scan.Scan() {
+				linec <- scan.Text()
+				return
+			}
+			errc <- scan.Err()
+		}()
+		select {
+		case line := <-linec:
+			switch {
+			case strings.HasPrefix(line, "SERVER_ID="):
+				idStr = strings.TrimPrefix(line, "SERVER_ID=")
+			case strings.HasPrefix(line, "SERVER_LOCAL="):
+				addr, err := netip.ParseAddrPort(strings.TrimPrefix(line, "SERVER_LOCAL="))
+				if err != nil {
+					t.Fatalf("parse server local: %v", err)
+				}
+				serverAddr = addr
+			}
+		case err := <-errc:
+			t.Fatalf("server exited before coordinates: %v", err)
+		case <-deadline:
+			t.Fatal("timed out waiting for server coordinates")
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	client, err := Bind(ctx, WithBindAddr(bind))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+	serverID, err := key.ParseEndpointID(idStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := connectWithRetry(ctx, client, netaddr.NewEndpointAddr(serverID).WithIP(serverAddr), "iroh-ticket-ip-direct-path/2proc")
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+	waitDirectPath(t, conn, serverAddr, 3*time.Second)
+}
+
+func runTwoProcessDirectPathServer() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	bind, err := netip.ParseAddrPort(os.Getenv("GO_IROH_TWOPROC_BIND"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "parse bind: %v\n", err)
+		os.Exit(2)
+	}
+	sk, _ := key.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(sk), WithALPNs("iroh-ticket-ip-direct-path/2proc"), WithBindAddr(bind))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "bind: %v\n", err)
+		os.Exit(2)
+	}
+	defer server.Shutdown(ctx)
+	fmt.Printf("SERVER_ID=%s\n", server.ID())
+	fmt.Printf("SERVER_LOCAL=%s\n", server.LocalAddr())
+	os.Stdout.Sync()
+	conn, err := server.Accept(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "accept: %v\n", err)
+		os.Exit(2)
+	}
+	defer conn.CloseWithError(0, "")
+	<-ctx.Done()
+}
+
+func waitDirectPath(t *testing.T, conn *Conn, want netip.AddrPort, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, p := range conn.Paths() {
+			if p.Validated && p.HasAddr && !p.Relayed && p.Addr == (netaddr.IPAddr{Addr: want}) {
+				t.Logf("validated direct path to ticket IP %v: %+v", want, p)
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("validated direct path to ticket IP %v not found; paths=%+v", want, conn.Paths())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func connectWithRetry(ctx context.Context, ep *Endpoint, addr netaddr.EndpointAddr, alpn string) (*Conn, error) {
+	var last error
+	for ctx.Err() == nil {
+		conn, err := ep.Connect(ctx, addr, alpn)
+		if err == nil {
+			return conn, nil
+		}
+		last = err
+		t := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+		}
+	}
+	if last != nil {
+		return nil, last
+	}
+	return nil, context.Cause(ctx)
+}
+
 func localNonLoopbackIPv4(t *testing.T) netip.Addr {
 	t.Helper()
 	ifaces, err := net.Interfaces()
@@ -416,7 +569,7 @@ func localNonLoopbackIPv4(t *testing.T) netip.Addr {
 				continue
 			}
 			ip := prefix.Addr()
-			if ip.Is4() && !ip.IsLoopback() && !ip.IsUnspecified() {
+			if ip.Is4() && !ip.IsLoopback() && !ip.IsUnspecified() && !ip.IsLinkLocalUnicast() {
 				return ip
 			}
 		}

@@ -21,9 +21,13 @@ func IsFrameTypeAckEliciting(t wire.FrameType) bool {
 
 // IsFrameAckEliciting returns true if the frame is ack-eliciting.
 func IsFrameAckEliciting(f wire.Frame) bool {
-	_, isAck := f.(*wire.AckFrame)
-	_, isConnectionClose := f.(*wire.ConnectionCloseFrame)
-	return !isAck && !isConnectionClose
+	switch f.(type) {
+	// PATH_ACK / PATH_ACK_ECN are ACKs qualified by a path id; like the base
+	// ACK frames they are not ack-eliciting (draft-ietf-quic-multipath).
+	case *wire.AckFrame, *wire.PathAckFrame, *wire.ConnectionCloseFrame:
+		return false
+	}
+	return true
 }
 
 // HasAckElicitingFrames returns true if at least one frame is ack-eliciting.

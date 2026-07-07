@@ -753,8 +753,8 @@ func TestQNTOpenValidatedPathStoresRoute(t *testing.T) {
 	if st.qntRoute != want {
 		t.Fatalf("qntRoute = %v, want %v", st.qntRoute, want)
 	}
-	if st.validated {
-		t.Fatal("QNT route path is marked validated before PATH_RESPONSE")
+	if !st.validated {
+		t.Fatal("QNT route path is not marked validated after QNT PATH_RESPONSE")
 	}
 	if _, ok := c.sentPacketHandler.PathDebugStats(pid); !ok {
 		t.Fatalf("sent recovery state for path %d not allocated", pid)
@@ -918,7 +918,7 @@ func TestQNTProcessValidatedPathOpenConsumesOneCandidate(t *testing.T) {
 	if !c.qntQueueValidatedProbe(addr1) || !c.qntQueueValidatedProbe(addr2) {
 		t.Fatal("qntQueueValidatedProbe = false, want true")
 	}
-	if err := c.processQNTValidatedPathOpen(); err != nil {
+	if err := c.processQNTValidatedPathOpen(monotime.Now()); err != nil {
 		t.Fatalf("processQNTValidatedPathOpen: %v", err)
 	}
 	st := c.multipathOut.paths[protocol.PathID(1)]
@@ -928,8 +928,8 @@ func TestQNTProcessValidatedPathOpenConsumesOneCandidate(t *testing.T) {
 	if st.qntRoute != addr1 {
 		t.Fatalf("QNT path route = %v, want %v", st.qntRoute, addr1)
 	}
-	if st.validated {
-		t.Fatal("QNT path is validated before PATH_RESPONSE")
+	if !st.validated {
+		t.Fatal("QNT path is not validated after QNT PATH_RESPONSE")
 	}
 	if c.multipathOut.nextPathID != protocol.PathID(2) {
 		t.Fatalf("nextPathID = %d, want 2", c.multipathOut.nextPathID)
@@ -948,7 +948,7 @@ func TestQNTPathSnapshotReportsRoute(t *testing.T) {
 	if !c.qntQueueValidatedProbe(addr) {
 		t.Fatal("qntQueueValidatedProbe = false, want true")
 	}
-	if err := c.processQNTValidatedPathOpen(); err != nil {
+	if err := c.processQNTValidatedPathOpen(monotime.Now()); err != nil {
 		t.Fatalf("processQNTValidatedPathOpen: %v", err)
 	}
 	c.multipathOut.paths[protocol.PathID(1)].validated = true
@@ -994,7 +994,7 @@ func TestQNTProcessValidatedPathOpenKeepsCandidateAtPathLimit(t *testing.T) {
 	if !c.qntQueueValidatedProbe(addr) {
 		t.Fatal("qntQueueValidatedProbe = false, want true")
 	}
-	if err := c.processQNTValidatedPathOpen(); err != nil {
+	if err := c.processQNTValidatedPathOpen(monotime.Now()); err != nil {
 		t.Fatalf("processQNTValidatedPathOpen: %v", err)
 	}
 	if c.multipathOut != nil && len(c.multipathOut.paths) != 0 {

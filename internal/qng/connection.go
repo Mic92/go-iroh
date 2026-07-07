@@ -211,7 +211,9 @@ type Conn struct {
 	// It deliberately reports qng path state only; socket path events need a
 	// later address-bearing adapter instead of fabricated RemoteAddr values.
 	pathSnapshotQueue chan *pathSnapshotRequest
-
+	// setMigrationFallbackQueue carries a best-effort relay fallback for QNT
+	// active migration into the run goroutine.
+	setMigrationFallbackQueue chan *setMigrationFallbackRequest
 	// qnt holds local and remote n0 NAT traversal candidate addresses. It is
 	// mutex-protected because socket can hand candidates to qng from application
 	// goroutines while the eventual QNT receive path will run on the connection
@@ -622,6 +624,7 @@ func (c *Conn) preSetup() {
 	c.pathDatagramQueue = make(chan pathDatagram, maxDatagramSendQueueLen)
 	c.pathStatsQueue = make(chan *pathStatsRequest, 4)
 	c.pathSnapshotQueue = make(chan *pathSnapshotRequest, 4)
+	c.setMigrationFallbackQueue = make(chan *setMigrationFallbackRequest, 4)
 	c.initialStream = newInitialCryptoStream(c.perspective == protocol.PerspectiveClient)
 	c.handshakeStream = newCryptoStream()
 	c.sendQueue = newSendQueue(c.conn)
@@ -796,7 +799,9 @@ runLoop:
 				c.setCloseError(&closeError{err: err})
 				break runLoop
 			}
+			c.maybeRevertQNTMigrationOnPTO(now)
 		}
+		c.maybeRevertQNTMigrationOnIdle(now)
 		if c.qntHandleRetryDeadline(now) {
 			c.scheduleSending()
 		}
@@ -857,7 +862,8 @@ runLoop:
 			c.setCloseError(&closeError{err: err})
 			break runLoop
 		}
-		if err := c.processQNTValidatedPathOpen(); err != nil {
+		c.processSetMigrationFallbackRequests()
+		if err := c.processQNTValidatedPathOpen(now); err != nil {
 			c.setCloseError(&closeError{err: err})
 			break runLoop
 		}
@@ -1020,6 +1026,9 @@ func (c *Conn) maybeResetTimer() {
 	}
 	// If the connection is hard-blocked, we can't even send acknowledgments,
 	// nor can we send PTO probe packets.
+	if t := c.qntMigrationFallbackDeadline(); !t.IsZero() && t.Before(deadline) {
+		deadline = t
+	}
 	if c.blocked == blockModeHardBlocked {
 		c.timer.Reset(monotime.Until(deadline))
 		return
@@ -1465,15 +1474,21 @@ func (c *Conn) handleShortHeaderPacket(
 	// byte-identical) on a connection that did not negotiate QAD.
 	c.maybeQueueObservedAddr(p.remoteAddr)
 
-	// In RFC 9000, only the client can migrate between paths.
-	if c.perspective == protocol.PerspectiveClient {
-		return true, nil
-	}
-	if pathChallenge != nil && c.qntNegotiated() && addrsEqual(p.remoteAddr, c.RemoteAddr()) {
-		// QNT probes are PATH_CHALLENGE packets sent to advertised candidate
-		// addresses. On loopback, that candidate can be the existing 4-tuple, so
-		// the migration path manager below will not run. Answer here so the peer
-		// can match the PATH_RESPONSE to its QNT probe.
+	// QNT probes are PATH_CHALLENGE packets sent to advertised candidate
+	// addresses. Answer here so the peer can match the PATH_RESPONSE to its QNT
+	// probe. Two cases arrive on this path:
+	//   - loopback: the candidate is the existing 4-tuple, so p.remoteAddr equals
+	//     c.RemoteAddr() and the migration path manager below will not run;
+	//   - cross-host: the candidate is a NEW direct 4-tuple distinct from the
+	//     (possibly relayed) existing remote. RFC 9000 migration rules would let
+	//     only the server answer, and only for the existing path, so a direct
+	//     candidate would never be validated. QNT is a symmetric holepunch: both
+	//     perspectives must answer a challenge that arrives from a known QNT
+	//     candidate, on that same 4-tuple.
+	// This runs before the RFC 9000 client-migration early-return below so the
+	// client also answers QNT probes on new candidate paths.
+	if pathChallenge != nil && c.qntNegotiated() &&
+		(addrsEqual(p.remoteAddr, c.RemoteAddr()) || c.qntKnownCandidate(packetSourceAddrPort(p.remoteAddr))) {
 		probe, buf, err := c.packer.PackPathProbePacket(c.connIDManager.Get(), []ackhandler.Frame{
 			{Frame: &wire.PathResponseFrame{Data: pathChallenge.Data}},
 		}, c.version)
@@ -1483,7 +1498,12 @@ func (c *Conn) handleShortHeaderPacket(
 		c.logger.Debugf("sending QNT path response packet to %s", p.remoteAddr)
 		c.logShortHeaderPacketWithDatagramID(probe, protocol.ECNNon, buf.Len(), false, datagramID)
 		c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, p.rcvTime)
-		c.sendQNTProbeBuffer(buf, p.remoteAddr)
+		c.sendQNTProbeBufferWithInfo(buf, p.remoteAddr, p.info)
+	}
+
+	// In RFC 9000, only the client can migrate between paths.
+	if c.perspective == protocol.PerspectiveClient {
+		return true, nil
 	}
 	if addrsEqual(p.remoteAddr, c.RemoteAddr()) {
 		return true, nil
@@ -1506,7 +1526,7 @@ func (c *Conn) handleShortHeaderPacket(
 		c.logger.Debugf("sending path probe packet to %s", p.remoteAddr)
 		c.logShortHeaderPacketWithDatagramID(probe, protocol.ECNNon, buf.Len(), false, datagramID)
 		c.registerPackedShortHeaderPacket(probe, protocol.ECNNon, p.rcvTime)
-		c.sendQueue.SendProbe(buf, p.remoteAddr)
+		c.sendQNTProbeBufferWithInfo(buf, p.remoteAddr, p.info)
 	}
 	// We only switch paths in response to the highest-numbered non-probing packet,
 	// see section 9.3 of RFC 9000.
@@ -3383,6 +3403,12 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 func (c *Conn) sendQNTProbeBuffer(buf *packetBuffer, addr net.Addr) {
 	defer buf.Release()
 	c.sendQueue.SendProbe(buf, addr)
+}
+
+func (c *Conn) sendQNTProbeBufferWithInfo(buf *packetBuffer, addr net.Addr, info packetInfo) {
+	defer buf.Release()
+	if err := c.conn.WriteToInfo(buf.Data, addr, info); err != nil {
+	}
 }
 
 func (c *Conn) sendPacketsWithoutGSO(now monotime.Time) error {
