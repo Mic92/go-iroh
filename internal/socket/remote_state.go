@@ -81,6 +81,10 @@ type natTraversalRemoteAddressConnection interface {
 	NATTraversalAddresses() ([]netip.AddrPort, error)
 }
 
+type natTraversalRemoteAddressSeedConnection interface {
+	AddRemoteNATTraversalAddress(netip.AddrPort) error
+}
+
 // PathInfo is qng multipath path state observed through a [Connection]. Addr and
 // RTT are set only when qng reports them; socket must not fabricate Addr from
 // the connection's original RemoteAddr.
@@ -999,6 +1003,40 @@ func (a *RemoteStateActor) NATTraversalAddresses() ([]netip.AddrPort, error) {
 		out = []netip.AddrPort{}
 	}
 	return out, nil
+}
+
+// AddRemoteNATTraversalAddresses seeds remote QNT candidates from an
+// authenticated endpoint address, such as the address used to dial the peer.
+func (a *RemoteStateActor) AddRemoteNATTraversalAddresses(addrs []netip.AddrPort) error {
+	a.mu.Lock()
+	conns := make([]Connection, 0, len(a.conns))
+	for conn := range a.conns {
+		conns = append(conns, conn)
+	}
+	a.mu.Unlock()
+
+	negotiated := false
+	var target natTraversalRemoteAddressSeedConnection
+	for _, conn := range conns {
+		mp, ok := conn.(multipathConnection)
+		if !ok || !mp.MultipathNegotiated() {
+			continue
+		}
+		negotiated = true
+		if seed, ok := conn.(natTraversalRemoteAddressSeedConnection); ok {
+			target = seed
+			break
+		}
+	}
+	if !negotiated || target == nil {
+		return ErrExtensionNotNegotiated
+	}
+	for _, addr := range addrs {
+		if err := target.AddRemoteNATTraversalAddress(addr); err != nil {
+			return fmt.Errorf("socket: add remote nat traversal address %s: %w", addr, err)
+		}
+	}
+	return nil
 }
 
 // AddNATTraversalAddresses reconciles the full local QNT candidate set for

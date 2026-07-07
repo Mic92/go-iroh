@@ -846,6 +846,35 @@ func TestActorNATTraversalAddresses(t *testing.T) {
 	}
 }
 
+func TestActorAddRemoteNATTraversalAddressesHandoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	m := NewRemoteMap(ctx, BiasedRttPathSelector{}, nil)
+	a := m.Actor(testEndpointID(t))
+
+	conn := newFakeConn(IPAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 9)), time.Millisecond)
+	conn.multipathNegotiated = true
+	if _, ok := a.AddConnection(conn); !ok {
+		t.Fatal("AddConnection failed")
+	}
+
+	addrs := []netip.AddrPort{
+		netip.MustParseAddrPort("192.0.2.10:1111"),
+		netip.MustParseAddrPort("[2001:db8::10]:2222"),
+	}
+	if err := a.AddRemoteNATTraversalAddresses(addrs); err != nil {
+		t.Fatalf("AddRemoteNATTraversalAddresses: %v", err)
+	}
+	if len(conn.remoteNAT) != len(addrs) {
+		t.Fatalf("forwarded remote addrs = %v, want %v", conn.remoteNAT, addrs)
+	}
+	for i := range addrs {
+		if conn.remoteNAT[i] != addrs[i] {
+			t.Fatalf("forwarded remote addr %d = %v, want %v", i, conn.remoteNAT[i], addrs[i])
+		}
+	}
+}
+
 func TestActorAddNATTraversalAddressesCanonicalizesAndDedups(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

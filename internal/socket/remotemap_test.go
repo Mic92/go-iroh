@@ -80,6 +80,10 @@ func (c *fakeConn) InitiateNATTraversalRound(ctx context.Context) ([]netip.AddrP
 func (c *fakeConn) NATTraversalAddresses() ([]netip.AddrPort, error) {
 	return append([]netip.AddrPort(nil), c.remoteNAT...), nil
 }
+func (c *fakeConn) AddRemoteNATTraversalAddress(addr netip.AddrPort) error {
+	c.remoteNAT = append(c.remoteNAT, addr)
+	return nil
+}
 func (c *fakeConn) Close() { c.once.Do(func() { close(c.done) }) }
 
 func testEndpointID(t *testing.T) key.EndpointID {

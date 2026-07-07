@@ -200,7 +200,15 @@ func TestConnPaths(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			paths := tt.conn.Paths()
+			var paths []PathInfo
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				paths = tt.conn.Paths()
+				if selectedPathValidated(paths) || time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
 			if len(paths) == 0 {
 				t.Fatal("Paths() returned no paths")
 			}
@@ -224,6 +232,15 @@ func TestConnPaths(t *testing.T) {
 			}
 		})
 	}
+}
+
+func selectedPathValidated(paths []PathInfo) bool {
+	for _, p := range paths {
+		if p.Selected {
+			return p.Validated
+		}
+	}
+	return false
 }
 
 func TestPathInfosFromSocketCarriesCongestionStats(t *testing.T) {
@@ -312,6 +329,99 @@ func TestConnWatchPaths(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+}
+
+func TestConnTicketIPSeedsDirectPath(t *testing.T) {
+	ip := localNonLoopbackIPv4(t)
+	if !ip.IsValid() {
+		t.Skip("no non-loopback IPv4 address")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-ticket-ip-direct-path/0"
+	srvKey, _ := key.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+	client, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Shutdown(ctx)
+
+	accepted := make(chan *Conn, 1)
+	errc := make(chan error, 1)
+	go func() {
+		conn, err := server.Accept(ctx)
+		if err != nil {
+			errc <- err
+			return
+		}
+		accepted <- conn
+	}()
+
+	serverAddr := server.LocalAddr()
+	conn, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()).WithIP(serverAddr), alpn)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+	select {
+	case peer := <-accepted:
+		defer peer.CloseWithError(0, "")
+	case err := <-errc:
+		t.Fatalf("accept: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		for _, p := range conn.Paths() {
+			if p.Validated && p.HasAddr && !p.Relayed {
+				if p.Addr == (netaddr.IPAddr{Addr: serverAddr}) {
+					t.Logf("validated direct path to ticket IP %v: %+v", serverAddr, p)
+					return
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("validated direct path to ticket IP %v not found; paths=%+v", serverAddr, conn.Paths())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func localNonLoopbackIPv4(t *testing.T) netip.Addr {
+	t.Helper()
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range addrs {
+			prefix, err := netip.ParsePrefix(a.String())
+			if err != nil {
+				continue
+			}
+			ip := prefix.Addr()
+			if ip.Is4() && !ip.IsLoopback() && !ip.IsUnspecified() {
+				return ip
+			}
+		}
+	}
+	return netip.Addr{}
 }
 
 func TestStreamConn(t *testing.T) {

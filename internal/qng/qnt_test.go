@@ -168,6 +168,24 @@ func TestQNTLocalAddressQueuesAddAddressFrame(t *testing.T) {
 	}
 }
 
+func TestQNTAddRemoteNATTraversalAddress(t *testing.T) {
+	c := newNegotiatedQNTConn(8, 16)
+	remote := netip.MustParseAddrPort("192.0.2.10:1234")
+	if err := c.AddRemoteNATTraversalAddress(remote); err != nil {
+		t.Fatalf("AddRemoteNATTraversalAddress: %v", err)
+	}
+	if err := c.AddRemoteNATTraversalAddress(remote); err != nil {
+		t.Fatalf("duplicate AddRemoteNATTraversalAddress: %v", err)
+	}
+	addrs, err := c.NATTraversalAddresses()
+	if err != nil {
+		t.Fatalf("NATTraversalAddresses: %v", err)
+	}
+	if len(addrs) != 1 || addrs[0] != remote {
+		t.Fatalf("NATTraversalAddresses = %v, want [%v]", addrs, remote)
+	}
+}
+
 func TestQNTClientLocalAddressDoesNotQueueAddAddressFrame(t *testing.T) {
 	c := newNegotiatedQNTConn(8, 16)
 	c.perspective = protocol.PerspectiveClient

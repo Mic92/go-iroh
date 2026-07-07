@@ -1160,7 +1160,7 @@ func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, 
 			}
 			continue
 		}
-		return &Connecting{ep: e, qc: qc, remoteID: addr.ID, alpn: alpn}, nil
+		return &Connecting{ep: e, qc: qc, remoteID: addr.ID, addr: addr, alpn: alpn}, nil
 	}
 	return nil, fmt.Errorf("iroh: connect to %s: %w", addr.ID, firstErr)
 }
@@ -1294,7 +1294,7 @@ func (e *Endpoint) finishAccepting(ctx context.Context, qc *quic.Conn) (*Conn, e
 	if err != nil {
 		return nil, err
 	}
-	conn.pathState, conn.pathConn = e.registerConn(remote, qc)
+	conn.pathState, conn.pathConn = e.registerConn(remote, qc, netaddr.NewEndpointAddr(remote))
 	if err := e.afterHandshake(ctx, conn); err != nil {
 		conn.CloseWithError(0, "rejected by hook")
 		return nil, err
@@ -1333,15 +1333,18 @@ func (e *Endpoint) afterHandshake(ctx context.Context, conn *Conn) error {
 // available paths. Registration failures are non-fatal: the connection still
 // works; it just is not path-managed. It mirrors the Rust RemoteMap::add_connection
 // (iroh/src/socket/remote_map.rs:273).
-func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn) (*socket.RemoteStateActor, *connAdapter) {
+func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn, remoteAddr netaddr.EndpointAddr) (*socket.RemoteStateActor, *connAdapter) {
 	if e.remotes == nil {
 		return nil, nil
 	}
-	addr := e.sock.PathAddr(remote, qc.RemoteAddr())
-	adapter := newConnAdapter(qc, addr)
+	if remoteAddr.ID.IsZero() || !remoteAddr.ID.Equal(remote) {
+		remoteAddr = netaddr.NewEndpointAddr(remote)
+	}
+	pathAddr := e.sock.PathAddr(remote, qc.RemoteAddr())
+	adapter := newConnAdapter(qc, pathAddr)
 	_, actor := e.remotes.AddConnectionActor(remote, adapter)
 	go func() {
-		_ = e.remotes.ResolveRemote(netaddr.NewEndpointAddr(remote))
+		_ = e.remotes.ResolveRemote(remoteAddr)
 	}()
 	if !qc.ConnectionState().MultipathNegotiated {
 		return actor, adapter
@@ -1351,6 +1354,10 @@ func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn) (*socket.R
 	// connection fail. The actor/qng layers keep the failure visible to explicit
 	// hole-punch calls.
 	_ = actor.AddNATTraversalAddresses(e.localNATTraversalCandidates())
+	_ = actor.AddRemoteNATTraversalAddresses(remoteAddr.IPAddrs())
+	if len(remoteAddr.IPAddrs()) != 0 {
+		_ = actor.TriggerHolepunch()
+	}
 	return actor, adapter
 }
 

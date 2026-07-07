@@ -6,6 +6,7 @@ import (
 
 	quic "github.com/tmc/go-iroh/internal/qng"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 // Connecting is an in-progress outgoing connection whose handshake may not be
@@ -22,6 +23,7 @@ type Connecting struct {
 	ep       *Endpoint
 	qc       *quic.Conn
 	remoteID key.EndpointID
+	addr     netaddr.EndpointAddr
 	alpn     string
 }
 
@@ -55,7 +57,7 @@ func (c *Connecting) Connection(ctx context.Context) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn.pathState, conn.pathConn = c.ep.registerConn(c.remoteID, c.qc)
+	conn.pathState, conn.pathConn = c.ep.registerConn(c.remoteID, c.qc, c.addr)
 	if err := c.ep.afterHandshake(ctx, conn); err != nil {
 		conn.CloseWithError(0, "rejected by hook")
 		return nil, err
@@ -104,7 +106,7 @@ func (c *Connecting) Into0RTT() (conn *Conn, ok bool) {
 	}
 
 	out := mustConn(c.qc, c.remoteID, c.alpn, SideClient, c.ep.connStableID(c.qc))
-	out.pathState, out.pathConn = c.ep.registerConn(c.remoteID, c.qc)
+	out.pathState, out.pathConn = c.ep.registerConn(c.remoteID, c.qc, c.addr)
 	// Run the verify hooks at handshake completion, after early data has been
 	// sent. A rejection closes the connection and discards the early data,
 	// mirroring the blocking AfterHandshake path in Connection.
@@ -125,7 +127,7 @@ func (c *Connecting) Into0RTT() (conn *Conn, ok bool) {
 // an already-completed handshake, returning the established Conn.
 func (c *Connecting) finishVerified(ctx context.Context) (*Conn, error) {
 	conn := mustConn(c.qc, c.remoteID, c.alpn, SideClient, c.ep.connStableID(c.qc))
-	conn.pathState, conn.pathConn = c.ep.registerConn(c.remoteID, c.qc)
+	conn.pathState, conn.pathConn = c.ep.registerConn(c.remoteID, c.qc, c.addr)
 	if err := c.ep.afterHandshake(ctx, conn); err != nil {
 		conn.CloseWithError(0, "rejected by hook")
 		return nil, err
@@ -166,7 +168,7 @@ func (a *Accepting) Into0RTT() (*Conn, error) {
 			return key.EndpointID{}, ""
 		}
 		alpn := a.qc.ConnectionState().TLS.NegotiatedProtocol
-		conn.pathState, conn.pathConn = a.ep.registerConn(remote, a.qc)
+		conn.pathState, conn.pathConn = a.ep.registerConn(remote, a.qc, netaddr.NewEndpointAddr(remote))
 		return remote, alpn
 	}
 	// Run the AfterHandshake hooks once the handshake completes, after any 0-RTT

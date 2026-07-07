@@ -36,19 +36,20 @@ type NATTraversalCandidate struct {
 }
 
 type qntLocalState struct {
-	mu                    sync.Mutex
-	remoteOnce            sync.Once
-	local                 []qntLocalAddress
-	nextLocalAddressSeqNo uint64
-	remote                *qntRemoteAddressState
-	round                 uint64
-	pendingReachOut       []*wire.ReachOutFrame
-	pendingProbes         []netip.AddrPort
-	sentProbes            map[[8]byte]netip.AddrPort
-	probeAttempts         map[netip.AddrPort]uint8
-	validatedProbes       []netip.AddrPort
-	retryAttempt          uint8
-	nextRetry             monotime.Time
+	mu                     sync.Mutex
+	remoteOnce             sync.Once
+	local                  []qntLocalAddress
+	nextLocalAddressSeqNo  uint64
+	nextRemoteAddressSeqNo uint64
+	remote                 *qntRemoteAddressState
+	round                  uint64
+	pendingReachOut        []*wire.ReachOutFrame
+	pendingProbes          []netip.AddrPort
+	sentProbes             map[[8]byte]netip.AddrPort
+	probeAttempts          map[netip.AddrPort]uint8
+	validatedProbes        []netip.AddrPort
+	retryAttempt           uint8
+	nextRetry              monotime.Time
 }
 
 type qntLocalAddress struct {
@@ -57,6 +58,8 @@ type qntLocalAddress struct {
 }
 
 const qntMaxProbeAttempts = 9
+
+const qntSyntheticRemoteSeqBase = 1 << 62
 
 // AddNATTraversalAddress adds a local QNT candidate address.
 func (c *Conn) AddNATTraversalAddress(addr netip.AddrPort) error {
@@ -111,6 +114,37 @@ func (c *Conn) RemoveNATTraversalAddress(addr netip.AddrPort) error {
 	if c.perspective == protocol.PerspectiveServer {
 		c.queueLocalRemoveAddressFrame(seq)
 	}
+	return nil
+}
+
+// AddRemoteNATTraversalAddress adds a remote QNT candidate learned from an
+// authenticated address source outside the peer's ADD_ADDRESS frames, such as a
+// dialed endpoint ticket.
+func (c *Conn) AddRemoteNATTraversalAddress(addr netip.AddrPort) error {
+	if !c.qntAPINegotiated() {
+		return ErrNATTraversalNotNegotiated
+	}
+	addr = canonicalNATTraversalAddr(addr)
+	if !addr.IsValid() {
+		return nil
+	}
+	st := c.qntLocalState()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	for _, got := range st.remote.addresses() {
+		if got == addr {
+			return nil
+		}
+	}
+	if len(st.remote.addrs) >= st.remote.max {
+		return ErrNATTraversalTooManyAddresses
+	}
+	if st.nextRemoteAddressSeqNo == 0 {
+		st.nextRemoteAddressSeqNo = qntSyntheticRemoteSeqBase
+	}
+	seq := st.nextRemoteAddressSeqNo
+	st.nextRemoteAddressSeqNo++
+	st.remote.addrs[seq] = addr
 	return nil
 }
 
