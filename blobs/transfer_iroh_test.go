@@ -291,6 +291,82 @@ func TestDownloadBlobParallelIrohLargeBlob(t *testing.T) {
 	t.Logf("parallel fetched %d bytes at %.1f MiB/s; baselines: single-range 43.3 MiB/s, full-stream 171 MiB/s", len(data), mbps)
 }
 
+func TestServeBlobStreamsParallelIrohLargeBlob(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	store, err := blobs.NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	data := testData(8<<20 + 123)
+	hash, err := store.Add(data)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	server, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind server: %v", err)
+	}
+	router, err := iroh.NewRouter(server, map[string]iroh.ProtocolHandler{
+		blobs.ALPN: iroh.ProtocolHandlerFunc(func(ctx context.Context, conn *iroh.Conn) error {
+			return blobs.ServeBlobStreams(ctx, func(ctx context.Context) (blobs.BidiStream, error) {
+				return conn.AcceptStream(ctx)
+			}, store)
+		}),
+	}, nil)
+	if err != nil {
+		t.Fatalf("new router: %v", err)
+	}
+	defer router.Shutdown(ctx)
+
+	client, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatalf("bind client: %v", err)
+	}
+	defer client.Shutdown(ctx)
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	conn, err := client.Connect(ctx, addr, blobs.ALPN)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer conn.CloseWithError(0, "")
+
+	open := func(ctx context.Context) (blobs.BidiStream, error) {
+		s, err := conn.OpenStreamSync(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.SetDeadline(time.Now().Add(15 * time.Second)); err != nil {
+			_ = s.Close()
+			return nil, err
+		}
+		return sharedIrohRangeStream{Stream: s}, nil
+	}
+
+	out := newWriterAt(len(data))
+	start := time.Now()
+	if err := blobs.DownloadBlobParallel(ctx, open, hash, out, blobs.ParallelDownloadOptions{
+		Size:        uint64(len(data)),
+		RangeSize:   2 << 20,
+		Parallelism: 4,
+		Retries:     1,
+	}); err != nil {
+		t.Fatalf("download parallel from one provider connection: %v", err)
+	}
+	got := out.Bytes()
+	if !bytes.Equal(got, data) {
+		t.Fatalf("parallel download wrote %d bytes, want %d", len(got), len(data))
+	}
+	if blobs.NewHash(got) != hash {
+		t.Fatal("parallel download hash mismatch")
+	}
+	mbps := float64(len(data)) / 1024 / 1024 / time.Since(start).Seconds()
+	t.Logf("single-provider parallel fetched %d bytes at %.1f MiB/s", len(data), mbps)
+}
+
 func TestGetManyBlobTransferIroh(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -456,6 +532,14 @@ func (s *irohRangeStream) Close() error {
 		err = closeErr
 	}
 	return err
+}
+
+type sharedIrohRangeStream struct {
+	*iroh.Stream
+}
+
+func (s sharedIrohRangeStream) CloseWrite() error {
+	return s.Stream.Close()
 }
 
 type writerAt struct {

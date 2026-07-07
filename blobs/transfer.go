@@ -24,6 +24,9 @@ type BidiStream interface {
 	Close() error
 }
 
+// AcceptBlobStream accepts the next bidirectional stream from a blob client.
+type AcceptBlobStream func(context.Context) (BidiStream, error)
+
 // Store stores raw blobs.
 type Store interface {
 	GetBlob(Hash) ([]byte, bool)
@@ -60,6 +63,48 @@ var (
 // children for [GetAll], and closes its send side.
 func ServeBlob(ctx context.Context, s BidiStream, store Store) error {
 	return serveBlob(ctx, s, store, EncodeBlob, true)
+}
+
+// ServeBlobStreams serves blob requests from streams accepted by accept.
+//
+// ServeBlobStreams accepts streams until accept returns an error or ctx is
+// canceled. Each accepted stream is served concurrently with [ServeBlob].
+func ServeBlobStreams(ctx context.Context, accept AcceptBlobStream, store Store) error {
+	if accept == nil {
+		return errors.New("blobs: nil stream accepter")
+	}
+	ctx, cancel := context.WithCancel(ctxOrBackground(ctx))
+	defer cancel()
+
+	errc := make(chan error, 1)
+	var wg sync.WaitGroup
+	for {
+		s, err := accept(ctx)
+		if err != nil {
+			cancel()
+			wg.Wait()
+			select {
+			case serveErr := <-errc:
+				return serveErr
+			default:
+			}
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("blobs: accept stream: %w", err)
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := ServeBlob(ctx, s, store); err != nil {
+				select {
+				case errc <- err:
+					cancel()
+				default:
+				}
+			}
+		}()
+	}
 }
 
 // ServeSingleLeaf serves one single-leaf raw blob request on s.
