@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -60,6 +62,60 @@ func TestBlobTransfer(t *testing.T) {
 	}
 }
 
+func TestDownloadBlobStreamsToWriter(t *testing.T) {
+	data := vectorData(2*BlockSize + 123)
+	hash := NewHash(data)
+	client, server := newTestBidiStreamPair()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- ServeBlob(context.Background(), server, StoreFunc(func(got Hash) ([]byte, bool) {
+			if got != hash {
+				t.Errorf("requested hash = %s, want %s", got, hash)
+				return nil, false
+			}
+			return append([]byte(nil), data...), true
+		}))
+	}()
+
+	var got bytes.Buffer
+	if err := DownloadBlob(context.Background(), client, hash, &got); err != nil {
+		t.Fatalf("DownloadBlob: %v", err)
+	}
+	if !bytes.Equal(got.Bytes(), data) {
+		t.Fatalf("DownloadBlob wrote %d bytes, want %d", got.Len(), len(data))
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
+	}
+}
+
+func TestDownloadBlobValidationError(t *testing.T) {
+	hash := NewHash([]byte("expected"))
+	client, server := newTestBidiStreamPair()
+	errc := make(chan error, 1)
+	go func() {
+		_, _ = io.ReadAll(server)
+		_, encoded, encErr := EncodeBlob([]byte("other"))
+		if encErr != nil {
+			errc <- encErr
+			return
+		}
+		_, err := server.Write(encoded)
+		if closeErr := server.Close(); err == nil {
+			err = closeErr
+		}
+		errc <- err
+	}()
+
+	err := DownloadBlob(context.Background(), client, hash, io.Discard)
+	if !errors.Is(err, ErrInvalidBlob) {
+		t.Fatalf("DownloadBlob validation error = %v, want %v", err, ErrInvalidBlob)
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("server write: %v", err)
+	}
+}
+
 func TestBlobRangeTransfer(t *testing.T) {
 	data := vectorData(3*BlockSize + 321)
 	hash := NewHash(data)
@@ -96,6 +152,128 @@ func TestBlobRangeTransfer(t *testing.T) {
 				t.Fatalf("ServeBlob: %v", err)
 			}
 		})
+	}
+}
+
+func TestDownloadBlobRangeResume(t *testing.T) {
+	data := vectorData(3*BlockSize + 123)
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	hash, err := store.Add(data)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	const resumeAt = BlockSize + 2*ChunkSize
+	var got bytes.Buffer
+	downloadRange := func(offset, length uint64) {
+		t.Helper()
+		client, server := newTestBidiStreamPair()
+		errc := make(chan error, 1)
+		go func() {
+			errc <- ServeBlob(context.Background(), server, store)
+		}()
+		if err := DownloadBlobRange(context.Background(), client, hash, offset, length, &got); err != nil {
+			t.Fatalf("DownloadBlobRange(%d, %d): %v", offset, length, err)
+		}
+		if err := <-errc; err != nil {
+			t.Fatalf("ServeBlob: %v", err)
+		}
+	}
+
+	downloadRange(0, resumeAt)
+	downloadRange(resumeAt, uint64(len(data)-resumeAt))
+	if !bytes.Equal(got.Bytes(), data) {
+		t.Fatalf("resumed download wrote %d bytes, want %d", got.Len(), len(data))
+	}
+	if NewHash(got.Bytes()) != hash {
+		t.Fatal("resumed download hash mismatch")
+	}
+}
+
+func TestDownloadBlobParallel(t *testing.T) {
+	data := vectorData(6*BlockSize + 333)
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	hash, err := store.Add(data)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	const rangeSize = 2 * BlockSize
+	out := newTestWriterAt(len(data))
+	errc := make(chan error, 8)
+	open := func(ctx context.Context) (BidiStream, error) {
+		client, server := newTestBidiStreamPair()
+		go func() {
+			errc <- ServeBlob(ctx, server, store)
+		}()
+		return client, nil
+	}
+	err = DownloadBlobParallel(context.Background(), open, hash, out, ParallelDownloadOptions{
+		Size:        uint64(len(data)),
+		RangeSize:   rangeSize,
+		Parallelism: 3,
+		Retries:     1,
+	})
+	if err != nil {
+		t.Fatalf("DownloadBlobParallel: %v", err)
+	}
+	for range 4 {
+		if err := <-errc; err != nil {
+			t.Fatalf("ServeBlob: %v", err)
+		}
+	}
+	if !bytes.Equal(out.Bytes(), data) {
+		t.Fatalf("parallel download wrote %d bytes, want %d", len(out.Bytes()), len(data))
+	}
+	if NewHash(out.Bytes()) != hash {
+		t.Fatal("parallel download hash mismatch")
+	}
+}
+
+func TestDownloadBlobParallelRetriesRange(t *testing.T) {
+	data := vectorData(2*BlockSize + 1)
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	hash, err := store.Add(data)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	out := newTestWriterAt(len(data))
+	errc := make(chan error, 2)
+	var calls atomic.Int32
+	open := func(ctx context.Context) (BidiStream, error) {
+		if calls.Add(1) == 1 {
+			return nil, errors.New("temporary open failure")
+		}
+		client, server := newTestBidiStreamPair()
+		go func() {
+			errc <- ServeBlob(ctx, server, store)
+		}()
+		return client, nil
+	}
+	err = DownloadBlobParallel(context.Background(), open, hash, out, ParallelDownloadOptions{
+		Size:        uint64(len(data)),
+		RangeSize:   4 * BlockSize,
+		Parallelism: 1,
+		Retries:     1,
+	})
+	if err != nil {
+		t.Fatalf("DownloadBlobParallel: %v", err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatalf("ServeBlob: %v", err)
+	}
+	if !bytes.Equal(out.Bytes(), data) {
+		t.Fatal("retry download data mismatch")
 	}
 }
 
@@ -321,3 +499,27 @@ func (s *testBidiStream) Read(p []byte) (int, error)  { return s.r.Read(p) }
 func (s *testBidiStream) Write(p []byte) (int, error) { return s.w.Write(p) }
 func (s *testBidiStream) Close() error                { return s.w.Close() }
 func (s *testBidiStream) CloseWrite() error           { return s.w.Close() }
+
+type testWriterAt struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+func newTestWriterAt(n int) *testWriterAt {
+	return &testWriterAt{b: make([]byte, n)}
+}
+
+func (w *testWriterAt) WriteAt(p []byte, off int64) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if off < 0 || int(off)+len(p) > len(w.b) {
+		return 0, io.ErrShortWrite
+	}
+	return copy(w.b[off:], p), nil
+}
+
+func (w *testWriterAt) Bytes() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]byte(nil), w.b...)
+}

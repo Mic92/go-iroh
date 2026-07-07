@@ -45,28 +45,41 @@ func EncodeBlob(data []byte) (Hash, []byte, error) {
 // DecodeBlob validates and decodes a Rust-compatible full-range BAO response.
 func DecodeBlob(expected Hash, encoded []byte) ([]byte, error) {
 	r := bytes.NewReader(encoded)
-	out, err := DecodeBlobReader(expected, r)
-	if err != nil {
+	var out bytes.Buffer
+	if err := DecodeBlobToWriter(expected, r, &out); err != nil {
 		return nil, err
 	}
 	if r.Len() != 0 {
 		return nil, fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, r.Len())
 	}
-	return out, nil
+	return out.Bytes(), nil
 }
 
 // DecodeBlobReader validates and decodes one Rust-compatible full-range BAO
 // response from r.
 func DecodeBlobReader(expected Hash, r io.Reader) ([]byte, error) {
 	var out bytes.Buffer
-	ok, err := bao.Decode(&out, r, nil, 4, expected.Bytes())
+	err := DecodeBlobToWriter(expected, r, &out)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidBlob, err)
-	}
-	if !ok {
-		return nil, fmt.Errorf("%w: hash mismatch", ErrInvalidBlob)
+		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// DecodeBlobToWriter validates one Rust-compatible full-range BAO response
+// from r and streams the decoded blob to w.
+func DecodeBlobToWriter(expected Hash, r io.Reader, w io.Writer) error {
+	if w == nil {
+		return errors.New("blobs: nil blob writer")
+	}
+	ok, err := bao.Decode(w, r, nil, 4, expected.Bytes())
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidBlob, err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: hash mismatch", ErrInvalidBlob)
+	}
+	return nil
 }
 
 // EncodeBlobRange returns the Rust-compatible BAO slice response for data.
@@ -93,28 +106,53 @@ func EncodeBlobRange(data []byte, offset, length uint64) (Hash, []byte, error) {
 // DecodeBlobRange validates and decodes a Rust-compatible BAO slice response.
 func DecodeBlobRange(expected Hash, encoded []byte, offset, length uint64) ([]byte, error) {
 	r := bytes.NewReader(encoded)
-	out, err := DecodeBlobRangeReader(expected, r, offset, length)
-	if err != nil {
+	var out bytes.Buffer
+	if err := DecodeBlobRangeToWriter(expected, r, offset, length, &out); err != nil {
 		return nil, err
 	}
 	if r.Len() != 0 {
 		return nil, fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, r.Len())
 	}
-	return out, nil
+	return out.Bytes(), nil
 }
 
 // DecodeBlobRangeReader validates and decodes one Rust-compatible BAO slice
 // response from r.
 func DecodeBlobRangeReader(expected Hash, r io.Reader, offset, length uint64) ([]byte, error) {
 	var out bytes.Buffer
-	ok, err := bao.DecodeSlice(&out, r, 4, offset, length, expected.Bytes())
+	err := DecodeBlobRangeToWriter(expected, r, offset, length, &out)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalidBlob, err)
-	}
-	if !ok {
-		return nil, fmt.Errorf("%w: hash mismatch", ErrInvalidBlob)
+		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+// ExtractBlobRange writes a Rust-compatible BAO slice proof for
+// [offset, offset+length) from data and outboard.
+func ExtractBlobRange(w io.Writer, data, outboard io.Reader, offset, length uint64) error {
+	if w == nil {
+		return errors.New("blobs: nil blob writer")
+	}
+	if err := bao.ExtractSlice(w, data, outboard, 4, offset, length); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidBlob, err)
+	}
+	return nil
+}
+
+// DecodeBlobRangeToWriter validates a Rust-compatible BAO slice proof against
+// expected and streams [offset, offset+length) to w.
+func DecodeBlobRangeToWriter(expected Hash, r io.Reader, offset, length uint64, w io.Writer) error {
+	if w == nil {
+		return errors.New("blobs: nil blob writer")
+	}
+	ok, err := bao.DecodeSlice(w, r, 4, offset, length, expected.Bytes())
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidBlob, err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: hash mismatch", ErrInvalidBlob)
+	}
+	return nil
 }
 
 // EncodeSingleLeaf returns the Rust-compatible full-range BAO response for data.

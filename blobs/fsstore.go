@@ -1,7 +1,6 @@
 package blobs
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -164,11 +163,16 @@ func (e fsEntry) DataReader(ctx context.Context) (io.ReaderAt, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
-	data, ok := e.store.GetBlob(e.hash)
-	if !ok {
+	e.store.mu.RLock()
+	defer e.store.mu.RUnlock()
+	f, err := os.Open(e.store.dataPath(e.hash))
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrBlobNotFound
 	}
-	return bytes.NewReader(data), nil
+	if err != nil {
+		return nil, fmt.Errorf("blobs: open data: %w", err)
+	}
+	return f, nil
 }
 
 func (e fsEntry) Outboard(ctx context.Context) (Outboard, error) {
@@ -177,12 +181,27 @@ func (e fsEntry) Outboard(ctx context.Context) (Outboard, error) {
 	}
 	e.store.mu.RLock()
 	defer e.store.mu.RUnlock()
-	outboard, err := os.ReadFile(e.store.outboardPath(e.hash))
-	if err != nil {
-		return nil, fmt.Errorf("blobs: read outboard: %w", err)
+	f, err := os.Open(e.store.outboardPath(e.hash))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrBlobNotFound
 	}
-	return byteOutboard{Reader: bytes.NewReader(outboard), size: int64(len(outboard))}, nil
+	if err != nil {
+		return nil, fmt.Errorf("blobs: open outboard: %w", err)
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("blobs: stat outboard: %w", err)
+	}
+	return fileOutboard{File: f, size: info.Size()}, nil
 }
+
+type fileOutboard struct {
+	*os.File
+	size int64
+}
+
+func (o fileOutboard) Size() int64 { return o.size }
 
 func writeFileAtomic(name string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+".tmp-*")

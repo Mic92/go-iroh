@@ -2,11 +2,13 @@ package blobs
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"iter"
+	"sync"
 )
 
 // BidiStream is the stream shape used by the blob transfer helpers.
@@ -93,7 +95,7 @@ func serveBlob(ctx context.Context, s BidiStream, store Store, encode func([]byt
 			_ = s.Close()
 			return ErrUnsupportedRequest
 		}
-		if err := writeGet(s, store, *req.Get, encode); err != nil {
+		if err := writeGet(ctx, s, store, *req.Get, encode); err != nil {
 			_ = s.Close()
 			return err
 		}
@@ -144,12 +146,12 @@ func writeObserve(s io.Writer, store Store, req ObserveRequest) error {
 	return writeObserveItem(s, b)
 }
 
-func writeGet(s io.Writer, store Store, req GetRequest, encode func([]byte) (Hash, []byte, error)) error {
+func writeGet(ctx context.Context, s io.Writer, store Store, req GetRequest, encode func([]byte) (Hash, []byte, error)) error {
 	if req.Ranges.IsBlob() {
 		return writeBlob(s, store, req.Hash, encode)
 	}
 	if !req.Ranges.IsAll() {
-		return writeBlobRange(s, store, req.Hash, req.Ranges.At(0))
+		return writeBlobRange(ctx, s, store, req.Hash, req.Ranges.At(0))
 	}
 	root, ok := store.GetBlob(req.Hash)
 	if !ok {
@@ -170,7 +172,14 @@ func writeGet(s io.Writer, store Store, req GetRequest, encode func([]byte) (Has
 	return nil
 }
 
-func writeBlobRange(s io.Writer, store Store, hash Hash, ranges ChunkRanges) error {
+type mapStore interface {
+	Get(context.Context, Hash) (MapEntry, bool, error)
+}
+
+func writeBlobRange(ctx context.Context, s io.Writer, store Store, hash Hash, ranges ChunkRanges) error {
+	if m, ok := store.(mapStore); ok {
+		return writeBlobRangeFromMap(ctx, s, m, hash, ranges)
+	}
 	data, ok := store.GetBlob(hash)
 	if !ok {
 		return ErrBlobNotFound
@@ -191,6 +200,56 @@ func writeBlobRange(s io.Writer, store Store, hash Hash, ranges ChunkRanges) err
 	}
 	return nil
 }
+
+func writeBlobRangeFromMap(ctx context.Context, s io.Writer, store mapStore, hash Hash, ranges ChunkRanges) error {
+	entry, ok, err := store.Get(ctx, hash)
+	if err != nil {
+		return fmt.Errorf("blobs: get blob: %w", err)
+	}
+	if !ok || !entry.IsComplete() {
+		return ErrBlobNotFound
+	}
+	size, verified := entry.Size()
+	if !verified {
+		return ErrUnsupportedRequest
+	}
+	if size > maxInt64 {
+		return ErrUnsupportedRequest
+	}
+	offset, length, ok := singleByteRange(ranges, size)
+	if !ok {
+		return ErrUnsupportedRequest
+	}
+	data, err := entry.DataReader(ctx)
+	if err != nil {
+		return fmt.Errorf("blobs: open data: %w", err)
+	}
+	defer closeReaderAt(data)
+	outboard, err := entry.Outboard(ctx)
+	if err != nil {
+		return fmt.Errorf("blobs: open outboard: %w", err)
+	}
+	defer closeReaderAt(outboard)
+	if outboard.Size() < 0 || outboard.Size() > int64(maxInt64) {
+		return ErrUnsupportedRequest
+	}
+	dataSection := io.NewSectionReader(data, 0, int64(size))
+	outboardSection := io.NewSectionReader(outboard, 0, outboard.Size())
+	return ExtractBlobRange(s, dataSection, outboardSection, offset, length)
+}
+
+func closeReaderAt(r io.ReaderAt) {
+	if c, ok := r.(io.Closer); ok {
+		_ = c.Close()
+	}
+}
+
+func checkedAdd(a, b uint64) (uint64, bool) {
+	c := a + b
+	return c, c >= a
+}
+
+const maxInt64 = uint64(1<<63 - 1)
 
 func writeBlob(s io.Writer, store Store, hash Hash, encode func([]byte) (Hash, []byte, error)) error {
 	data, ok := store.GetBlob(hash)
@@ -270,7 +329,57 @@ func Observe(ctx context.Context, s BidiStream, hash Hash) iter.Seq2[Bitfield, e
 // GetBlobBytes sends [GetBlob], closes its send side, reads the response, and
 // verifies the returned BAO body against hash.
 func GetBlobBytes(ctx context.Context, s BidiStream, hash Hash) ([]byte, error) {
-	return getBlob(ctx, s, hash, DecodeBlob)
+	var out bytes.Buffer
+	if err := DownloadBlob(ctx, s, hash, &out); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// DownloadBlob requests and validates one full-range raw blob from s.
+//
+// DownloadBlob sends [GetBlob], closes its send side, and streams the verified
+// BAO response into w. It returns an error if the response hash does not match
+// hash or if the peer sends trailing bytes after the blob.
+func DownloadBlob(ctx context.Context, s BidiStream, hash Hash, w io.Writer) error {
+	if w == nil {
+		return errors.New("blobs: nil blob writer")
+	}
+	if _, err := s.Write(EncodeGetRequestBytes(GetBlob(hash))); err != nil {
+		_ = s.Close()
+		return fmt.Errorf("blobs: write request: %w", err)
+	}
+	if err := closeWrite(s); err != nil {
+		return fmt.Errorf("blobs: close request: %w", err)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		if err := DecodeBlobToWriter(hash, s, w); err != nil {
+			errc <- fmt.Errorf("blobs: decode response: %w", err)
+			return
+		}
+		extra, err := io.ReadAll(s)
+		if err != nil {
+			errc <- fmt.Errorf("blobs: read response: %w", err)
+			return
+		}
+		if len(extra) != 0 {
+			errc <- fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, len(extra))
+			return
+		}
+		errc <- nil
+	}()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		_ = s.Close()
+		<-errc
+		return ctx.Err()
+	}
 }
 
 // GetBlobRangeBytes requests and validates a contiguous chunk range from s.
@@ -282,22 +391,227 @@ func GetBlobRangeBytes(ctx context.Context, s BidiStream, hash Hash, ranges Chun
 	if !ok {
 		return nil, ErrUnsupportedRequest
 	}
-	if _, err := s.Write(EncodeGetRequestBytes(GetBlobRanges(hash, ranges))); err != nil {
+	var out bytes.Buffer
+	if err := DownloadBlobRange(ctx, s, hash, offset, length, &out); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+// DownloadBlobRange requests and validates [offset, offset+length) from hash.
+//
+// The request is encoded as iroh-blobs chunk ranges, so offset must start on a
+// [ChunkSize] boundary. The final range may end inside the blob's last chunk.
+func DownloadBlobRange(ctx context.Context, s BidiStream, hash Hash, offset, length uint64, w io.Writer) error {
+	if w == nil {
+		return errors.New("blobs: nil blob writer")
+	}
+	if length == 0 {
+		return nil
+	}
+	if offset%ChunkSize != 0 {
+		return fmt.Errorf("%w: range offset %d is not chunk-aligned", ErrUnsupportedRequest, offset)
+	}
+	end, ok := checkedAdd(offset, length)
+	if !ok {
+		return fmt.Errorf("%w: range [%d,%d) overflows", ErrUnsupportedRequest, offset, length)
+	}
+	startChunk := offset / ChunkSize
+	endChunk := (end-1)/ChunkSize + 1
+	req := GetBlobRanges(hash, RangeChunks(startChunk, endChunk))
+	if _, err := s.Write(EncodeGetRequestBytes(req)); err != nil {
 		_ = s.Close()
-		return nil, fmt.Errorf("blobs: write request: %w", err)
+		return fmt.Errorf("blobs: write request: %w", err)
 	}
 	if err := closeWrite(s); err != nil {
-		return nil, fmt.Errorf("blobs: close request: %w", err)
+		return fmt.Errorf("blobs: close request: %w", err)
 	}
-	encoded, err := readAllContext(ctx, s)
+	errc := make(chan error, 1)
+	go func() {
+		if err := DecodeBlobRangeToWriter(hash, s, offset, length, w); err != nil {
+			errc <- fmt.Errorf("blobs: decode response: %w", err)
+			return
+		}
+		extra, err := io.ReadAll(s)
+		if err != nil {
+			errc <- fmt.Errorf("blobs: read response: %w", err)
+			return
+		}
+		if len(extra) != 0 {
+			errc <- fmt.Errorf("%w: trailing %d bytes", ErrInvalidBlob, len(extra))
+			return
+		}
+		errc <- nil
+	}()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+		_ = s.Close()
+		<-errc
+		return ctx.Err()
+	}
+}
+
+// RangeOpener opens one bidirectional stream to a blob provider.
+type RangeOpener func(context.Context) (BidiStream, error)
+
+// ParallelDownloadOptions configures [DownloadBlobParallel].
+type ParallelDownloadOptions struct {
+	Size        uint64
+	RangeSize   uint64
+	Parallelism int
+	Retries     int
+}
+
+// DownloadBlobParallel downloads hash as verified ranges in parallel.
+//
+// Each range is verified against hash before it is written to w. RangeSize must
+// be a positive multiple of [ChunkSize]. Retries is the number of retries after
+// the first attempt for each range.
+func DownloadBlobParallel(ctx context.Context, open RangeOpener, hash Hash, w io.WriterAt, opts ParallelDownloadOptions) error {
+	if open == nil {
+		return errors.New("blobs: nil range opener")
+	}
+	if w == nil {
+		return errors.New("blobs: nil blob writer")
+	}
+	if opts.Size == 0 {
+		return nil
+	}
+	if opts.Size > maxInt64 {
+		return ErrUnsupportedRequest
+	}
+	if opts.RangeSize == 0 {
+		opts.RangeSize = 4 << 20
+	}
+	if opts.RangeSize%ChunkSize != 0 {
+		return fmt.Errorf("%w: range size %d is not chunk-aligned", ErrUnsupportedRequest, opts.RangeSize)
+	}
+	if opts.Parallelism <= 0 {
+		opts.Parallelism = 4
+	}
+	if opts.Retries < 0 {
+		opts.Retries = 0
+	}
+	ranges, err := downloadRanges(opts.Size, opts.RangeSize)
 	if err != nil {
-		return nil, fmt.Errorf("blobs: read response: %w", err)
+		return err
 	}
-	data, err := DecodeBlobRange(hash, encoded, offset, length)
+	if opts.Parallelism > len(ranges) {
+		opts.Parallelism = len(ranges)
+	}
+
+	ctx, cancel := context.WithCancel(ctxOrBackground(ctx))
+	defer cancel()
+	jobs := make(chan downloadRange, len(ranges))
+	for _, r := range ranges {
+		jobs <- r
+	}
+	close(jobs)
+
+	errc := make(chan error, 1)
+	var wg sync.WaitGroup
+	for range opts.Parallelism {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for r := range jobs {
+				if err := downloadRangeWithRetry(ctx, open, hash, w, r, opts.Retries); err != nil {
+					select {
+					case errc <- err:
+						cancel()
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		select {
+		case err := <-errc:
+			return err
+		default:
+			return nil
+		}
+	case err := <-errc:
+		<-done
+		return err
+	case <-ctx.Done():
+		<-done
+		return ctx.Err()
+	}
+}
+
+type downloadRange struct {
+	offset uint64
+	length uint64
+}
+
+func downloadRanges(size, rangeSize uint64) ([]downloadRange, error) {
+	var ranges []downloadRange
+	for offset := uint64(0); offset < size; {
+		length := rangeSize
+		if size-offset < length {
+			length = size - offset
+		}
+		ranges = append(ranges, downloadRange{offset: offset, length: length})
+		next, ok := checkedAdd(offset, length)
+		if !ok {
+			return nil, fmt.Errorf("%w: range offset overflow", ErrUnsupportedRequest)
+		}
+		offset = next
+	}
+	return ranges, nil
+}
+
+func downloadRangeWithRetry(ctx context.Context, open RangeOpener, hash Hash, w io.WriterAt, r downloadRange, retries int) error {
+	var last error
+	for attempt := 0; attempt <= retries; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := downloadRangeOnce(ctx, open, hash, w, r)
+		if err == nil {
+			return nil
+		}
+		last = err
+	}
+	return fmt.Errorf("blobs: download range [%d,%d): %w", r.offset, r.offset+r.length, last)
+}
+
+func downloadRangeOnce(ctx context.Context, open RangeOpener, hash Hash, w io.WriterAt, r downloadRange) error {
+	s, err := open(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("blobs: decode response: %w", err)
+		return fmt.Errorf("open range stream: %w", err)
 	}
-	return data, nil
+	var buf bytes.Buffer
+	err = DownloadBlobRange(ctx, s, hash, r.offset, r.length, &buf)
+	_ = s.Close()
+	if err != nil {
+		return err
+	}
+	if uint64(buf.Len()) != r.length {
+		return fmt.Errorf("%w: range [%d,%d) decoded %d bytes", ErrInvalidBlob, r.offset, r.offset+r.length, buf.Len())
+	}
+	n, err := w.WriteAt(buf.Bytes(), int64(r.offset))
+	if err != nil {
+		return fmt.Errorf("write verified range: %w", err)
+	}
+	if n != buf.Len() {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 // GetManyBlobBytes requests and validates full-range raw blobs from s.
@@ -517,4 +831,11 @@ func singleByteRange(ranges ChunkRanges, size uint64) (offset, length uint64, ok
 
 func maxChunkIndex() uint64 {
 	return ^uint64(0) / ChunkSize
+}
+
+func ctxOrBackground(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
 }
