@@ -241,6 +241,81 @@ func TestSendPathBufferDropsInvalidQNTRoute(t *testing.T) {
 	}
 }
 
+func TestSendPackedCoalescedPacketPreservesOneStreamFrame(t *testing.T) {
+	rtt := utils.NewRTTStats()
+	c := &Conn{
+		logger: utils.DefaultLogger,
+		connIDManager: newConnIDManager(
+			protocol.ParseConnectionID([]byte{1, 2, 3, 4}),
+			func(protocol.StatelessResetToken) {},
+			func(protocol.StatelessResetToken) {},
+			func(wire.Frame) {},
+		),
+		sendQueue: &qntProbeTestSender{available: make(chan struct{})},
+		sentPacketHandler: ackhandler.NewSentPacketHandler(
+			0,
+			protocol.InitialPacketSize,
+			rtt,
+			&utils.ConnectionStats{},
+			true,
+			false,
+			nil,
+			protocol.PerspectiveClient,
+			nil,
+			utils.DefaultLogger,
+		),
+	}
+	handler := &coalescedStreamLossHandler{}
+	packet := &coalescedPacket{
+		buffer: getPacketBuffer(),
+		shortHdrPacket: &shortHeaderPacket{
+			PacketNumber: 1,
+			StreamFrame: ackhandler.StreamFrame{
+				Frame:   &wire.StreamFrame{StreamID: 0, Offset: 32, Data: []byte("payload")},
+				Handler: handler,
+			},
+			HasStreamFrame: true,
+			Length:         1200,
+		},
+	}
+
+	if err := c.sendPackedCoalescedPacket(packet, protocol.ECNNon, monotime.Now()); err != nil {
+		t.Fatal(err)
+	}
+	for pn := protocol.PacketNumber(2); pn <= 4; pn++ {
+		c.sentPacketHandler.SentPacket(
+			monotime.Now(),
+			pn,
+			protocol.InvalidPacketNumber,
+			nil,
+			[]ackhandler.Frame{{Frame: &wire.PingFrame{}}},
+			protocol.Encryption1RTT,
+			protocol.ECNNon,
+			1200,
+			false,
+			false,
+		)
+	}
+	if _, err := c.sentPacketHandler.ReceivedAck(&wire.AckFrame{
+		AckRanges: []wire.AckRange{{Smallest: 4, Largest: 4}},
+	}, protocol.Encryption1RTT, monotime.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if handler.lost != 1 {
+		t.Fatalf("stream loss callbacks = %d; want 1", handler.lost)
+	}
+}
+
+type coalescedStreamLossHandler struct {
+	lost int
+}
+
+func (h *coalescedStreamLossHandler) OnAcked(wire.Frame) {}
+
+func (h *coalescedStreamLossHandler) OnLost(wire.Frame) {
+	h.lost++
+}
+
 func TestSendPathPacketSkipsInvalidQNTRouteBeforePack(t *testing.T) {
 	c := &Conn{}
 	st := &pathOpenState{qntRoute: netip.MustParseAddrPort("198.51.100.7:0")}

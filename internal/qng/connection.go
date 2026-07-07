@@ -3708,18 +3708,31 @@ func (c *Conn) sendPackedCoalescedPacket(packet *coalescedPacket, ecn protocol.E
 		if p.Ack != nil {
 			largestAcked = p.Ack.LargestAcked()
 		}
-		c.sentPacketHandler.SentPacket(
-			now,
-			p.PacketNumber,
-			largestAcked,
-			p.StreamFrames,
-			p.Frames,
-			protocol.Encryption1RTT,
-			ecn,
-			p.Length,
-			p.IsPathMTUProbePacket,
-			false,
-		)
+		if p.HasStreamFrame && len(p.StreamFrames) == 0 {
+			c.sentPacketHandler.SentPacketOneStream(
+				now,
+				p.PacketNumber,
+				largestAcked,
+				p.StreamFrame,
+				p.Frames,
+				ecn,
+				p.Length,
+				p.IsPathMTUProbePacket,
+			)
+		} else {
+			c.sentPacketHandler.SentPacket(
+				now,
+				p.PacketNumber,
+				largestAcked,
+				p.StreamFrames,
+				p.Frames,
+				protocol.Encryption1RTT,
+				ecn,
+				p.Length,
+				p.IsPathMTUProbePacket,
+				false,
+			)
+		}
 	}
 	c.connIDManager.SentPacket()
 	c.sendQueue.Send(packet.buffer, 0, ecn)
