@@ -1,6 +1,7 @@
 package iroh
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -136,6 +137,201 @@ func TestEndpointDirectEcho(t *testing.T) {
 	}
 	if server.transport.ConnectionIDLength != 8 {
 		t.Errorf("server transport ConnectionIDLength = %d, want 8", server.transport.ConnectionIDLength)
+	}
+}
+
+func TestEndpointPeerCloseDoesNotTearDownSurvivor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	const alpn = "iroh-dropout/0"
+
+	srvKey, _ := key.GenerateSecretKey()
+	server, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Shutdown(ctx)
+
+	survivorKey, _ := key.GenerateSecretKey()
+	survivor, err := Bind(ctx, WithSecretKey(survivorKey),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer survivor.Shutdown(ctx)
+
+	dropperKey, _ := key.GenerateSecretKey()
+	dropper, err := Bind(ctx, WithSecretKey(dropperKey),
+		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dropper.Shutdown(ctx)
+
+	type accepted struct {
+		conn *Conn
+		err  error
+	}
+	acceptc := make(chan accepted, 2)
+	go func() {
+		for range 2 {
+			conn, err := server.Accept(ctx)
+			acceptc <- accepted{conn: conn, err: err}
+		}
+	}()
+
+	addr := netaddr.NewEndpointAddr(server.ID()).WithIP(server.LocalAddr())
+	survivorConn, err := survivor.Connect(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("survivor connect: %v", err)
+	}
+	defer survivorConn.CloseWithError(0, "")
+
+	dropperConn, err := dropper.Connect(ctx, addr, alpn)
+	if err != nil {
+		t.Fatalf("dropper connect: %v", err)
+	}
+	defer dropperConn.CloseWithError(0, "")
+
+	serverConns := make(map[key.EndpointID]*Conn)
+	for range 2 {
+		res := <-acceptc
+		if res.err != nil {
+			t.Fatalf("accept: %v", res.err)
+		}
+		serverConns[res.conn.RemoteID()] = res.conn
+		defer res.conn.CloseWithError(0, "")
+	}
+	serverSurvivor := serverConns[survivor.ID()]
+	if serverSurvivor == nil {
+		t.Fatalf("server did not accept survivor %s", survivor.ID())
+	}
+	serverDropper := serverConns[dropper.ID()]
+	if serverDropper == nil {
+		t.Fatalf("server did not accept dropper %s", dropper.ID())
+	}
+
+	const payloadSize = 2 << 20
+	payload := bytes.Repeat([]byte("s"), payloadSize)
+	serverSawDropperBytes := make(chan struct{})
+	survivorServerDone := make(chan error, 1)
+	dropperServerDone := make(chan error, 1)
+
+	go func() {
+		st, err := serverSurvivor.AcceptStream(ctx)
+		if err != nil {
+			survivorServerDone <- fmt.Errorf("accept survivor stream: %w", err)
+			return
+		}
+		n, err := io.Copy(io.Discard, st)
+		if err != nil {
+			survivorServerDone <- fmt.Errorf("read survivor stream: %w", err)
+			return
+		}
+		if n != payloadSize {
+			survivorServerDone <- fmt.Errorf("read survivor stream: got %d bytes, want %d", n, payloadSize)
+			return
+		}
+		if _, err := st.Write([]byte("ok")); err != nil {
+			survivorServerDone <- fmt.Errorf("write survivor ack: %w", err)
+			return
+		}
+		if err := st.Close(); err != nil {
+			survivorServerDone <- fmt.Errorf("close survivor stream: %w", err)
+			return
+		}
+		survivorServerDone <- nil
+	}()
+
+	go func() {
+		st, err := serverDropper.AcceptStream(ctx)
+		if err != nil {
+			dropperServerDone <- fmt.Errorf("accept dropper stream: %w", err)
+			return
+		}
+		buf := make([]byte, 32<<10)
+		n, err := st.Read(buf)
+		if n > 0 {
+			close(serverSawDropperBytes)
+		}
+		if err != nil {
+			dropperServerDone <- nil
+			return
+		}
+		_, _ = io.Copy(io.Discard, st)
+		dropperServerDone <- nil
+	}()
+
+	survivorClientDone := make(chan error, 1)
+	go func() {
+		st, err := survivorConn.OpenStreamSync(ctx)
+		if err != nil {
+			survivorClientDone <- fmt.Errorf("open survivor stream: %w", err)
+			return
+		}
+		if _, err := st.Write(payload); err != nil {
+			survivorClientDone <- fmt.Errorf("write survivor stream: %w", err)
+			return
+		}
+		if err := st.Close(); err != nil {
+			survivorClientDone <- fmt.Errorf("close survivor stream: %w", err)
+			return
+		}
+		ack, err := io.ReadAll(st)
+		if err != nil {
+			survivorClientDone <- fmt.Errorf("read survivor ack: %w", err)
+			return
+		}
+		if string(ack) != "ok" {
+			survivorClientDone <- fmt.Errorf("survivor ack = %q, want ok", ack)
+			return
+		}
+		survivorClientDone <- nil
+	}()
+
+	dropperStream, err := dropperConn.OpenStreamSync(ctx)
+	if err != nil {
+		t.Fatalf("open dropper stream: %v", err)
+	}
+	if _, err := dropperStream.Write(bytes.Repeat([]byte("d"), 128<<10)); err != nil {
+		t.Fatalf("write dropper stream: %v", err)
+	}
+	select {
+	case <-serverSawDropperBytes:
+	case <-ctx.Done():
+		t.Fatal("server did not observe dropper stream before timeout")
+	}
+	if err := dropperConn.CloseWithError(99, "dropout"); err != nil {
+		t.Fatalf("dropper close: %v", err)
+	}
+
+	if err := <-survivorClientDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-survivorServerDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-dropperServerDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Log("server dropper stream still open after peer connection close")
+	}
+	if err := survivorConn.Context().Err(); err != nil {
+		t.Fatalf("survivor connection closed after dropper endpoint shutdown: %v", err)
+	}
+	if err := serverSurvivor.Context().Err(); err != nil {
+		t.Fatalf("server survivor connection closed after dropper endpoint shutdown: %v", err)
+	}
+	if paths := survivorConn.Paths(); !selectedPathValidated(paths) {
+		t.Fatalf("survivor client selected path not validated after dropper close: %+v", paths)
+	}
+	if paths := serverSurvivor.Paths(); !selectedPathValidated(paths) {
+		t.Fatalf("survivor server selected path not validated after dropper close: %+v", paths)
 	}
 }
 
