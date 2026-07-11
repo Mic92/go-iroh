@@ -258,14 +258,14 @@ func (a *RelayActor) RemoveRelay(url netaddr.RelayURL) (relay.Config, bool) {
 	}
 	a.home = netaddr.RelayURL{}
 	a.homeURL.Set(nil)
-	for _, next := range a.cfg.Map.URLs() {
+	if urls := a.cfg.Map.URLs(); len(urls) > 0 {
+		next := urls[0]
 		a.home = next
 		a.homeURL.Set(&RelayStatus{URL: next, State: RelayConnecting})
 		for key, ar := range a.active {
 			ar.setHome(key == next.String())
 		}
 		a.ensureActiveLocked(next, true)
-		break
 	}
 	return prev, true
 }

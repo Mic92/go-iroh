@@ -12,6 +12,7 @@ import (
 	"github.com/tmc/go-iroh/internal/relayproto"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
+	"github.com/tmc/go-iroh/relay"
 )
 
 // fakeRelayClient is an in-process relay connection used to drive the
@@ -364,5 +365,51 @@ func TestRelayDatagramFrameRoundTrip(t *testing.T) {
 	}
 	if out.Type != relayproto.FrameRelayToClientDatagramBat {
 		t.Errorf("type = %s, want RelayToClientDatagramBatch", out.Type)
+	}
+}
+
+// TestRemoveHomeRelayPromotesOneSuccessor verifies the home-promotion step of
+// RemoveRelay: removing the home relay promotes exactly one remaining relay —
+// the first in the map's sorted order — and activates only that relay. The
+// early break in the promotion loop is what enforces "exactly one"; without it
+// every remaining relay is activated and the last one ends up home.
+func TestRemoveHomeRelayPromotesOneSuccessor(t *testing.T) {
+	client := newFakeRelayClient()
+	a, _ := startActorWith(t, client)
+
+	var urls []netaddr.RelayURL
+	for _, s := range []string{
+		"https://a.relay.example.",
+		"https://b.relay.example.",
+		"https://c.relay.example.",
+	} {
+		u, err := netaddr.ParseRelayURL(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		urls = append(urls, u)
+		a.InsertRelay(u, relay.Config{URL: u})
+	}
+
+	// The first insert became home. Removing it must promote b (the first
+	// remaining URL in sorted order), and must not touch c.
+	if _, ok := a.RemoveRelay(urls[0]); !ok {
+		t.Fatal("RemoveRelay: home relay not found")
+	}
+
+	a.mu.Lock()
+	home := a.home
+	_, bActive := a.active[urls[1].String()]
+	_, cActive := a.active[urls[2].String()]
+	a.mu.Unlock()
+
+	if !home.Equal(urls[1]) {
+		t.Errorf("home after removal = %v, want %v", home, urls[1])
+	}
+	if !bActive {
+		t.Error("promoted relay b has no active connection")
+	}
+	if cActive {
+		t.Error("relay c was activated; only the promoted home may be started")
 	}
 }
