@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/tmc/go-iroh/internal/qng/internal/flowcontrol"
 	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
@@ -30,13 +31,16 @@ type streamsMap struct {
 	queueControlFrame func(wire.Frame)
 	newFlowController func(protocol.StreamID) flowcontrol.StreamFlowController
 
-	mutex                 sync.Mutex
-	outgoingBidiStreams   *outgoingStreamsMap[*Stream]
-	outgoingUniStreams    *outgoingStreamsMap[*SendStream]
-	incomingBidiStreams   *incomingStreamsMap[*Stream]
-	incomingUniStreams    *incomingStreamsMap[*ReceiveStream]
-	reset                 bool
-	supportsResetStreamAt bool
+	mutex               sync.Mutex
+	outgoingBidiStreams *outgoingStreamsMap[*Stream]
+	outgoingUniStreams  *outgoingStreamsMap[*SendStream]
+	incomingBidiStreams *incomingStreamsMap[*Stream]
+	incomingUniStreams  *incomingStreamsMap[*ReceiveStream]
+	reset               bool
+	// supportsResetStreamAt is written on the run goroutine when transport
+	// parameters are applied, and read by the stream constructors on
+	// application goroutines opening streams on a 0-RTT connection.
+	supportsResetStreamAt atomic.Bool
 }
 
 func newStreamsMap(
@@ -65,7 +69,7 @@ func (m *streamsMap) initMaps() {
 	m.outgoingBidiStreams = newOutgoingStreamsMap(
 		protocol.StreamTypeBidi,
 		func(id protocol.StreamID) *Stream {
-			return newStream(m.ctx, id, m.sender, m.newFlowController(id), m.supportsResetStreamAt)
+			return newStream(m.ctx, id, m.sender, m.newFlowController(id), m.supportsResetStreamAt.Load())
 		},
 		m.queueControlFrame,
 		m.perspective,
@@ -73,7 +77,7 @@ func (m *streamsMap) initMaps() {
 	m.incomingBidiStreams = newIncomingStreamsMap(
 		protocol.StreamTypeBidi,
 		func(id protocol.StreamID) *Stream {
-			return newStream(m.ctx, id, m.sender, m.newFlowController(id), m.supportsResetStreamAt)
+			return newStream(m.ctx, id, m.sender, m.newFlowController(id), m.supportsResetStreamAt.Load())
 		},
 		m.maxIncomingBidiStreams,
 		m.queueControlFrame,
@@ -82,7 +86,7 @@ func (m *streamsMap) initMaps() {
 	m.outgoingUniStreams = newOutgoingStreamsMap(
 		protocol.StreamTypeUni,
 		func(id protocol.StreamID) *SendStream {
-			return newSendStream(m.ctx, id, m.sender, m.newFlowController(id), m.supportsResetStreamAt)
+			return newSendStream(m.ctx, id, m.sender, m.newFlowController(id), m.supportsResetStreamAt.Load())
 		},
 		m.queueControlFrame,
 		m.perspective,
@@ -322,7 +326,7 @@ func (m *streamsMap) HandleStreamFrame(f *wire.StreamFrame, rcvTime monotime.Tim
 }
 
 func (m *streamsMap) HandleTransportParameters(p *wire.TransportParameters) {
-	m.supportsResetStreamAt = p.EnableResetStreamAt
+	m.supportsResetStreamAt.Store(p.EnableResetStreamAt)
 	m.outgoingBidiStreams.EnableResetStreamAt()
 	m.outgoingUniStreams.EnableResetStreamAt()
 	m.outgoingBidiStreams.UpdateSendWindow(p.InitialMaxStreamDataBidiRemote)

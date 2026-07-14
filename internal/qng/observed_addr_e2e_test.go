@@ -180,10 +180,10 @@ func TestObservedAddrRoleMapping(t *testing.T) {
 func TestObservedAddrStaleSeqNoIgnored(t *testing.T) {
 	c := &Conn{
 		config: &Config{ReceiveObservedAddressReports: true},
-		peerParams: &wire.TransportParameters{
-			AddressDiscoveryRole: wire.AddressDiscoverySendOnly,
-		},
 	}
+	c.peerParams.Store(&wire.TransportParameters{
+		AddressDiscoveryRole: wire.AddressDiscoverySendOnly,
+	})
 	if err := c.handleObservedAddrFrame(&wire.ObservedAddrFrame{
 		SeqNo: 10,
 		Addr:  netip.MustParseAddr("192.0.2.10"),
@@ -239,11 +239,11 @@ func TestObservedAddrStaleSeqNoIgnored(t *testing.T) {
 func TestObservedAddrQueueReportFromUDPSource(t *testing.T) {
 	c := &Conn{
 		config: &Config{SendObservedAddressReports: true},
-		peerParams: &wire.TransportParameters{
-			AddressDiscoveryRole: wire.AddressDiscoveryReceiveOnly,
-		},
 		framer: newFramer(nil),
 	}
+	c.peerParams.Store(&wire.TransportParameters{
+		AddressDiscoveryRole: wire.AddressDiscoveryReceiveOnly,
+	})
 
 	c.maybeQueueObservedAddr(&net.UDPAddr{
 		IP:   net.ParseIP("::ffff:192.0.2.10"),
@@ -274,10 +274,10 @@ func TestObservedAddrQueueReportFromUDPSource(t *testing.T) {
 func TestObservedAddrConcurrentAccess(t *testing.T) {
 	c := &Conn{
 		config: &Config{ReceiveObservedAddressReports: true},
-		peerParams: &wire.TransportParameters{
-			AddressDiscoveryRole: wire.AddressDiscoverySendOnly,
-		},
 	}
+	c.peerParams.Store(&wire.TransportParameters{
+		AddressDiscoveryRole: wire.AddressDiscoverySendOnly,
+	})
 	const n = 100
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {

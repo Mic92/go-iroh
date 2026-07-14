@@ -1085,7 +1085,7 @@ func TestQNTUnmatchedPathResponseAllowsQNTDuplicateSource(t *testing.T) {
 	c.perspective = protocol.PerspectiveClient
 	limit := uint8(8)
 	c.config.MaxRemoteNATTraversalAddresses = &limit
-	c.peerParams.MaxRemoteNATTraversalAddresses = &limit
+	c.peerParams.Load().MaxRemoteNATTraversalAddresses = &limit
 	c.multipathManager.handleMaxPathID(protocol.PathID(4))
 	source := netip.MustParseAddrPort("198.51.100.1:1234")
 
@@ -1396,12 +1396,9 @@ func TestQNTConnectionHandlersIgnoreNilFrames(t *testing.T) {
 }
 
 func newNegotiatedQNTConn(local, peer uint8) *Conn {
-	return &Conn{
-		config: &Config{MaxRemoteNATTraversalAddresses: &local},
-		peerParams: &wire.TransportParameters{
-			MaxRemoteNATTraversalAddresses: &peer,
-		},
-	}
+	c := &Conn{config: &Config{MaxRemoteNATTraversalAddresses: &local}}
+	c.peerParams.Store(&wire.TransportParameters{MaxRemoteNATTraversalAddresses: &peer})
+	return c
 }
 
 func queuedAddAddressFrames(c *Conn) []*wire.AddAddressFrame {
@@ -1491,10 +1488,7 @@ func newLocalOnlyQNTConn(local uint8) *Conn {
 }
 
 func newPeerOnlyQNTConn(peer uint8) *Conn {
-	return &Conn{
-		config: &Config{},
-		peerParams: &wire.TransportParameters{
-			MaxRemoteNATTraversalAddresses: &peer,
-		},
-	}
+	c := &Conn{config: &Config{}}
+	c.peerParams.Store(&wire.TransportParameters{MaxRemoteNATTraversalAddresses: &peer})
+	return c
 }

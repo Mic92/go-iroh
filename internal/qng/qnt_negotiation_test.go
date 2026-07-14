@@ -41,7 +41,8 @@ func TestQNTNegotiated(t *testing.T) {
 			if !tc.peerNil {
 				peer = &wire.TransportParameters{MaxRemoteNATTraversalAddresses: tc.peer}
 			}
-			c := &Conn{config: cfg, peerParams: peer}
+			c := &Conn{config: cfg}
+			c.peerParams.Store(peer)
 			if got := c.qntNegotiated(); got != tc.want {
 				t.Fatalf("qntNegotiated() = %v, want %v", got, tc.want)
 			}
@@ -165,9 +166,8 @@ func parseQNTFrame(t *testing.T, c *Conn, f wire.Frame) wire.Frame {
 func newQNTTransportParameterConn(local, peer uint8) *Conn {
 	cfg := populateConfig(&Config{MaxRemoteNATTraversalAddresses: &local})
 	c := &Conn{
-		config:     cfg,
-		peerParams: &wire.TransportParameters{MaxRemoteNATTraversalAddresses: &peer},
-		rttStats:   utils.NewRTTStats(),
+		config:   cfg,
+		rttStats: utils.NewRTTStats(),
 		frameParser: *wire.NewFrameParser(
 			cfg.EnableDatagrams,
 			cfg.EnableStreamResetPartialDelivery,
@@ -175,6 +175,7 @@ func newQNTTransportParameterConn(local, peer uint8) *Conn {
 			false,
 		),
 	}
+	c.peerParams.Store(&wire.TransportParameters{MaxRemoteNATTraversalAddresses: &peer})
 	c.connFlowController = flowcontrol.NewConnectionFlowController(
 		protocol.ByteCount(cfg.InitialConnectionReceiveWindow),
 		protocol.ByteCount(cfg.MaxConnectionReceiveWindow),

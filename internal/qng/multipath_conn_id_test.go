@@ -262,7 +262,8 @@ func newMultipathConn(on bool) *Conn {
 		cfg.InitialMaxPathID = &maxLocal
 		peer.InitialMaxPathID = &pid
 	}
-	c := &Conn{config: cfg, peerParams: peer}
+	c := &Conn{config: cfg}
+	c.peerParams.Store(peer)
 	c.multipathManager = newMultipathManager()
 	c.perPathDestConnIDs = make(map[protocol.PathID]protocol.ConnectionID)
 	return c
@@ -281,7 +282,7 @@ func TestCanOpenPathUsesPeerInitialMaxPathID(t *testing.T) {
 	}
 
 	peerInitial := protocol.PathID(1)
-	c.peerParams.InitialMaxPathID = &peerInitial
+	c.peerParams.Load().InitialMaxPathID = &peerInitial
 	if c.canOpenPath(protocol.PathID(2)) {
 		t.Fatal("canOpenPath(2) = true, want false above peer initial max")
 	}

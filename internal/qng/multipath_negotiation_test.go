@@ -43,7 +43,8 @@ func TestMultipathNegotiated(t *testing.T) {
 					peer.InitialMaxPathID = &p
 				}
 			}
-			c := &Conn{config: cfg, peerParams: peer}
+			c := &Conn{config: cfg}
+			c.peerParams.Store(peer)
 			if got := c.multipathNegotiated(); got != tc.negotiate {
 				t.Fatalf("multipathNegotiated() = %v, want %v", got, tc.negotiate)
 			}

@@ -304,7 +304,12 @@ type Conn struct {
 	// pacingDeadline is the time when the next packet should be sent
 	pacingDeadline monotime.Time
 
-	peerParams *wire.TransportParameters
+	// peerParams holds the peer's transport parameters. It is written only on
+	// the run goroutine, but read from application goroutines (e.g. when a
+	// stream opened on a 0-RTT connection creates its flow controller before
+	// the handshake has delivered the authoritative parameters), so all access
+	// goes through the atomic pointer.
+	peerParams atomic.Pointer[wire.TransportParameters]
 
 	timer *time.Timer
 	// keepAlivePingSent stores whether a keep alive PING is in flight.
@@ -911,7 +916,8 @@ func (c *Conn) Context() context.Context {
 }
 
 func (c *Conn) supportsDatagrams() bool {
-	return c.peerParams != nil && c.peerParams.MaxDatagramFrameSize > 0
+	params := c.peerParams.Load()
+	return params != nil && params.MaxDatagramFrameSize > 0
 }
 
 // ConnectionState returns basic details about the QUIC connection.
@@ -922,9 +928,9 @@ func (c *Conn) ConnectionState() ConnectionState {
 	cs := c.cryptoStreamHandler.ConnectionState()
 	c.connState.TLS = cs.ConnectionState
 	c.connState.Used0RTT = cs.Used0RTT
-	if c.peerParams != nil {
-		c.connState.SupportsDatagrams.Remote = c.supportsDatagrams()
-		c.connState.SupportsStreamResetPartialDelivery.Remote = c.peerParams.EnableResetStreamAt
+	if params := c.peerParams.Load(); params != nil {
+		c.connState.SupportsDatagrams.Remote = params.MaxDatagramFrameSize > 0
+		c.connState.SupportsStreamResetPartialDelivery.Remote = params.EnableResetStreamAt
 	}
 	c.connState.SupportsDatagrams.Local = c.config.EnableDatagrams
 	c.connState.SupportsStreamResetPartialDelivery.Local = c.config.EnableStreamResetPartialDelivery
@@ -1066,8 +1072,8 @@ func (c *Conn) switchToNewPath(tr *Transport, now monotime.Time) {
 	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = c.peerParams.MaxUDPPayloadSize
+	if params := c.peerParams.Load(); params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
+		maxPacketSize = params.MaxUDPPayloadSize
 	}
 	c.mtuDiscoverer.Reset(now, initialPacketSize, maxPacketSize)
 	c.conn = newSendConn(tr.conn, c.conn.RemoteAddr(), packetInfo{}, utils.DefaultLogger) // TODO: find a better way
@@ -1193,7 +1199,7 @@ func (c *Conn) canOpenPath(pid protocol.PathID) bool {
 	if pid == protocol.PathIDZero {
 		return false
 	}
-	peerMax := *c.peerParams.InitialMaxPathID
+	peerMax := *c.peerParams.Load().InitialMaxPathID
 	if raised, ok := c.multipathManager.peerMax(); ok && raised > peerMax {
 		peerMax = raised
 	}
@@ -1536,8 +1542,8 @@ func (c *Conn) handleShortHeaderPacket(
 	c.pathManager.SwitchToPath(p.remoteAddr)
 	c.sentPacketHandler.MigratedPath(p.rcvTime, protocol.ByteCount(c.config.InitialPacketSize))
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = c.peerParams.MaxUDPPayloadSize
+	if params := c.peerParams.Load(); params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
+		maxPacketSize = params.MaxUDPPayloadSize
 	}
 	c.mtuDiscoverer.Reset(
 		p.rcvTime,
@@ -3006,7 +3012,7 @@ func (c *Conn) restoreTransportParameters(params *wire.TransportParameters) {
 		})
 	}
 
-	c.peerParams = params
+	c.peerParams.Store(params)
 	c.connIDGenerator.SetMaxActiveConnIDs(params.ActiveConnectionIDLimit)
 	c.connFlowController.UpdateSendWindow(params.InitialMaxData)
 	c.streamsMap.HandleTransportParameters(params)
@@ -3023,14 +3029,14 @@ func (c *Conn) handleTransportParameters(params *wire.TransportParameters) error
 		}
 	}
 
-	if c.perspective == protocol.PerspectiveClient && c.peerParams != nil && c.ConnectionState().Used0RTT && !params.ValidForUpdate(c.peerParams) {
+	if prev := c.peerParams.Load(); c.perspective == protocol.PerspectiveClient && prev != nil && c.ConnectionState().Used0RTT && !params.ValidForUpdate(prev) {
 		return &qerr.TransportError{
 			ErrorCode:    qerr.ProtocolViolation,
 			ErrorMessage: "server sent reduced limits after accepting 0-RTT data",
 		}
 	}
 
-	c.peerParams = params
+	c.peerParams.Store(params)
 	// On the client side we have to wait for handshake completion.
 	// During a 0-RTT connection, we are only allowed to use the new transport parameters for 1-RTT packets.
 	if c.perspective == protocol.PerspectiveServer {
@@ -3073,7 +3079,7 @@ func (c *Conn) checkTransportParameters(params *wire.TransportParameters) error 
 }
 
 func (c *Conn) applyTransportParameters() {
-	params := c.peerParams
+	params := c.peerParams.Load()
 	// Our local idle timeout will always be > 0.
 	c.idleTimeout = c.config.MaxIdleTimeout
 	// If the peer advertised an idle timeout, take the minimum of the values.
@@ -3124,9 +3130,10 @@ func (c *Conn) applyTransportParameters() {
 // via Config.InitialMaxPathID, and the peer in its received parameters. It must
 // be called only after the peer's transport parameters have been processed.
 func (c *Conn) multipathNegotiated() bool {
+	params := c.peerParams.Load()
 	return c.config.InitialMaxPathID != nil &&
-		c.peerParams != nil &&
-		c.peerParams.InitialMaxPathID != nil
+		params != nil &&
+		params.InitialMaxPathID != nil
 }
 
 // qntNegotiated reports whether n0 QUIC NAT traversal was negotiated. This is
@@ -3134,10 +3141,11 @@ func (c *Conn) multipathNegotiated() bool {
 // parameter with a non-zero address limit. It must be called only after the
 // peer's transport parameters have been processed.
 func (c *Conn) qntNegotiated() bool {
+	params := c.peerParams.Load()
 	return maxRemoteNATTraversalAddressesParam(c.config.MaxRemoteNATTraversalAddresses) != nil &&
-		c.peerParams != nil &&
-		c.peerParams.MaxRemoteNATTraversalAddresses != nil &&
-		*c.peerParams.MaxRemoteNATTraversalAddresses != 0
+		params != nil &&
+		params.MaxRemoteNATTraversalAddresses != nil &&
+		*params.MaxRemoteNATTraversalAddresses != 0
 }
 
 // initialMaxPathIDParam converts a Config.InitialMaxPathID (*uint32) to the
@@ -3187,10 +3195,11 @@ func addressDiscoveryRole(config *Config) wire.AddressDiscoveryRole {
 // the send-side gate at mod.rs:6184-6188). It must be called only after the
 // peer's transport parameters have been processed.
 func (c *Conn) reportsObservedAddr() bool {
-	if c.peerParams == nil {
+	params := c.peerParams.Load()
+	if params == nil {
 		return false
 	}
-	return addressDiscoveryRole(c.config).ShouldReport(c.peerParams.AddressDiscoveryRole)
+	return addressDiscoveryRole(c.config).ShouldReport(params.AddressDiscoveryRole)
 }
 
 // acceptsObservedAddr reports whether this endpoint should admit OBSERVED_ADDRESS
@@ -3199,10 +3208,11 @@ func (c *Conn) reportsObservedAddr() bool {
 // mod.rs:5333-5341). It must be called only after the peer's transport
 // parameters have been processed.
 func (c *Conn) acceptsObservedAddr() bool {
-	if c.peerParams == nil {
+	params := c.peerParams.Load()
+	if params == nil {
 		return false
 	}
-	return c.peerParams.AddressDiscoveryRole.ShouldReport(addressDiscoveryRole(c.config))
+	return params.AddressDiscoveryRole.ShouldReport(addressDiscoveryRole(c.config))
 }
 
 // handleObservedAddrFrame records a reflexive address the peer reported for us.
@@ -3829,12 +3839,13 @@ func (c *Conn) OpenUniStreamSync(ctx context.Context) (*SendStream, error) {
 }
 
 func (c *Conn) newFlowController(id protocol.StreamID) flowcontrol.StreamFlowController {
-	initialSendWindow := c.peerParams.InitialMaxStreamDataUni
+	peerParams := c.peerParams.Load()
+	initialSendWindow := peerParams.InitialMaxStreamDataUni
 	if id.Type() == protocol.StreamTypeBidi {
 		if id.InitiatedBy() == c.perspective {
-			initialSendWindow = c.peerParams.InitialMaxStreamDataBidiRemote
+			initialSendWindow = peerParams.InitialMaxStreamDataBidiRemote
 		} else {
-			initialSendWindow = c.peerParams.InitialMaxStreamDataBidiLocal
+			initialSendWindow = peerParams.InitialMaxStreamDataBidiLocal
 		}
 	}
 	return flowcontrol.NewStreamFlowController(
@@ -3946,7 +3957,7 @@ func (c *Conn) MaxDatagramSize() (int64, bool) {
 	// The payload size estimate is conservative. Under many circumstances we
 	// could send a few more bytes.
 	maxDataLen := min(
-		f.MaxDataLen(c.peerParams.MaxDatagramFrameSize, c.version),
+		f.MaxDataLen(c.peerParams.Load().MaxDatagramFrameSize, c.version),
 		protocol.ByteCount(c.currentMTUEstimate.Load()),
 	)
 	return int64(maxDataLen), true
@@ -3998,7 +4009,7 @@ func (c *Conn) AddPath(t *Transport) (*Path, error) {
 	if c.perspective == protocol.PerspectiveServer {
 		return nil, errors.New("server cannot initiate connection migration")
 	}
-	if c.peerParams.DisableActiveMigration {
+	if c.peerParams.Load().DisableActiveMigration {
 		return nil, errors.New("server disabled connection migration")
 	}
 	if err := t.init(false); err != nil {

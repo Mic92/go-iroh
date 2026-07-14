@@ -19,7 +19,8 @@ func TestMultipathFrameGuardRejectsWhenOff(t *testing.T) {
 	// A connection with neither side advertising initial_max_path_id:
 	// multipathNegotiated() is false.
 	newConn := func() *Conn {
-		c := &Conn{config: &Config{}, peerParams: &wire.TransportParameters{}}
+		c := &Conn{config: &Config{}}
+		c.peerParams.Store(&wire.TransportParameters{})
 		c.multipathManager = newMultipathManager()
 		return c
 	}
@@ -81,7 +82,8 @@ func TestMultipathFrameGuardAcceptsWhenOn(t *testing.T) {
 	newConn := func() *Conn {
 		cfg := &Config{InitialMaxPathID: &maxLocal}
 		peer := &wire.TransportParameters{InitialMaxPathID: &pid}
-		c := &Conn{config: cfg, peerParams: peer}
+		c := &Conn{config: cfg}
+		c.peerParams.Store(peer)
 		c.multipathManager = newMultipathManager()
 		return c
 	}

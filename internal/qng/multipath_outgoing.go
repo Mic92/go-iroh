@@ -501,8 +501,8 @@ func (c *Conn) migrateOrdinarySendToQNTRoute(route netip.AddrPort, now monotime.
 	}
 	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = c.peerParams.MaxUDPPayloadSize
+	if params := c.peerParams.Load(); params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
+		maxPacketSize = params.MaxUDPPayloadSize
 	}
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
 	c.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))
@@ -557,8 +557,8 @@ func (c *Conn) revertQNTMigration(now monotime.Time) {
 	}
 	initialPacketSize := protocol.ByteCount(c.config.InitialPacketSize)
 	maxPacketSize := protocol.ByteCount(protocol.MaxPacketBufferSize)
-	if c.peerParams.MaxUDPPayloadSize > 0 && c.peerParams.MaxUDPPayloadSize < maxPacketSize {
-		maxPacketSize = c.peerParams.MaxUDPPayloadSize
+	if params := c.peerParams.Load(); params.MaxUDPPayloadSize > 0 && params.MaxUDPPayloadSize < maxPacketSize {
+		maxPacketSize = params.MaxUDPPayloadSize
 	}
 	c.sentPacketHandler.MigratedPath(now, initialPacketSize)
 	c.currentMTUEstimate.Store(uint32(estimateMaxPayloadSize(initialPacketSize)))

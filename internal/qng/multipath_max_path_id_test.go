@@ -23,7 +23,8 @@ func newMaxPathIDTestConn(localMax, peerMax *uint32) *Conn {
 		p := protocol.PathID(*peerMax)
 		peer.InitialMaxPathID = &p
 	}
-	c := &Conn{config: cfg, peerParams: peer}
+	c := &Conn{config: cfg}
+	c.peerParams.Store(peer)
 	c.multipathManager = newMultipathManager()
 	c.framer = newFramer(nil)
 	c.sendingScheduled = make(chan struct{}, 1)

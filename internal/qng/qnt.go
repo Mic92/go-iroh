@@ -702,8 +702,12 @@ func (c *Conn) qntRemoteAddressLimit() uint8 {
 }
 
 func (c *Conn) qntLocalAddressLimit() int {
-	if c == nil || c.peerParams == nil || c.peerParams.MaxRemoteNATTraversalAddresses == nil {
+	if c == nil {
 		return 0
 	}
-	return int(*c.peerParams.MaxRemoteNATTraversalAddresses)
+	params := c.peerParams.Load()
+	if params == nil || params.MaxRemoteNATTraversalAddresses == nil {
+		return 0
+	}
+	return int(*params.MaxRemoteNATTraversalAddresses)
 }
