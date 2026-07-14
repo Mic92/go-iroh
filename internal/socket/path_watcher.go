@@ -97,6 +97,11 @@ func NewPathWatcher() *PathWatcher {
 // delivered on plus a function to unsubscribe and stop delivery. Events sent
 // before Subscribe are not replayed. The channel is closed when the subscriber
 // is cancelled or the watcher is closed.
+//
+// The cancel function must be called when the subscriber is done, like
+// [time.Ticker.Stop]: each subscription runs a delivery goroutine, and
+// [PathWatcher.Close] drains to subscribers that may still be reading, so a
+// subscription that is abandoned unread without cancelling leaks its goroutine.
 func (w *PathWatcher) Subscribe() (<-chan PathEvent, func()) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

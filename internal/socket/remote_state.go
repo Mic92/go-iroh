@@ -201,6 +201,9 @@ type connState struct {
 	addr      Addr
 	paths     []Addr
 	hasDirect bool
+	// cancel ends the path-event subscription created for this connection, so
+	// its delivery goroutine exits even if the subscriber stopped reading.
+	cancel func()
 }
 
 // RemoteStateActor manages all connection and path state for a single remote
@@ -279,7 +282,8 @@ func (a *RemoteStateActor) donec() <-chan struct{} { return a.done }
 // AddConnection registers conn with the actor and returns a channel of path
 // events for it. ok is false if the actor stopped before it could register the
 // connection; the caller should retry with a fresh actor. The returned channel
-// is closed when the actor stops.
+// is closed when the connection closes or the actor stops; the subscription's
+// lifetime is managed by the actor, so the caller may simply stop reading.
 func (a *RemoteStateActor) AddConnection(conn Connection) (events <-chan PathEvent, ok bool) {
 	reply := make(chan (<-chan PathEvent), 1)
 	select {
@@ -319,6 +323,20 @@ func (a *RemoteStateActor) ResolveRemote(addr netaddr.EndpointAddr) error {
 func (a *RemoteStateActor) run(ctx context.Context) {
 	defer close(a.done)
 	defer a.watcher.Close()
+	// Cancel the per-connection subscriptions before the watcher drain above:
+	// their channels may be unread (AddConnection callers can discard them), and
+	// Close's drain would wait forever on an abandoned reader.
+	defer func() {
+		a.mu.Lock()
+		conns := make([]*connState, 0, len(a.conns))
+		for _, cs := range a.conns {
+			conns = append(conns, cs)
+		}
+		a.mu.Unlock()
+		for _, cs := range conns {
+			cs.cancel()
+		}
+	}()
 	if a.onExit != nil {
 		defer a.onExit()
 	}
@@ -387,10 +405,10 @@ func (a *RemoteStateActor) handle(ctx context.Context, msg remoteMessage) {
 // caller to path events, emits an Opened event, and starts a watcher goroutine
 // that posts a connClosed message when the connection ends.
 func (a *RemoteStateActor) handleAddConnection(m *addConnectionMsg) {
-	sub, _ := a.watcher.Subscribe()
+	sub, cancel := a.watcher.Subscribe()
 
 	addr := m.conn.RemoteAddr()
-	cs := &connState{conn: m.conn, addr: addr}
+	cs := &connState{conn: m.conn, addr: addr, cancel: cancel}
 	paths := observeMultipathPaths(m.conn)
 
 	a.mu.Lock()
@@ -526,6 +544,9 @@ func (a *RemoteStateActor) handleConnClosed(conn Connection) {
 	for _, addr := range closed {
 		a.watcher.Send(PathEvent{Kind: PathEventClosed, Addr: addr})
 	}
+	// End the connection's subscription after the Closed events above, so a
+	// reader that kept up sees them before its channel closes.
+	cs.cancel()
 }
 
 func (a *RemoteStateActor) recordPathOpenedLocked(cs *connState, addr Addr) {
