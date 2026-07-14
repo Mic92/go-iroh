@@ -42,7 +42,6 @@ Commands:
 | `cmd/iroh-relay` | small, self-hostable relay server |
 | `cmd/iroh-dns-server` | pkarr HTTP and DNS server for discovery |
 | `cmd/wasmrelaytest` | browser smoke test for the js/wasm relay-only transport |
-| `cmd/twobox-directpath` | two-host harness proving direct-path selection and throughput |
 
 The transport internals live under `internal/`: relay protocol/client/server,
 net reports, socket path management, RFC 7250 TLS, the postcard and pkarr
