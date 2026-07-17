@@ -311,10 +311,21 @@ func (p *parser) skipTransportAddr() error {
 		default:
 			return verifyErr(fmt.Sprintf("unknown ip address family %d", family), nil)
 		}
-		_, err = p.varint()
-		return wrapDecodeErr(err)
+		if _, err := p.varint(); err != nil { // port
+			return wrapDecodeErr(err)
+		}
+		if family == 1 {
+			// IPv6 socket addresses also carry flowinfo and scope id.
+			if _, err := p.varint(); err != nil {
+				return wrapDecodeErr(err)
+			}
+			if _, err := p.varint(); err != nil {
+				return wrapDecodeErr(err)
+			}
+		}
+		return nil
 	case 2:
-		if _, err := p.bytes(8); err != nil {
+		if _, err := p.varint(); err != nil { // custom address id
 			return wrapDecodeErr(err)
 		}
 		n, err := p.varint()

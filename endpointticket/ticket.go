@@ -383,7 +383,10 @@ func appendTransportAddr(b []byte, a netaddr.TransportAddr) []byte {
 			b = append(b, ip6[:]...)
 		}
 		b = appendVarint(b, uint64(ap.Port()))
-		if ap.Addr().Is6() && !ap.Addr().Is4In6() {
+		if !ap.Addr().Is4() {
+			// Every 16-byte address, including an IPv4-mapped one, is a
+			// SocketAddrV6 on the wire and carries flowinfo and scope id;
+			// the decoder reads them back unconditionally.
 			b = appendVarint(b, 0)
 			b = appendVarint(b, uint64(scopeID(ap.Addr().Zone())))
 		}

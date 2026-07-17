@@ -185,6 +185,41 @@ func TestDocTicketRoundTripManyNodes(t *testing.T) {
 	}
 }
 
+func TestDocTicketRoundTripAddrs(t *testing.T) {
+	sk, err := key.GenerateSecretKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability := NewReadCapability(NamespaceID{id: sk.Public().EndpointID()})
+	relay, err := netaddr.ParseRelayURL("http://derp.me./")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sk.Public().EndpointID()
+	nodes := []netaddr.EndpointAddr{
+		netaddr.NewEndpointAddr(id,
+			netaddr.IPAddr{Addr: netip.MustParseAddrPort("[::1]:4242")},
+			netaddr.IPAddr{Addr: netip.MustParseAddrPort("127.0.0.1:1024")},
+		),
+		netaddr.NewEndpointAddr(id,
+			netaddr.RelayAddr{URL: relay},
+			netaddr.IPAddr{Addr: netip.AddrPortFrom(netip.MustParseAddr("::ffff:192.0.2.1"), 80)},
+			netaddr.NewCustomAddr(7, []byte{0xa1, 0xb2}),
+		),
+	}
+	ticket := NewTicket(capability, nodes)
+	got, err := DecodeString(ticket.String())
+	if err != nil {
+		t.Fatalf("DecodeString: %v", err)
+	}
+	if len(got.Nodes()) != len(nodes) {
+		t.Fatalf("nodes len = %d, want %d", len(got.Nodes()), len(nodes))
+	}
+	for i := range nodes {
+		assertEndpointAddrEqual(t, got.Nodes()[i], nodes[i])
+	}
+}
+
 func TestDocTicketErrors(t *testing.T) {
 	if _, err := DecodeString("blobabc"); !errors.Is(err, &endpointticket.ParseError{Kind: endpointticket.ParseErrorKindKind}) {
 		t.Fatalf("missing prefix error = %v", err)
