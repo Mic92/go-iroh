@@ -2,9 +2,12 @@ package iroh
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -14,20 +17,68 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
+type layerLadderSample struct {
+	Rung       string `json:"rung"`
+	Lang       string `json:"lang"`
+	Sample     int    `json:"sample"`
+	Bytes      int64  `json:"bytes"`
+	DurationNS int64  `json:"duration_ns"`
+}
+
+func emitLayerLadderSample(b *testing.B, rung string, bytes int64) {
+	b.Helper()
+	path := os.Getenv("IROH_LAYER_LADDER_JSONL")
+	if path == "" {
+		return
+	}
+	sample, err := strconv.Atoi(os.Getenv("IROH_LAYER_LADDER_SAMPLE"))
+	if err != nil {
+		b.Fatalf("parse IROH_LAYER_LADDER_SAMPLE: %v", err)
+	}
+	lang := os.Getenv("IROH_LAYER_LADDER_LANG")
+	if lang == "" {
+		lang = "go"
+	}
+	// The testing package may invoke a benchmark several times while choosing
+	// b.N. Keep only the final calibrated invocation from this process.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		b.Fatalf("open layer-ladder JSONL: %v", err)
+	}
+	err = json.NewEncoder(f).Encode(layerLadderSample{
+		Rung:       rung,
+		Lang:       lang,
+		Sample:     sample,
+		Bytes:      bytes,
+		DurationNS: b.Elapsed().Nanoseconds(),
+	})
+	closeErr := f.Close()
+	if err != nil {
+		b.Fatalf("write layer-ladder JSONL: %v", err)
+	}
+	if closeErr != nil {
+		b.Fatalf("close layer-ladder JSONL: %v", closeErr)
+	}
+}
+
 func benchmarkConnPair(b *testing.B, alpn string) (client, server *Conn) {
+	return benchmarkConnPairAddr(b, alpn, netip.IPv6Loopback())
+}
+
+func benchmarkConnPairAddr(b *testing.B, alpn string, ip netip.Addr) (client, server *Conn) {
 	b.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	b.Cleanup(cancel)
 
 	srvKey, _ := key.GenerateSecretKey()
 	srvEP, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
-		WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+		WithBindAddr(netip.AddrPortFrom(ip, 0)))
 	if err != nil {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { srvEP.Shutdown(context.Background()) })
 
-	clientEP, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	clientEP, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(ip, 0)))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -96,10 +147,14 @@ func reportConnCipher(b *testing.B, c *Conn) {
 }
 
 func benchmarkQUICConnPair(b *testing.B, alpn string) (client, server *quic.Conn) {
-	return benchmarkQUICConnPairWithConfig(b, alpn, &quic.Config{})
+	return benchmarkQUICConnPairWithConfigAddr(b, alpn, &quic.Config{}, net.IPv6loopback)
 }
 
 func benchmarkQUICConnPairWithConfig(b *testing.B, alpn string, conf *quic.Config) (client, server *quic.Conn) {
+	return benchmarkQUICConnPairWithConfigAddr(b, alpn, conf, net.IPv6loopback)
+}
+
+func benchmarkQUICConnPairWithConfigAddr(b *testing.B, alpn string, conf *quic.Config, ip net.IP) (client, server *quic.Conn) {
 	b.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	b.Cleanup(cancel)
@@ -115,7 +170,7 @@ func benchmarkQUICConnPairWithConfig(b *testing.B, alpn string, conf *quic.Confi
 		b.Fatal(err)
 	}
 
-	serverUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	serverUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: 0})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -136,7 +191,7 @@ func benchmarkQUICConnPairWithConfig(b *testing.B, alpn string, conf *quic.Confi
 		done <- accepted{conn: c, err: err}
 	}()
 
-	clientUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	clientUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: ip, Port: 0})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -344,6 +399,7 @@ func BenchmarkConnStreamThroughput(b *testing.B) {
 		}
 	}
 	b.StopTimer()
+	emitLayerLadderSample(b, "full-steady", int64(b.N)*int64(len(buf)))
 	if err := s.Close(); err != nil {
 		b.Fatalf("close stream: %v", err)
 	}
@@ -447,6 +503,7 @@ func BenchmarkQUICRawUDPStreamThroughput(b *testing.B) {
 		}
 	}
 	b.StopTimer()
+	emitLayerLadderSample(b, "quic-steady", int64(b.N)*int64(len(buf)))
 	if err := s.Close(); err != nil {
 		b.Fatalf("close stream: %v", err)
 	}
@@ -628,6 +685,7 @@ func BenchmarkRawTCPConnThroughput(b *testing.B) {
 		}
 	}
 	b.StopTimer()
+	emitLayerLadderSample(b, "tcp", int64(b.N)*int64(len(buf)))
 	client.Close()
 	if err := <-done; err != nil {
 		b.Fatalf("copy tcp: %v", err)
@@ -1026,6 +1084,7 @@ func BenchmarkRawUDPSendThroughput(b *testing.B) {
 		}
 	}
 	b.StopTimer()
+	emitLayerLadderSample(b, "udp", int64(b.N)*int64(len(buf)))
 	client.Close()
 	server.Close()
 	<-done
