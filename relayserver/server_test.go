@@ -244,6 +244,43 @@ func TestRelayServerReplacesSameEndpointSession(t *testing.T) {
 		t.Fatalf("pong = %+v, want ping echo", pong)
 	}
 }
+
+func TestRelayServerOutlivesHTTPDeadlines(t *testing.T) {
+	srv := New()
+	ts := httptest.NewUnstartedServer(srv)
+	ts.Config.ReadTimeout = 20 * time.Millisecond
+	ts.Config.WriteTimeout = 20 * time.Millisecond
+	ts.Start()
+	defer ts.Close()
+
+	u, err := netaddr.ParseRelayURL(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	sk, _ := key.GenerateSecretKey()
+	conn, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: sk})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	time.Sleep(50 * time.Millisecond)
+	var ping [8]byte
+	copy(ping[:], "deadline")
+	if err := conn.Send(ctx, relayproto.ClientToRelayMsg{Type: relayproto.FramePing, Ping: ping}); err != nil {
+		t.Fatalf("send ping: %v", err)
+	}
+	msg, err := conn.Recv(ctx)
+	if err != nil {
+		t.Fatalf("receive pong: %v", err)
+	}
+	if msg.Type != relayproto.FramePong || msg.Ping != ping {
+		t.Fatalf("pong = %+v, want ping echo", msg)
+	}
+}
+
 func TestSessionQueueByteLimit(t *testing.T) {
 	msg := relayproto.RelayToClientMsg{Type: relayproto.FrameStatus, Status: relayproto.StatusHealthy}
 	n := int64(len(msg.AppendTo(nil)))

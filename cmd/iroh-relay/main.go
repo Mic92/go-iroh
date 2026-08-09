@@ -31,6 +31,13 @@ import (
 	"github.com/tmc/go-iroh/relayserver"
 )
 
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 10 * time.Second
+	httpWriteTimeout      = 10 * time.Second
+	httpIdleTimeout       = time.Minute
+)
+
 func main() {
 	if err := run(os.Args[1:], os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "iroh-relay:", err)
@@ -72,7 +79,7 @@ func serve(ctx context.Context, ln net.Listener, logger *log.Logger, shutdownTim
 		io.WriteString(w, "ok\n")
 	})
 
-	srv := &http.Server{Handler: mux}
+	srv := newHTTPServer(mux)
 	logger.Printf("iroh-relay listening on %s (relay: /relay, health: /healthz)", ln.Addr())
 
 	errc := make(chan error, 1)
@@ -89,5 +96,15 @@ func serve(ctx context.Context, ln net.Listener, logger *log.Logger, shutdownTim
 		shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		return srv.Shutdown(shutCtx)
+	}
+}
+
+func newHTTPServer(handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
 }

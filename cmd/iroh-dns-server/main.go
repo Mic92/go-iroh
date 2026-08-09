@@ -9,8 +9,16 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/tmc/go-iroh/dnsserver"
+)
+
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 10 * time.Second
+	httpWriteTimeout      = 10 * time.Second
+	httpIdleTimeout       = time.Minute
 )
 
 func main() {
@@ -33,7 +41,7 @@ func run(args []string) error {
 	}
 	server := dnsserver.New()
 	if *dnsAddr == "" {
-		return http.ListenAndServe(*addr, server)
+		return newHTTPServer(*addr, server).ListenAndServe()
 	}
 	pc, err := net.ListenPacket("udp", *dnsAddr)
 	if err != nil {
@@ -43,6 +51,17 @@ func run(args []string) error {
 
 	errc := make(chan error, 2)
 	go func() { errc <- server.ServePacketConn(context.Background(), pc) }()
-	go func() { errc <- http.ListenAndServe(*addr, server) }()
+	go func() { errc <- newHTTPServer(*addr, server).ListenAndServe() }()
 	return <-errc
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
+	}
 }
