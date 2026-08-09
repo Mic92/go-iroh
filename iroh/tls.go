@@ -94,6 +94,10 @@ func peerEndpointID(cs tls.ConnectionState) (key.EndpointID, error) {
 // mirrors the Rust client config, which enables early data and stores tickets
 // in a ClientSessionMemoryCache (iroh/src/tls.rs:86-87).
 func clientTLSConfig(sk key.SecretKey, want key.EndpointID, alpns []string, cache tls.ClientSessionCache) (*tls.Config, error) {
+	return clientTLSConfigWithCurves(sk, want, alpns, cache, nil)
+}
+
+func clientTLSConfigWithCurves(sk key.SecretKey, want key.EndpointID, alpns []string, cache tls.ClientSessionCache, curves []tls.CurveID) (*tls.Config, error) {
 	cert, err := rawKeyCertificate(sk)
 	if err != nil {
 		return nil, err
@@ -105,6 +109,7 @@ func clientTLSConfig(sk key.SecretKey, want key.EndpointID, alpns []string, cach
 		MaxVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: cache == nil,
 		ClientSessionCache:     cache,
+		CurvePreferences:       curves,
 		NextProtos:             alpns,
 		ServerName:             ServerName(want),
 		InsecureSkipVerify:     true, // chain verification is replaced by VerifyConnection
@@ -132,6 +137,10 @@ func clientTLSConfig(sk key.SecretKey, want key.EndpointID, alpns []string, cach
 // = u32::MAX on those tickets when 0-RTT acceptance is enabled (RFC 9001 §4.6.1,
 // iroh/src/tls.rs:118); the iroh server opts in via [quic.Config.Allow0RTT].
 func serverTLSConfig(sk key.SecretKey, alpns []string) (*tls.Config, error) {
+	return serverTLSConfigWithCurves(sk, alpns, nil)
+}
+
+func serverTLSConfigWithCurves(sk key.SecretKey, alpns []string, curves []tls.CurveID) (*tls.Config, error) {
 	cert, err := rawKeyCertificate(sk)
 	if err != nil {
 		return nil, err
@@ -142,6 +151,7 @@ func serverTLSConfig(sk key.SecretKey, alpns []string) (*tls.Config, error) {
 		MinVersion:             tls.VersionTLS13,
 		MaxVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: false,
+		CurvePreferences:       curves,
 		NextProtos:             alpns,
 		ClientAuth:             tls.RequireAnyClientCert,
 		InsecureSkipVerify:     true,
