@@ -54,6 +54,14 @@ net reports, socket path management, RFC 7250 TLS, the postcard and pkarr
 implementations, the gossip proto state machine, and `qng`, the quic-go fork
 used for iroh/noq compatibility.
 
+## Ecosystem
+
+| Repository | Contents |
+|---|---|
+| [go-iroh-examples](https://github.com/tmc/go-iroh-examples) | 40+ runnable example programs, from hello-world dial-up to gossip meshes |
+| [go-iroh-tools](https://github.com/tmc/go-iroh-tools) | command-line tools built on go-iroh |
+| [go-iroh-experiments](https://github.com/tmc/go-iroh-experiments) | experimental modules layered on go-iroh |
+
 ## Install
 
 ```sh
@@ -140,25 +148,15 @@ the magic-socket path: it uses the same receive queue depth, pooled receive
 buffers, caller-buffer copy, and separate write queue shape as the direct IP
 transport.
 
-Live Rust interop gates are opt-in because they require a checked-out and built
-Rust iroh tree:
+Live Rust interop runs through the compatibility harness on the
+[`compat-harness`](https://github.com/tmc/go-iroh/tree/compat-harness) branch,
+which drives unmodified upstream iroh binaries in pinned Docker images against
+go-iroh and renders [COMPATIBILITY.md](COMPATIBILITY.md). It requires only Go
+and Docker:
 
 ```sh
-GO_IROH_LIVE_RUST_INTEROP=1 \
-IROH_RUST_REPO=/path/to/n0-computer/iroh \
-go test ./internal/compat -run 'TestLiveRust' -count=1 -v
-
-GO_IROH_LIVE_RUST_INTEROP=1 \
-IROH_RUST_REPO=/path/to/n0-computer/iroh \
-go test ./iroh -run TestLiveRustTransferFetchPingDirectPath -count=1 -v
-```
-
-The gossip stack has its own opt-in live gate that builds a Rust `iroh-gossip`
-helper (from `gossip/testdata/rust-gossip-interop`) and exchanges membership and
-broadcast with it over `/iroh-gossip/1`. It requires `cargo`:
-
-```sh
-GO_IROH_LIVE_RUST_GOSSIP=1 go test ./gossip -run TestLiveRustGossipInterop -count=1 -v
+git checkout compat-harness
+cd iroh-compat-harness && make parity
 ```
 
 ## Status
@@ -169,10 +167,10 @@ The connectivity layer is a wire-compatible iroh endpoint. The protocol packages
 PlumTree state machine with a postcard discovery channel.
 
 The normal local suite covers the public packages, qng transport extensions, and
-local relay/direct behavior. The opt-in Rust gates cover live echo, Rust
-`transfer` provider/upload, direct-path selection, qlog evidence for QNT frames,
-and Go↔Rust gossip membership and broadcast, when the host environment provides
-the required binaries and network topology.
+local relay/direct behavior. Live Go↔Rust coverage — handshakes, transport
+semantics, relay, discovery, and gossip against pinned upstream releases — runs
+in the [compatibility harness](https://github.com/tmc/go-iroh/tree/compat-harness/iroh-compat-harness)
+and is summarized in [COMPATIBILITY.md](COMPATIBILITY.md).
 
 GOOS=js/GOARCH=wasm builds compile. Browser runtime support is limited by the
 platform: the relay WebSocket client has a js-specific dial path, but direct UDP
