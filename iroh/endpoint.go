@@ -42,6 +42,7 @@ type Endpoint struct {
 	listener     *quic.EarlyListener
 	quicConf     *quic.Config
 	keyLogWriter io.Writer
+	keyExchange  KeyExchangePolicy
 	sessionCache *SessionCache
 	disableIP    bool
 	relayFirst   bool
@@ -101,6 +102,7 @@ type config struct {
 	natPMPGateway   netip.Addr
 	natPMPPort      uint16
 	keyLogWriter    io.Writer
+	keyExchange     KeyExchangePolicy
 	transportConfig *QUICTransportConfig
 	pathSelector    socket.PathSelector
 	relayFirst      bool
@@ -319,6 +321,18 @@ func WithKeyLogWriter(w io.Writer) Option {
 	}
 }
 
+// WithKeyExchangePolicy selects the TLS key-exchange groups used for direct
+// peer connections. The zero policy keeps the package default.
+func WithKeyExchangePolicy(policy KeyExchangePolicy) Option {
+	return func(c *config) error {
+		if !policy.valid() {
+			return fmt.Errorf("iroh: invalid key exchange policy %d", policy)
+		}
+		c.keyExchange = policy
+		return nil
+	}
+}
+
 // WithHooks registers endpoint hooks. Hooks run in registration order and may
 // reject outgoing dials or completed handshakes.
 func WithHooks(h EndpointHooks) Option {
@@ -461,6 +475,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		},
 		quicConf:     quicConf,
 		keyLogWriter: c.keyLogWriter,
+		keyExchange:  c.keyExchange,
 		sessionCache: NewSessionCache(),
 		// A nil udp means there is no IP transport (relay-only bind, or the js
 		// build where bindPacketConn never returns a socket), so IP addresses
@@ -574,7 +589,7 @@ func maxRemoteNATTraversalAddresses() *uint8 {
 // It uses an early listener so the QUIC stack can accept 0-RTT early data from
 // peers that resume a prior session.
 func (e *Endpoint) startListener() error {
-	serverTLS, err := serverTLSConfig(e.secretKey, e.alpns)
+	serverTLS, err := serverTLSConfigWithCurves(e.secretKey, e.alpns, e.keyExchange.curves())
 	if err != nil {
 		return err
 	}
@@ -1196,7 +1211,7 @@ func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, 
 		return nil, ErrNoAddress
 	}
 
-	clientTLS, err := clientTLSConfig(e.secretKey, addr.ID, []string{alpn}, e.sessionCache)
+	clientTLS, err := clientTLSConfigWithCurves(e.secretKey, addr.ID, []string{alpn}, e.sessionCache, e.keyExchange.curves())
 	if err != nil {
 		return nil, err
 	}

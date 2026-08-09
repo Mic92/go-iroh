@@ -149,6 +149,26 @@ func TestTLSConfigCurvePreferences(t *testing.T) {
 	}
 }
 
+func TestKeyExchangePolicyCurves(t *testing.T) {
+	tests := []struct {
+		name   string
+		policy KeyExchangePolicy
+		want   []tls.CurveID
+	}{
+		{name: "default", policy: KeyExchangeDefault},
+		{name: "classical", policy: KeyExchangeClassical, want: []tls.CurveID{tls.X25519, tls.CurveP256, tls.CurveP384, tls.CurveP521}},
+		{name: "prefer pq", policy: KeyExchangePreferPQ, want: []tls.CurveID{tls.X25519MLKEM768, tls.X25519, tls.CurveP256, tls.CurveP384}},
+		{name: "pq only", policy: KeyExchangePQOnly, want: []tls.CurveID{tls.X25519MLKEM768}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.policy.curves(); !slices.Equal(got, tt.want) {
+				t.Fatalf("curves = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTLSVerifyConnectionIdentityPolicy(t *testing.T) {
 	serverKey := key.NewSecretKey([32]byte{1})
 	clientKey := key.NewSecretKey([32]byte{2})

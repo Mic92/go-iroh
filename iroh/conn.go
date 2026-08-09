@@ -577,6 +577,12 @@ func (c *Conn) MultipathNegotiated() bool {
 	return c.qc.ConnectionState().MultipathNegotiated
 }
 
+// KeyExchangeGroup returns the TLS named group negotiated for this connection.
+// It is empty until the handshake completes.
+func (c *Conn) KeyExchangeGroup() string {
+	return c.qc.ConnectionState().TLS.CurveID.String()
+}
+
 // HandshakeComplete returns a channel closed when the TLS handshake finishes.
 // For a 0-RTT dial, [Endpoint.Connect] may return before this fires; waiting on
 // it and then checking [Conn.Used0RTT] tells whether the 0-RTT attempt was
