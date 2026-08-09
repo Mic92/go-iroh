@@ -3,11 +3,14 @@ package relayserver
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/tmc/go-iroh/internal/relayclient"
 	"github.com/tmc/go-iroh/internal/relayproto"
 	"github.com/tmc/go-iroh/key"
@@ -116,5 +119,160 @@ func TestRelayServerAcceptsTLSKeyMaterialAuth(t *testing.T) {
 	}
 	if got := srv.Snapshot()["clients_accepted"]; got != 1 {
 		t.Fatalf("clients_accepted = %d, want 1", got)
+	}
+}
+
+func TestRelayServerTimesOutAuthentication(t *testing.T) {
+	srv := New()
+	srv.establishTimeout = 20 * time.Millisecond
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	url := "ws" + strings.TrimPrefix(ts.URL, "http") + relayPath
+	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
+		Subprotocols: relayproto.SupportedProtocolVersions(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatalf("read challenge: %v", err)
+	}
+	if _, _, err := conn.Read(ctx); err == nil {
+		t.Fatal("unauthenticated connection remained open")
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("connection outlived authentication timeout: %v", err)
+	}
+}
+
+func TestRelayServerLimitsPendingAuthentication(t *testing.T) {
+	srv := New()
+	srv.pendingAuth = make(chan struct{}, 1)
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	url := "ws" + strings.TrimPrefix(ts.URL, "http") + relayPath
+	options := &websocket.DialOptions{Subprotocols: relayproto.SupportedProtocolVersions()}
+	first, _, err := websocket.Dial(ctx, url, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := first.Read(ctx); err != nil {
+		t.Fatalf("read first challenge: %v", err)
+	}
+
+	second, resp, err := websocket.Dial(ctx, url, options)
+	if second != nil {
+		second.CloseNow()
+	}
+	if err == nil {
+		t.Fatal("second unauthenticated connection was accepted")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		if resp == nil {
+			t.Fatal("second connection has no HTTP response")
+		}
+		resp.Body.Close()
+		t.Fatalf("second connection status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+	resp.Body.Close()
+
+	first.CloseNow()
+	deadline := time.Now().Add(time.Second)
+	for len(srv.pendingAuth) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := len(srv.pendingAuth); got != 0 {
+		t.Fatalf("pending authentication count = %d, want 0", got)
+	}
+	third, _, err := websocket.Dial(ctx, url, options)
+	if err != nil {
+		t.Fatalf("connect after slot release: %v", err)
+	}
+	third.CloseNow()
+}
+
+func TestRelayServerReplacesSameEndpointSession(t *testing.T) {
+	srv := New()
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+	u, err := netaddr.ParseRelayURL(ts.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	secret, _ := key.GenerateSecretKey()
+	first, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := relayclient.Connect(ctx, u, relayclient.Options{SecretKey: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+
+	status, err := first.Recv(ctx)
+	if err != nil {
+		t.Fatalf("receive replacement status: %v", err)
+	}
+	if status.Type != relayproto.FrameStatus || status.Status != relayproto.StatusSameEndpointIDConnected {
+		t.Fatalf("replacement status = %+v", status)
+	}
+	if _, err := first.Recv(ctx); err == nil {
+		t.Fatal("replaced connection remained open")
+	}
+
+	var ping [8]byte
+	copy(ping[:], "new conn")
+	if err := second.Send(ctx, relayproto.ClientToRelayMsg{Type: relayproto.FramePing, Ping: ping}); err != nil {
+		t.Fatalf("send on replacement connection: %v", err)
+	}
+	pong, err := second.Recv(ctx)
+	if err != nil {
+		t.Fatalf("receive on replacement connection: %v", err)
+	}
+	if pong.Type != relayproto.FramePong || pong.Ping != ping {
+		t.Fatalf("pong = %+v, want ping echo", pong)
+	}
+}
+func TestSessionQueueByteLimit(t *testing.T) {
+	msg := relayproto.RelayToClientMsg{Type: relayproto.FrameStatus, Status: relayproto.StatusHealthy}
+	n := int64(len(msg.AppendTo(nil)))
+	sess := &session{
+		send:           make(chan []byte, 2),
+		maxQueuedBytes: n,
+	}
+	if !sess.enqueue(msg) {
+		t.Fatal("first message was dropped")
+	}
+	if sess.enqueue(msg) {
+		t.Fatal("message exceeding byte limit was queued")
+	}
+	if got := sess.queuedBytes.Load(); got != n {
+		t.Fatalf("queued bytes = %d, want %d", got, n)
+	}
+	if got := len(sess.send); got != 1 {
+		t.Fatalf("queue depth = %d, want 1", got)
+	}
+}
+
+func TestByteLimiterHonorsContext(t *testing.T) {
+	limiter := newByteLimiter(1, 1)
+	if err := limiter.wait(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := limiter.wait(ctx, 1); !errors.Is(err, context.Canceled) {
+		t.Fatalf("wait error = %v, want %v", err, context.Canceled)
 	}
 }
