@@ -174,6 +174,13 @@ func TestObserveItemWireFormat(t *testing.T) {
 	}
 }
 
+func TestObserveItemRejectsImpossibleBoundaryCount(t *testing.T) {
+	_, err := readObserveItem(newByteReader(impossibleObserveItem()))
+	if !errors.Is(err, endpointticket.ErrTruncated) {
+		t.Fatalf("readObserveItem error = %v, want %v", err, endpointticket.ErrTruncated)
+	}
+}
+
 func TestRequestDecodeErrors(t *testing.T) {
 	if _, err := DecodeRequestBytes([]byte{byte(RequestPush)}); !errors.Is(err, endpointticket.ErrVerify) {
 		t.Fatalf("DecodeRequestBytes unsupported error = %v", err)
@@ -212,4 +219,11 @@ func (w bytesBuffer) Write(p []byte) (int, error) {
 
 func newByteReader(b []byte) *bufio.Reader {
 	return bufio.NewReader(bytes.NewReader(b))
+}
+
+func impossibleObserveItem() []byte {
+	item := appendVarint(nil, 0)
+	item = appendVarint(item, 1<<60)
+	frame := appendVarint(nil, uint64(len(item)))
+	return append(frame, item...)
 }
