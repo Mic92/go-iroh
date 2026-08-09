@@ -2,6 +2,7 @@ package http3_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/netip"
 	"testing"
@@ -62,6 +63,13 @@ func TestConnStreams(t *testing.T) {
 
 	clientH3 := http3.NewConn(clientConn)
 	serverH3 := http3.NewConn(serverConn)
+	if clientH3.IrohConn() != clientConn {
+		t.Fatal("IrohConn did not return the underlying connection")
+	}
+	var nilConn *http3.Conn
+	if nilConn.IrohConn() != nil {
+		t.Fatal("nil Conn returned a non-nil underlying connection")
+	}
 
 	done := make(chan error, 1)
 	go func() {
@@ -77,6 +85,22 @@ func TestConnStreams(t *testing.T) {
 	stream, err := clientH3.OpenBidi(ctx)
 	if err != nil {
 		t.Fatalf("open bidi: %v", err)
+	}
+	if stream.IrohStream() == nil {
+		t.Fatal("IrohStream returned nil")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	if err := stream.SetDeadline(deadline); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	if err := stream.SetReadDeadline(deadline); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	if err := stream.SetWriteDeadline(deadline); err != nil {
+		t.Fatalf("set write deadline: %v", err)
+	}
+	if stream.Context() == nil {
+		t.Fatal("stream Context returned nil")
 	}
 	if _, err := stream.Write([]byte("hello")); err != nil {
 		t.Fatalf("write: %v", err)
@@ -98,5 +122,74 @@ func TestConnStreams(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
+	}
+
+	uniData := make(chan []byte, 1)
+	uniErr := make(chan error, 1)
+	go func() {
+		s, err := serverH3.AcceptUni(ctx)
+		if err != nil {
+			uniErr <- err
+			return
+		}
+		if s.IrohReceiveStream() == nil {
+			uniErr <- errors.New("IrohReceiveStream returned nil")
+			return
+		}
+		if err := s.SetReadDeadline(deadline); err != nil {
+			uniErr <- err
+			return
+		}
+		b, err := io.ReadAll(s)
+		if err != nil {
+			uniErr <- err
+			return
+		}
+		uniData <- b
+	}()
+
+	send, err := clientH3.OpenUni(ctx)
+	if err != nil {
+		t.Fatalf("open uni: %v", err)
+	}
+	if send.IrohSendStream() == nil {
+		t.Fatal("IrohSendStream returned nil")
+	}
+	if send.Context() == nil {
+		t.Fatal("send stream Context returned nil")
+	}
+	if err := send.SetWriteDeadline(deadline); err != nil {
+		t.Fatalf("set uni write deadline: %v", err)
+	}
+	if _, err := send.Write([]byte("one way")); err != nil {
+		t.Fatalf("write uni: %v", err)
+	}
+	if err := send.Close(); err != nil {
+		t.Fatalf("close uni: %v", err)
+	}
+	select {
+	case b := <-uniData:
+		if string(b) != "one way" {
+			t.Fatalf("uni data = %q, want one way", b)
+		}
+	case err := <-uniErr:
+		t.Fatalf("receive uni: %v", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+
+	if err := clientH3.SendDatagram([]byte("datagram")); err != nil {
+		t.Fatalf("send datagram: %v", err)
+	}
+	datagram, err := serverH3.ReceiveDatagram(ctx)
+	if err != nil {
+		t.Fatalf("receive datagram: %v", err)
+	}
+	if string(datagram) != "datagram" {
+		t.Fatalf("datagram = %q, want datagram", datagram)
+	}
+
+	if err := clientH3.Close(0, ""); err != nil {
+		t.Fatalf("close connection: %v", err)
 	}
 }
