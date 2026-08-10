@@ -116,6 +116,9 @@ func newMagicConn(sock *Socket, udp *net.UDPConn, actor *RelayActor, custom ...C
 	}
 	m.readDeadline.init()
 	m.writeDeadline.init()
+	if actor != nil {
+		actor.setMetrics(&m.metrics)
+	}
 	return m
 }
 

@@ -63,6 +63,9 @@ const (
 	// StatusSameEndpointIDConnected reports another endpoint connected with the
 	// same id; no more messages will be received.
 	StatusSameEndpointIDConnected Status = 1
+	// StatusRateLimited reports the relay is throttling this client's
+	// outbound traffic.
+	StatusRateLimited Status = 2
 )
 
 // RelayToClientMsg is a message a relay sends to a client. Exactly one of its

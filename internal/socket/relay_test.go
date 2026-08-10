@@ -413,3 +413,23 @@ func TestRemoveHomeRelayPromotesOneSuccessor(t *testing.T) {
 		t.Error("relay c was activated; only the promoted home may be started")
 	}
 }
+
+// TestRelayRateLimitedCounted verifies a Status frame carrying RateLimited
+// increments the rate-limited counter, and other statuses do not.
+func TestRelayRateLimitedCounted(t *testing.T) {
+	sk, _ := key.GenerateSecretKey()
+	a := NewRelayActor(RelayActorConfig{SecretKey: sk})
+	var m Metrics
+	a.setMetrics(&m)
+	r := newActiveRelay(a, testURL(t), false)
+	st := &connectedState{}
+
+	r.handleFrameAt(relayproto.RelayToClientMsg{Type: relayproto.FrameStatus, Status: relayproto.StatusHealthy}, st, time.Now())
+	if got := m.relayRateLimited.Load(); got != 0 {
+		t.Fatalf("rateLimited after Healthy = %d, want 0", got)
+	}
+	r.handleFrameAt(relayproto.RelayToClientMsg{Type: relayproto.FrameStatus, Status: relayproto.StatusRateLimited}, st, time.Now())
+	if got := m.relayRateLimited.Load(); got != 1 {
+		t.Fatalf("rateLimited after RateLimited = %d, want 1", got)
+	}
+}

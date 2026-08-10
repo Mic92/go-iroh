@@ -6,6 +6,7 @@ import (
 	"errors"
 	mrand "math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tmc/go-iroh/internal/relayclient"
@@ -180,12 +181,23 @@ type RelayActor struct {
 	sendCh  chan RelaySendItem
 	homeURL *watch.Value[*RelayStatus]
 
+	// metrics is the shared magic-socket counter set, or nil. It is set by the
+	// owning MagicConn before the actor runs.
+	metrics atomic.Pointer[Metrics]
+
 	mu     sync.Mutex
 	active map[string]*activeRelay // key: RelayURL.String()
 	home   netaddr.RelayURL
 	closed bool
 
 	wg sync.WaitGroup
+}
+
+// setMetrics records the counter set frame handlers report into.
+func (a *RelayActor) setMetrics(m *Metrics) {
+	if a != nil {
+		a.metrics.Store(m)
+	}
 }
 
 // NewRelayActor returns a RelayActor ready to be started with [RelayActor.Run].
@@ -844,7 +856,15 @@ func (r *activeRelay) handleFrameAt(msg relayproto.RelayToClientMsg, st *connect
 			}
 		}
 		st.established = true
-	case relayproto.FrameStatus, relayproto.FrameHealth, relayproto.FrameRestarting:
+	case relayproto.FrameStatus:
+		// Rate limiting is worth surfacing — the relay is throttling our
+		// outbound traffic; other statuses are informational.
+		if msg.Status == relayproto.StatusRateLimited {
+			if mm := r.parent.metrics.Load(); mm != nil {
+				mm.relayRateLimited.Add(1)
+			}
+		}
+	case relayproto.FrameHealth, relayproto.FrameRestarting:
 		// Informational; ignored. Status/Health are version-gated by the parser.
 	}
 }
