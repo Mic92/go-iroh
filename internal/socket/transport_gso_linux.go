@@ -24,7 +24,7 @@ func (m *MagicConn) WriteMsgUDP(p, oob []byte, addr *net.UDPAddr) (n, oobn int, 
 		m.writeMsgSegments(p, addr, segmentSize)
 		return len(p), len(oob), nil
 	}
-	n, oobn, err = m.udp.WriteMsgUDP(p, oob, addr)
+	n, oobn, err = m.udp.WriteMsgUDPAddrPort(p, oob, ap)
 	if err == nil {
 		for range segmentCount(len(p), segmentSize) {
 			m.recordIPSent(ap)
