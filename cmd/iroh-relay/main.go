@@ -85,13 +85,16 @@ func run(args []string, logOut io.Writer) error {
 // it with their own listener and cancellation.
 func serve(ctx context.Context, ln net.Listener, logger *log.Logger, shutdownTimeout time.Duration) error {
 	mux := http.NewServeMux()
-	mux.Handle("/relay", relayserver.New())
+	relay := relayserver.New()
+	mux.Handle("/relay", relay)
+	// Rust iroh clients probe /ping before selecting a home relay.
+	mux.Handle("/ping", relay)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, "ok\n")
 	})
 
 	srv := newHTTPServer(mux)
-	logger.Printf("iroh-relay listening on %s (relay: /relay, health: /healthz)", ln.Addr())
+	logger.Printf("iroh-relay listening on %s (relay: /relay, probe: /ping, health: /healthz)", ln.Addr())
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()

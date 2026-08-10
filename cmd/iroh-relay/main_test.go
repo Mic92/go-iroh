@@ -44,6 +44,17 @@ func TestServeRelaysAndHealth(t *testing.T) {
 		t.Fatalf("/healthz = %d %q, want 200 \"ok\\n\"", resp.StatusCode, body)
 	}
 
+	// Net-report probe endpoint answers 200 (Rust clients require it before
+	// selecting a home relay).
+	resp, err = http.Get(base + "/ping")
+	if err != nil {
+		t.Fatalf("GET /ping: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/ping = %d, want 200", resp.StatusCode)
+	}
+
 	// Two endpoints connect through the relay and a datagram round-trips.
 	u, err := netaddr.ParseRelayURL(base)
 	if err != nil {
