@@ -31,9 +31,10 @@ type RemoteMap struct {
 	idle     time.Duration // actor idle timeout; ActorMaxIdleTimeout unless overridden for tests
 	metrics  *Metrics
 
-	mu      sync.Mutex
-	actors  map[key.EndpointID]*RemoteStateActor
-	onEvict func(id key.EndpointID, addrs []Addr)
+	mu          sync.Mutex
+	actors      map[key.EndpointID]*RemoteStateActor
+	onEvict     func(id key.EndpointID, addrs []Addr)
+	noHolepunch bool
 }
 
 // NewRemoteMap returns a RemoteMap whose actors live until ctx is cancelled or
@@ -96,8 +97,20 @@ func (m *RemoteMap) actor(id key.EndpointID) *RemoteStateActor {
 		}
 	}
 	a = newRemoteStateActor(m.ctx, id, m.selector, m.resolve, m.idle, m.metrics, onExit)
+	a.noHolepunch.Store(m.noHolepunch)
 	m.actors[id] = a
 	return a
+}
+
+// DisableHolepunch stops actors from initiating NAT traversal or direct-path
+// validation on their upgrade tick. Endpoints without IP transports set it:
+// there is no direct path to punch toward, and a traversal round initiated on
+// a relay-only connection stalls its in-flight relay streams. Set it before
+// the first remote is referenced.
+func (m *RemoteMap) DisableHolepunch() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.noHolepunch = true
 }
 
 // SetOnEvict sets f to be called when a remote's actor is reaped with no

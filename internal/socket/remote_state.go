@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tmc/go-iroh/key"
@@ -244,6 +245,13 @@ type RemoteStateActor struct {
 	conns    map[Connection]*connState
 	selected *Addr
 	localNAT []netip.AddrPort
+
+	// noHolepunch suppresses upgrade-tick NAT traversal and direct-path
+	// validation. Set by RemoteMap at spawn (atomically, because the actor
+	// loop is already running) for endpoints without IP transports: there is
+	// no direct path to punch toward, and a traversal round initiated on a
+	// relay-only connection stalls its in-flight relay streams.
+	noHolepunch atomic.Bool
 }
 
 // newRemoteStateActor creates and starts an actor for id. The returned actor is
@@ -376,6 +384,10 @@ func (a *RemoteStateActor) run(ctx context.Context) {
 			// keep processing messages.
 			sel, selected := a.SelectedPath()
 			switch {
+			case a.noHolepunch.Load():
+				// No IP transports: there is no direct path to upgrade
+				// toward, and a traversal round on a relay-only connection
+				// stalls its in-flight relay streams.
 			case selected && sel.Kind() == AddrIP:
 			case selected && sel.Kind() == AddrRelay:
 				go func() { _ = a.TriggerHolepunch() }()

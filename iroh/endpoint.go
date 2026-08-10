@@ -497,6 +497,12 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	// endpoint's address-lookup services (slice G), passed down as a func value
 	// so internal/socket does not import iroh.
 	ep.remotes = socket.NewRemoteMapWithMetrics(serveCtx, c.pathSelector, ep.resolveFunc(), magic.MetricsSet())
+	if ep.disableIP {
+		// No IP transports: upgrade-tick hole punching has nothing to punch
+		// toward and wedges in-flight relay streams (perflab: relay-forced
+		// transfers stall at the 60 s upgrade tick).
+		ep.remotes.DisableHolepunch()
+	}
 	// Reaped remotes release their mapped addresses, so the socket's tables do
 	// not grow without bound under peer churn (upstream iroh issue #4293).
 	ep.remotes.SetOnEvict(sock.EvictRemote)

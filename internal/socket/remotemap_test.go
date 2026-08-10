@@ -681,3 +681,12 @@ func TestRemoteMapRemoteInfo(t *testing.T) {
 		t.Fatalf("RemoteInfo usage = %v, want active", info.Addrs[0].Usage)
 	}
 }
+
+func TestDisableHolepunchPropagatesToActors(t *testing.T) {
+	m := NewRemoteMap(t.Context(), nil, nil)
+	m.DisableHolepunch()
+	a := m.Actor(key.EndpointID{})
+	if !a.noHolepunch.Load() {
+		t.Error("actor spawned after DisableHolepunch has noHolepunch unset; upgrade ticks would wedge relay-only streams")
+	}
+}
