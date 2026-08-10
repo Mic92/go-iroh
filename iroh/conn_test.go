@@ -862,12 +862,6 @@ func TestConnMaxDatagramSize(t *testing.T) {
 	}
 }
 
-func clientStableIDCount(e *Endpoint) int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return len(e.stableIDs)
-}
-
 // ExampleConn_Stats prints whether a loopback connection has recorded traffic.
 func ExampleConn_Stats() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)

@@ -223,9 +223,7 @@ func unpackTXTResponse(t *testing.T, msg []byte) []string {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, s := range txt.TXT {
-			out = append(out, s)
-		}
+		out = append(out, txt.TXT...)
 	}
 	return out
 }
