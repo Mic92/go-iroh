@@ -322,6 +322,8 @@ type Conn struct {
 
 	datagramQueue *datagramQueue
 
+	performance performanceCounters
+
 	connStateMutex sync.Mutex
 	connState      ConnectionState
 
@@ -3375,6 +3377,7 @@ func (c *Conn) triggerSending(now monotime.Time) error {
 }
 
 func (c *Conn) sendPackets(now monotime.Time) error {
+	c.performance.recordSendLoop()
 	if c.perspective == protocol.PerspectiveClient && c.handshakeConfirmed {
 		if pm := c.pathManagerOutgoing.Load(); pm != nil {
 			connID, frame, tr, ok := pm.NextPathToProbe()
@@ -3706,6 +3709,7 @@ func packetHasDatagram(p shortHeaderPacket) bool {
 }
 
 func (c *Conn) registerPackedShortHeaderPacket(p shortHeaderPacket, ecn protocol.ECN, now monotime.Time) {
+	c.performance.recordPacket(p)
 	if p.IsPathProbePacket {
 		c.sentPacketHandler.SentPacket(
 			now,
@@ -4006,6 +4010,7 @@ func (c *Conn) queueControlFrame(f wire.Frame) {
 func (c *Conn) onHasConnectionData() { c.scheduleSending() }
 
 func (c *Conn) onHasStreamData(id protocol.StreamID, str *SendStream) {
+	c.performance.recordStreamActivation()
 	c.framer.AddActiveStream(id, str)
 	c.scheduleSending()
 }

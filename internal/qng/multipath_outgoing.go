@@ -311,8 +311,9 @@ type PathInfo struct {
 // pathSnapshotRequest is the command Conn.Paths hands to the run goroutine,
 // which fills in paths and closes done.
 type pathSnapshotRequest struct {
-	paths []PathInfo
-	done  chan struct{}
+	performance performanceSnapshotRequest
+	paths       []PathInfo
+	done        chan struct{}
 }
 
 // Paths returns a snapshot of this connection's non-zero qng multipath paths.
@@ -384,6 +385,7 @@ func (c *Conn) processPathSnapshotRequests() {
 	for {
 		select {
 		case req := <-c.pathSnapshotQueue:
+			req.performance.fill(&c.performance)
 			if c.multipathOut != nil && len(c.multipathOut.paths) > 0 {
 				req.paths = make([]PathInfo, 0, len(c.multipathOut.paths))
 				for pid, st := range c.multipathOut.paths {
