@@ -63,7 +63,7 @@ func (f *framer) HasData() bool {
 	}
 	f.controlFrameMutex.Lock()
 	defer f.controlFrameMutex.Unlock()
-	return len(f.streamsWithControlFrames) > 0 || len(f.controlFrames) > 0 || len(f.pathResponses) > 0
+	return f.hasMaxDataFrame || len(f.streamsWithControlFrames) > 0 || len(f.controlFrames) > 0 || len(f.pathResponses) > 0
 }
 
 func (f *framer) QueueControlFrame(frame wire.Frame) {
