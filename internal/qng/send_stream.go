@@ -178,10 +178,17 @@ func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error)
 			}
 		}
 
-		s.mutex.Unlock()
+		notifySender := false
 		if !notifiedSender {
-			s.notifyHasStreamData()
 			notifiedSender = true
+			if !s.active {
+				s.active = true
+				notifySender = true
+			}
+		}
+		s.mutex.Unlock()
+		if notifySender {
+			s.sender.onHasStreamData(s.streamID, s)
 		}
 		if copied {
 			s.mutex.Lock()
