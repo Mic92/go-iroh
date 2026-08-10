@@ -460,6 +460,13 @@ func (s *ReceiveStream) handleStreamFrameImpl(frame *wire.StreamFrame, now monot
 			return nil
 		}
 		if s.currentFrameIsLast {
+			// The FIN arrived with no new readable bytes (a bare or duplicate
+			// FIN, retransmitted after the reader drained the stream and
+			// parked). Mark the read side finished like every other EOF site:
+			// isNewlyCompleted gates on errorRead, and without it the stream
+			// never reports completion, never returns its MAX_STREAMS credit,
+			// and the peer's OpenStreamSync eventually stalls forever.
+			s.errorRead = true
 			s.pendingReadErr = io.EOF
 			s.pendingReadReady = true
 			s.signalRead()
