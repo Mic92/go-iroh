@@ -58,7 +58,7 @@ type SendStream struct {
 	activationGen   uint64
 
 	writeChan chan struct{}
-	writeOnce chan struct{}
+	writeGate writeGate
 	deadline  monotime.Time
 
 	flowController flowcontrol.StreamFlowController
@@ -84,7 +84,7 @@ func newSendStream(
 		sender:                sender,
 		flowController:        flowController,
 		writeChan:             make(chan struct{}, 1),
-		writeOnce:             make(chan struct{}, 1), // cap: 1, to protect against concurrent use of Write
+		writeGate:             writeGate{wake: make(chan struct{}, 1)},
 		supportsResetStreamAt: supportsResetStreamAt,
 	}
 	s.ctx, s.ctxCancel = context.WithCancelCause(ctx)
@@ -103,8 +103,8 @@ func (s *SendStream) Write(p []byte) (int, error) {
 	// Concurrent use of Write is not permitted (and doesn't make any sense),
 	// but sometimes people do it anyway.
 	// Make sure that we only execute one call at any given time to avoid hard to debug failures.
-	s.writeOnce <- struct{}{}
-	defer func() { <-s.writeOnce }()
+	s.writeGate.lock()
+	defer s.writeGate.unlock()
 
 	isNewlyCompleted, n, err := s.write(p)
 	if isNewlyCompleted {
