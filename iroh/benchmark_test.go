@@ -47,6 +47,7 @@ type layerLadderTransportCounters struct {
 	UDPSendSyscalls      uint64 `json:"udp_send_syscalls,omitempty"`
 	UDPGSOSyscalls       uint64 `json:"udp_gso_syscalls,omitempty"`
 	UDPGSOSegments       uint64 `json:"udp_gso_segments,omitempty"`
+	CorkTimerActivations uint64 `json:"cork_timer_activations,omitempty"`
 	UDPReceiveSyscalls   uint64 `json:"udp_receive_syscalls,omitempty"`
 	UDPDatagramsReceived uint64 `json:"udp_datagrams_received,omitempty"`
 	UDPGROReads          uint64 `json:"udp_gro_reads,omitempty"`
@@ -181,6 +182,7 @@ type benchConnStats struct {
 	udpSendSyscalls      uint64
 	udpGSOSyscalls       uint64
 	udpGSOSegments       uint64
+	corkTimerActivations uint64
 	udpReceiveSyscalls   uint64
 	udpDatagramsReceived uint64
 	udpGROReads          uint64
@@ -205,6 +207,7 @@ func snapshotConnStats(c *Conn) benchConnStats {
 		udpSendSyscalls:      p.UDPSendSyscalls,
 		udpGSOSyscalls:       p.UDPGSOSyscalls,
 		udpGSOSegments:       p.UDPGSOSegments,
+		corkTimerActivations: p.CorkTimerActivations,
 		udpReceiveSyscalls:   u.UDPReceiveSyscalls,
 		udpDatagramsReceived: u.UDPDatagramsReceived,
 		udpGROReads:          u.UDPGROReads,
@@ -250,6 +253,7 @@ func reportConnSenderStats(b *testing.B, sender *Conn, start benchConnStats) *la
 		UDPSendSyscalls:      end.udpSendSyscalls - start.udpSendSyscalls,
 		UDPGSOSyscalls:       end.udpGSOSyscalls - start.udpGSOSyscalls,
 		UDPGSOSegments:       end.udpGSOSegments - start.udpGSOSegments,
+		CorkTimerActivations: end.corkTimerActivations - start.corkTimerActivations,
 		UDPReceiveSyscalls:   end.udpReceiveSyscalls - start.udpReceiveSyscalls,
 		UDPDatagramsReceived: end.udpDatagramsReceived - start.udpDatagramsReceived,
 		UDPGROReads:          end.udpGROReads - start.udpGROReads,

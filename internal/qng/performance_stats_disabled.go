@@ -11,6 +11,7 @@ func (*performanceCounters) recordSendLoop()                 {}
 func (*performanceCounters) recordStreamActivation()         {}
 func (performanceSnapshotRequest) fill(*performanceCounters) {}
 func (*sendConnPerformanceCounters) recordWrite(int, uint16) {}
+func recordCorkTimerActivation()                             {}
 func (*sendConnPerformanceCounters) snapshot() PerformanceStats {
 	return PerformanceStats{}
 }

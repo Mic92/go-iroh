@@ -20,6 +20,12 @@ type sendConnPerformanceCounters struct {
 	gsoSegments atomic.Uint64
 }
 
+var corkTimerActivations atomic.Uint64
+
+func recordCorkTimerActivation() {
+	corkTimerActivations.Add(1)
+}
+
 func (c *performanceCounters) recordPacket(p shortHeaderPacket) {
 	if p.Ack != nil {
 		c.stats.ACKFramesSent++
@@ -100,6 +106,7 @@ func (c *Conn) PerformanceStats() PerformanceStats {
 			dst.UDPGSOSyscalls = udp.UDPGSOSyscalls
 			dst.UDPGSOSegments = udp.UDPGSOSegments
 		}
+		dst.CorkTimerActivations = corkTimerActivations.Load()
 		return *dst
 	case <-c.ctx.Done():
 		return PerformanceStats{}
