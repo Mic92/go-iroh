@@ -57,9 +57,10 @@ type SendStream struct {
 	activationTimer *time.Timer
 	activationGen   uint64
 
-	writeChan chan struct{}
-	writeGate writeGate
-	deadline  monotime.Time
+	writeChan   chan struct{}
+	writeActive bool
+	writeWake   chan struct{}
+	deadline    monotime.Time
 
 	flowController flowcontrol.StreamFlowController
 }
@@ -84,7 +85,7 @@ func newSendStream(
 		sender:                sender,
 		flowController:        flowController,
 		writeChan:             make(chan struct{}, 1),
-		writeGate:             writeGate{wake: make(chan struct{}, 1)},
+		writeWake:             make(chan struct{}, 1),
 		supportsResetStreamAt: supportsResetStreamAt,
 	}
 	s.ctx, s.ctxCancel = context.WithCancelCause(ctx)
@@ -103,41 +104,45 @@ func (s *SendStream) Write(p []byte) (int, error) {
 	// Concurrent use of Write is not permitted (and doesn't make any sense),
 	// but sometimes people do it anyway.
 	// Make sure that we only execute one call at any given time to avoid hard to debug failures.
-	s.writeGate.lock()
-	defer s.writeGate.unlock()
+	s.mutex.Lock()
+	for s.writeActive {
+		s.mutex.Unlock()
+		<-s.writeWake
+		s.mutex.Lock()
+	}
+	s.writeActive = true
 
-	isNewlyCompleted, n, err := s.write(p)
+	isNewlyCompleted, n, err := s.writeLocked(p)
 	if isNewlyCompleted {
 		s.sender.onStreamCompleted(s.streamID)
 	}
 	return n, err
 }
 
-func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error) {
-	s.mutex.Lock()
-
+// writeLocked writes p. The caller holds s.mutex and owns the write operation.
+func (s *SendStream) writeLocked(p []byte) (bool /* is newly completed */, int, error) {
 	if s.resetErr != nil {
 		s.cancellationFlagged = true
 		completed := s.isNewlyCompleted()
 		err := s.resetErr
-		s.mutex.Unlock()
+		s.finishWriteLocked()
 		return completed, 0, err
 	}
 	if s.shutdownErr != nil {
 		err := s.shutdownErr
-		s.mutex.Unlock()
+		s.finishWriteLocked()
 		return false, 0, err
 	}
 	if s.finishedWriting {
-		s.mutex.Unlock()
+		s.finishWriteLocked()
 		return false, 0, fmt.Errorf("write on closed stream %d", s.streamID)
 	}
 	if !s.deadline.IsZero() && !monotime.Now().Before(s.deadline) {
-		s.mutex.Unlock()
+		s.finishWriteLocked()
 		return false, 0, errDeadline
 	}
 	if len(p) == 0 {
-		s.mutex.Unlock()
+		s.finishWriteLocked()
 		return false, 0, nil
 	}
 
@@ -170,7 +175,7 @@ func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error)
 			if !deadline.IsZero() {
 				if !monotime.Now().Before(deadline) {
 					s.dataForWriting = nil
-					s.mutex.Unlock()
+					s.finishWriteLocked()
 					return false, bytesWritten, errDeadline
 				}
 				if deadlineTimer == nil {
@@ -192,11 +197,15 @@ func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error)
 				notifySender = s.activateOrDelayLocked()
 			}
 		}
+		if copied {
+			s.writeActive = false
+		}
 		s.mutex.Unlock()
 		if notifySender {
 			s.sender.onHasStreamData(s.streamID, s)
 		}
 		if copied {
+			s.wakeWriter()
 			return false, bytesWritten, nil
 		}
 		if deadline.IsZero() {
@@ -211,23 +220,36 @@ func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error)
 	}
 
 	if bytesWritten == len(p) {
-		s.mutex.Unlock()
+		s.finishWriteLocked()
 		return false, bytesWritten, nil
 	}
 	if s.shutdownErr != nil {
 		err := s.shutdownErr
-		s.mutex.Unlock()
+		s.finishWriteLocked()
 		return false, bytesWritten, err
 	}
 	if s.resetErr != nil {
 		s.cancellationFlagged = true
 		completed := s.isNewlyCompleted()
 		err := s.resetErr
-		s.mutex.Unlock()
+		s.finishWriteLocked()
 		return completed, bytesWritten, err
 	}
-	s.mutex.Unlock()
+	s.finishWriteLocked()
 	return false, bytesWritten, nil
+}
+
+func (s *SendStream) finishWriteLocked() {
+	s.writeActive = false
+	s.mutex.Unlock()
+	s.wakeWriter()
+}
+
+func (s *SendStream) wakeWriter() {
+	select {
+	case s.writeWake <- struct{}{}:
+	default:
+	}
 }
 
 func (s *SendStream) bufferedWriteLen() int {

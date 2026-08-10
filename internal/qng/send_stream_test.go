@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -478,6 +479,99 @@ func TestSendStreamWriteImmediateReturnUnlocks(t *testing.T) {
 			}
 			str.mutex.Unlock()
 		})
+	}
+}
+
+func TestSendStreamSerializesConcurrentWrites(t *testing.T) {
+	sender := &sendStreamNotificationSender{streamData: make(chan struct{}, 1)}
+	str := newSendStream(context.Background(), 0, sender, receiveStreamTestFlow{}, false)
+	const (
+		writers = 4
+		writes  = 500
+	)
+	var wg sync.WaitGroup
+	for range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range writes {
+				if n, err := str.Write([]byte("x")); n != 1 || err != nil {
+					t.Errorf("Write = %d, %v; want 1, nil", n, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	var got int
+	for {
+		frame, _, more := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1)
+		if frame.Frame != nil {
+			got += len(frame.Frame.Data)
+			frame.Frame.PutBack()
+		}
+		if !more {
+			break
+		}
+	}
+	if want := writers * writes; got != want {
+		t.Fatalf("popped %d bytes, want %d", got, want)
+	}
+}
+
+func TestSendStreamConcurrentWriteWaitsForBlockedWriter(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	if n, err := str.Write(make([]byte, sendStreamWriteBufferSize)); n != sendStreamWriteBufferSize || err != nil {
+		t.Fatalf("initial Write = %d, %v", n, err)
+	}
+	type result struct {
+		n   int
+		err error
+	}
+	first := make(chan result, 1)
+	go func() {
+		n, err := str.Write([]byte("a"))
+		first <- result{n: n, err: err}
+	}()
+	waitForBlockedSendStreamWrite(t, str)
+	second := make(chan result, 1)
+	go func() {
+		n, err := str.Write([]byte("b"))
+		second <- result{n: n, err: err}
+	}()
+
+	frame, _, _ := str.popStreamFrame(257, protocol.Version1)
+	if frame.Frame == nil {
+		t.Fatal("popStreamFrame returned no frame")
+	}
+	got := append([]byte(nil), frame.Frame.Data...)
+	frame.Frame.PutBack()
+	for name, done := range map[string]<-chan result{"first": first, "second": second} {
+		select {
+		case r := <-done:
+			if r.n != 1 || r.err != nil {
+				t.Errorf("%s Write = %d, %v; want 1, nil", name, r.n, r.err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s Write did not complete", name)
+		}
+	}
+	for {
+		frame, _, more := str.popStreamFrame(257, protocol.Version1)
+		if frame.Frame != nil {
+			got = append(got, frame.Frame.Data...)
+			frame.Frame.PutBack()
+		}
+		if !more {
+			break
+		}
+	}
+	if want := sendStreamWriteBufferSize + 2; len(got) != want {
+		t.Fatalf("popped %d bytes, want %d", len(got), want)
+	}
+	if tail := string(got[len(got)-2:]); tail != "ab" {
+		t.Fatalf("popped tail %q, want %q", tail, "ab")
 	}
 }
 
