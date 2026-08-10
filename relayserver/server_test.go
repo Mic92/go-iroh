@@ -328,3 +328,25 @@ func TestPingProbeReturns200(t *testing.T) {
 		t.Errorf("GET /ping = %d, want %d (Rust net-report probes require it)", resp.StatusCode, http.StatusOK)
 	}
 }
+
+func TestDroppedDatagramsAreCounted(t *testing.T) {
+	srv := New()
+	sk1, _ := key.GenerateSecretKey()
+	sk2, _ := key.GenerateSecretKey()
+	src := &session{id: sk1.Public().EndpointID()}
+	dst := &session{
+		id:   sk2.Public().EndpointID(),
+		send: make(chan []byte), // unbuffered and never drained: enqueue always fails
+	}
+	srv.register(dst)
+
+	srv.handleClientMsg(src, relayproto.ClientToRelayMsg{
+		Type:          relayproto.FrameClientToRelayDatagram,
+		DstEndpointID: dst.id,
+		Datagrams:     relayproto.DatagramsFromBytes([]byte("drop me")),
+	})
+	snapshot := srv.Snapshot()
+	if snapshot["datagrams_dropped"] != 1 || snapshot["datagrams_forwarded"] != 0 {
+		t.Fatalf("Snapshot = %+v, want dropped=1 forwarded=0", snapshot)
+	}
+}

@@ -49,6 +49,7 @@ type relayMetrics struct {
 	clientsAccepted    atomic.Uint64
 	pings              atomic.Uint64
 	datagramsForwarded atomic.Uint64
+	datagramsDropped   atomic.Uint64
 }
 
 // New returns a relay server.
@@ -69,6 +70,7 @@ func (s *Server) Snapshot() metrics.Snapshot {
 		"clients_accepted":    s.metrics.clientsAccepted.Load(),
 		"pings":               s.metrics.pings.Load(),
 		"datagrams_forwarded": s.metrics.datagramsForwarded.Load(),
+		"datagrams_dropped":   s.metrics.datagramsDropped.Load(),
 	}
 }
 
@@ -265,12 +267,17 @@ func (s *Server) handleClientMsg(src *session, msg relayproto.ClientToRelayMsg) 
 		if dst == nil {
 			return
 		}
-		s.metrics.datagramsForwarded.Add(1)
-		dst.enqueue(relayproto.RelayToClientMsg{
+		// Dropped datagrams surface downstream as QUIC loss and retransmission;
+		// count them so overload is visible without packet captures.
+		if !dst.enqueue(relayproto.RelayToClientMsg{
 			Type:             relayproto.FrameRelayToClientDatagram,
 			RemoteEndpointID: src.id,
 			Datagrams:        msg.Datagrams,
-		})
+		}) {
+			s.metrics.datagramsDropped.Add(1)
+			return
+		}
+		s.metrics.datagramsForwarded.Add(1)
 	case relayproto.FramePing:
 		s.metrics.pings.Add(1)
 		src.enqueue(relayproto.RelayToClientMsg{Type: relayproto.FramePong, Ping: msg.Ping})
