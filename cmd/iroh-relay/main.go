@@ -28,6 +28,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/tmc/go-iroh/internal/pprofserver"
 	"github.com/tmc/go-iroh/relayserver"
 )
 
@@ -52,6 +53,7 @@ func run(args []string, logOut io.Writer) error {
 	fs := flag.NewFlagSet("iroh-relay", flag.ContinueOnError)
 	fs.SetOutput(logOut)
 	addr := fs.String("addr", ":3340", "listen address")
+	pprofAddr := fs.String("pprof-addr", "", "pprof HTTP listen address (disabled if empty)")
 	shutdownTimeout := fs.Duration("shutdown-timeout", 5*time.Second, "grace period for in-flight connections on shutdown")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -64,9 +66,18 @@ func run(args []string, logOut io.Writer) error {
 	if err != nil {
 		return err
 	}
+	defer ln.Close()
+	logger := log.New(logOut, "", log.LstdFlags)
+	if *pprofAddr != "" {
+		profiler, err := pprofserver.Start(*pprofAddr, logger)
+		if err != nil {
+			return err
+		}
+		defer profiler.Close()
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	return serve(ctx, ln, log.New(logOut, "", log.LstdFlags), *shutdownTimeout)
+	return serve(ctx, ln, logger, *shutdownTimeout)
 }
 
 // serve runs a relay server on ln until ctx is canceled, then drains in-flight

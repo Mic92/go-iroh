@@ -6,12 +6,14 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/tmc/go-iroh/dnsserver"
+	"github.com/tmc/go-iroh/internal/pprofserver"
 )
 
 const (
@@ -33,11 +35,19 @@ func run(args []string) error {
 	fs.SetOutput(os.Stderr)
 	addr := fs.String("addr", ":3350", "listen address")
 	dnsAddr := fs.String("dns-addr", "", "UDP DNS listen address")
+	pprofAddr := fs.String("pprof-addr", "", "pprof HTTP listen address (disabled if empty)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("unexpected argument %q", fs.Arg(0))
+	}
+	if *pprofAddr != "" {
+		profiler, err := pprofserver.Start(*pprofAddr, log.New(os.Stderr, "", log.LstdFlags))
+		if err != nil {
+			return err
+		}
+		defer profiler.Close()
 	}
 	server := dnsserver.New()
 	if *dnsAddr == "" {
