@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/internal/qng/internal/monotime"
 	"github.com/tmc/go-iroh/internal/qng/internal/protocol"
 )
 
@@ -403,6 +404,80 @@ func TestSendStreamWriteBufferUnreliableCancel(t *testing.T) {
 	frame, _, more := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1)
 	if frame.Frame != nil || more {
 		t.Fatalf("popStreamFrame = (%v, more %t); want no data", frame.Frame, more)
+	}
+}
+
+func TestSendStreamWriteImmediateReturnUnlocks(t *testing.T) {
+	shutdownErr := errors.New("shutdown")
+	tests := []struct {
+		name    string
+		prepare func(*SendStream)
+		p       []byte
+		wantErr error
+	}{
+		{
+			name: "reset",
+			prepare: func(str *SendStream) {
+				str.resetErr = &StreamError{StreamID: str.streamID, ErrorCode: 1}
+			},
+			p:       []byte("x"),
+			wantErr: &StreamError{},
+		},
+		{
+			name: "shutdown",
+			prepare: func(str *SendStream) {
+				str.shutdownErr = shutdownErr
+			},
+			p:       []byte("x"),
+			wantErr: shutdownErr,
+		},
+		{
+			name: "closed",
+			prepare: func(str *SendStream) {
+				str.finishedWriting = true
+			},
+			p: []byte("x"),
+		},
+		{
+			name: "deadline",
+			prepare: func(str *SendStream) {
+				str.deadline = monotime.Now().Add(-time.Second)
+			},
+			p:       []byte("x"),
+			wantErr: errDeadline,
+		},
+		{name: "empty"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+			if tt.prepare != nil {
+				tt.prepare(str)
+			}
+			n, err := str.Write(tt.p)
+			if n != 0 {
+				t.Errorf("Write returned %d bytes, want 0", n)
+			}
+			switch tt.name {
+			case "closed":
+				if err == nil {
+					t.Error("Write returned nil error")
+				}
+			case "reset":
+				var streamErr *StreamError
+				if !errors.As(err, &streamErr) {
+					t.Errorf("Write error = %v, want StreamError", err)
+				}
+			default:
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("Write error = %v, want %v", err, tt.wantErr)
+				}
+			}
+			if !str.mutex.TryLock() {
+				t.Fatal("Write left stream mutex locked")
+			}
+			str.mutex.Unlock()
+		})
 	}
 }
 

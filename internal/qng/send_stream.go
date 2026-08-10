@@ -115,22 +115,29 @@ func (s *SendStream) Write(p []byte) (int, error) {
 
 func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error) {
 	s.mutex.Lock()
-	defer s.mutex.Unlock()
 
 	if s.resetErr != nil {
 		s.cancellationFlagged = true
-		return s.isNewlyCompleted(), 0, s.resetErr
+		completed := s.isNewlyCompleted()
+		err := s.resetErr
+		s.mutex.Unlock()
+		return completed, 0, err
 	}
 	if s.shutdownErr != nil {
-		return false, 0, s.shutdownErr
+		err := s.shutdownErr
+		s.mutex.Unlock()
+		return false, 0, err
 	}
 	if s.finishedWriting {
+		s.mutex.Unlock()
 		return false, 0, fmt.Errorf("write on closed stream %d", s.streamID)
 	}
 	if !s.deadline.IsZero() && !monotime.Now().Before(s.deadline) {
+		s.mutex.Unlock()
 		return false, 0, errDeadline
 	}
 	if len(p) == 0 {
+		s.mutex.Unlock()
 		return false, 0, nil
 	}
 
@@ -163,6 +170,7 @@ func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error)
 			if !deadline.IsZero() {
 				if !monotime.Now().Before(deadline) {
 					s.dataForWriting = nil
+					s.mutex.Unlock()
 					return false, bytesWritten, errDeadline
 				}
 				if deadlineTimer == nil {
@@ -189,8 +197,7 @@ func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error)
 			s.sender.onHasStreamData(s.streamID, s)
 		}
 		if copied {
-			s.mutex.Lock()
-			break
+			return false, bytesWritten, nil
 		}
 		if deadline.IsZero() {
 			<-s.writeChan
@@ -204,15 +211,22 @@ func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error)
 	}
 
 	if bytesWritten == len(p) {
+		s.mutex.Unlock()
 		return false, bytesWritten, nil
 	}
 	if s.shutdownErr != nil {
-		return false, bytesWritten, s.shutdownErr
+		err := s.shutdownErr
+		s.mutex.Unlock()
+		return false, bytesWritten, err
 	}
 	if s.resetErr != nil {
 		s.cancellationFlagged = true
-		return s.isNewlyCompleted(), bytesWritten, s.resetErr
+		completed := s.isNewlyCompleted()
+		err := s.resetErr
+		s.mutex.Unlock()
+		return completed, bytesWritten, err
 	}
+	s.mutex.Unlock()
 	return false, bytesWritten, nil
 }
 
