@@ -3476,7 +3476,7 @@ func (c *Conn) sendPacketsWithoutGSO(now monotime.Time) error {
 	for {
 		buf := getPacketBuffer()
 		ecn := c.sentPacketHandler.ECNMode(true)
-		if _, err := c.appendOneShortHeaderPacket(buf, c.maxPacketSize(), ecn, now); err != nil {
+		if _, _, err := c.appendOneShortHeaderPacket(buf, c.maxPacketSize(), ecn, now); err != nil {
 			if err == errNothingToPack {
 				buf.Release()
 				return nil
@@ -3509,13 +3509,13 @@ func (c *Conn) sendPacketsWithoutGSO(now monotime.Time) error {
 }
 
 func (c *Conn) sendPacketsWithGSO(now monotime.Time) error {
-	buf := getLargePacketBuffer()
+	buf := getPacketBuffer()
 	maxSize := c.maxPacketSize()
 
 	ecn := c.sentPacketHandler.ECNMode(true)
 	for {
 		var dontSendMore bool
-		size, err := c.appendOneShortHeaderPacket(buf, maxSize, ecn, now)
+		size, hasDatagram, err := c.appendOneShortHeaderPacket(buf, maxSize, ecn, now)
 		if err != nil {
 			if err != errNothingToPack {
 				return err
@@ -3525,6 +3525,30 @@ func (c *Conn) sendPacketsWithGSO(now monotime.Time) error {
 				return nil
 			}
 			dontSendMore = true
+		}
+		if err == nil && hasDatagram {
+			c.sendQueue.Send(buf, 0, ecn)
+			if c.sendQueue.WouldBlock() {
+				return nil
+			}
+			sendMode := c.sentPacketHandler.SendMode(now)
+			if sendMode == ackhandler.SendPacingLimited {
+				c.resetPacingDeadline()
+				return nil
+			}
+			if sendMode != ackhandler.SendAny {
+				return nil
+			}
+			c.receivedPacketMx.Lock()
+			hasPackets := !c.receivedPackets.Empty()
+			c.receivedPacketMx.Unlock()
+			if hasPackets {
+				c.pacingDeadline = deadlineSendImmediately
+				return nil
+			}
+			buf = getPacketBuffer()
+			ecn = c.sentPacketHandler.ECNMode(true)
+			continue
 		}
 
 		if !dontSendMore {
@@ -3545,11 +3569,23 @@ func (c *Conn) sendPacketsWithGSO(now monotime.Time) error {
 		// 2. The last packet appended was a full-size packet
 		// 3. The next packet will have the same ECN marking
 		// 4. We still have enough space for another full-size packet in the buffer
-		if !dontSendMore && size == maxSize && nextECN == ecn && buf.Len()+maxSize <= buf.Cap() {
-			continue
+		if !dontSendMore && size == maxSize && nextECN == ecn {
+			if buf.Len()+maxSize > buf.Cap() {
+				large := getLargePacketBuffer()
+				large.Data = append(large.Data, buf.Data...)
+				buf.Release()
+				buf = large
+			}
+			if buf.Len()+maxSize <= buf.Cap() {
+				continue
+			}
 		}
 
-		c.sendQueue.Send(buf, uint16(maxSize), ecn)
+		gsoSize := uint16(0)
+		if buf.Len() > maxSize {
+			gsoSize = uint16(maxSize)
+		}
+		c.sendQueue.Send(buf, gsoSize, ecn)
 
 		if dontSendMore {
 			return nil
@@ -3568,7 +3604,7 @@ func (c *Conn) sendPacketsWithGSO(now monotime.Time) error {
 		}
 
 		ecn = nextECN
-		buf = getLargePacketBuffer()
+		buf = getPacketBuffer()
 	}
 }
 
@@ -3648,16 +3684,25 @@ func (c *Conn) sendProbePacket(sendMode ackhandler.SendMode, now monotime.Time) 
 
 // appendOneShortHeaderPacket appends a new packet to the given packetBuffer.
 // If there was nothing to pack, the returned size is 0.
-func (c *Conn) appendOneShortHeaderPacket(buf *packetBuffer, maxSize protocol.ByteCount, ecn protocol.ECN, now monotime.Time) (protocol.ByteCount, error) {
+func (c *Conn) appendOneShortHeaderPacket(buf *packetBuffer, maxSize protocol.ByteCount, ecn protocol.ECN, now monotime.Time) (protocol.ByteCount, bool, error) {
 	startLen := buf.Len()
 	p, err := c.packer.AppendPacket(buf, maxSize, now, c.version)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	size := buf.Len() - startLen
 	c.logShortHeaderPacket(p, ecn, size)
 	c.registerPackedShortHeaderPacket(p, ecn, now)
-	return size, nil
+	return size, packetHasDatagram(p), nil
+}
+
+func packetHasDatagram(p shortHeaderPacket) bool {
+	for _, f := range p.Frames {
+		if _, ok := f.Frame.(*wire.DatagramFrame); ok {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Conn) registerPackedShortHeaderPacket(p shortHeaderPacket, ecn protocol.ECN, now monotime.Time) {

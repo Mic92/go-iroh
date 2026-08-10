@@ -33,10 +33,10 @@ type Transports struct {
 // (iroh/src/socket/transports.rs:1067).
 //
 // MagicConn satisfies net.PacketConn. It deliberately does not satisfy
-// quic-go's OOBCapablePacketConn: GSO/GRO/ECN are per-platform UDP-socket
-// optimizations that do not generalize across relay and custom transports, so
-// quic-go falls back to its single-packet basicConn path. Correctness does not
-// depend on them.
+// quic-go's OOBCapablePacketConn: GRO and ECN receive metadata do not
+// generalize across relay and custom transports. On Linux it exposes a narrower
+// send-message method so qng can use GSO for direct IP destinations and split
+// the same write for other transports. Correctness does not depend on it.
 //
 // Create one with [NewMagicConn] and start it with [MagicConn.Serve]. The zero
 // value is not usable.
@@ -474,9 +474,9 @@ func (m *MagicConn) SetWriteDeadline(t time.Time) error {
 
 // SyscallConn returns the underlying UDP socket's raw connection. quic-go uses
 // it to size the kernel receive buffer and to set the Don't Fragment bit on the
-// direct-IP path. Exposing it does not make MagicConn an OOBCapablePacketConn —
-// that interface also needs ReadMsgUDP/WriteMsgUDP, which MagicConn does not
-// provide, so quic-go still uses its single-packet path.
+// direct-IP path. Exposing it does not make MagicConn an OOBCapablePacketConn.
+// On Linux qng combines it with MagicConn's send-message method for send-side
+// GSO only.
 func (m *MagicConn) SyscallConn() (syscall.RawConn, error) {
 	if m.udp == nil {
 		return nil, errors.ErrUnsupported

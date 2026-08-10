@@ -51,6 +51,14 @@ type OOBCapablePacketConn interface {
 	WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error)
 }
 
+// gsoCapablePacketConn can send UDP_SEGMENT messages without changing the
+// connection's receive path.
+type gsoCapablePacketConn interface {
+	net.PacketConn
+	SyscallConn() (syscall.RawConn, error)
+	WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error)
+}
+
 var _ OOBCapablePacketConn = &net.UDPConn{}
 
 func wrapConn(pc net.PacketConn) (rawConn, error) {
@@ -100,11 +108,20 @@ func wrapConn(pc net.PacketConn) (rawConn, error) {
 		}
 	}
 	c, ok := pc.(OOBCapablePacketConn)
-	if !ok {
-		utils.DefaultLogger.Infof("PacketConn is not a net.UDPConn. Disabling optimizations possible on UDP connections.")
-		return &basicConn{PacketConn: pc, supportsDF: supportsDF}, nil
+	if ok {
+		return newConn(c, supportsDF)
 	}
-	return newConn(c, supportsDF)
+	if c, ok := pc.(gsoCapablePacketConn); ok {
+		conn, enabled, err := newGSOSendConn(c, supportsDF)
+		if err != nil {
+			return nil, err
+		}
+		if enabled {
+			return conn, nil
+		}
+	}
+	utils.DefaultLogger.Infof("PacketConn is not a net.UDPConn. Disabling optimizations possible on UDP connections.")
+	return &basicConn{PacketConn: pc, supportsDF: supportsDF}, nil
 }
 
 // The basicConn is the most trivial implementation of a rawConn.
