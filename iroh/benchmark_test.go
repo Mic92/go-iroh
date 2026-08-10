@@ -34,14 +34,17 @@ type layerLadderSample struct {
 }
 
 type layerLadderTransportCounters struct {
-	QUICPacketsSent    uint64 `json:"quic_packets_sent"`
-	QUICBytesSent      uint64 `json:"quic_bytes_sent"`
-	StreamFramesSent   uint64 `json:"stream_frames_sent,omitempty"`
-	StreamBytesSent    uint64 `json:"stream_bytes_sent,omitempty"`
-	ACKFramesSent      uint64 `json:"ack_frames_sent,omitempty"`
-	ACKOnlyPacketsSent uint64 `json:"ack_only_packets_sent,omitempty"`
-	StreamActivations  uint64 `json:"stream_activations,omitempty"`
-	SendLoopRuns       uint64 `json:"send_loop_runs,omitempty"`
+	QUICPacketsSent      uint64 `json:"quic_packets_sent"`
+	QUICBytesSent        uint64 `json:"quic_bytes_sent"`
+	StreamFramesSent     uint64 `json:"stream_frames_sent,omitempty"`
+	StreamBytesSent      uint64 `json:"stream_bytes_sent,omitempty"`
+	ACKFramesSent        uint64 `json:"ack_frames_sent,omitempty"`
+	ACKOnlyPacketsSent   uint64 `json:"ack_only_packets_sent,omitempty"`
+	StreamActivations    uint64 `json:"stream_activations,omitempty"`
+	SendLoopRuns         uint64 `json:"send_loop_runs,omitempty"`
+	UDPReceiveSyscalls   uint64 `json:"udp_receive_syscalls,omitempty"`
+	UDPDatagramsReceived uint64 `json:"udp_datagrams_received,omitempty"`
+	UDPGROReads          uint64 `json:"udp_gro_reads,omitempty"`
 }
 
 type benchmarkCPUTime struct {
@@ -159,30 +162,37 @@ func benchmarkConnPairAddr(b *testing.B, alpn string, ip netip.Addr) (client, se
 }
 
 type benchConnStats struct {
-	packetsSent        uint64
-	packetsReceived    uint64
-	bytesSent          uint64
-	streamFramesSent   uint64
-	streamBytesSent    uint64
-	ackFramesSent      uint64
-	ackOnlyPacketsSent uint64
-	streamActivations  uint64
-	sendLoopRuns       uint64
+	packetsSent          uint64
+	packetsReceived      uint64
+	bytesSent            uint64
+	streamFramesSent     uint64
+	streamBytesSent      uint64
+	ackFramesSent        uint64
+	ackOnlyPacketsSent   uint64
+	streamActivations    uint64
+	sendLoopRuns         uint64
+	udpReceiveSyscalls   uint64
+	udpDatagramsReceived uint64
+	udpGROReads          uint64
 }
 
 func snapshotConnStats(c *Conn) benchConnStats {
 	s := c.qc.ConnectionStats()
 	p := c.qc.PerformanceStats()
+	u := socket.SnapshotPerformanceStats()
 	return benchConnStats{
-		packetsSent:        s.PacketsSent,
-		packetsReceived:    s.PacketsReceived,
-		bytesSent:          s.BytesSent,
-		streamFramesSent:   p.StreamFramesSent,
-		streamBytesSent:    p.StreamBytesSent,
-		ackFramesSent:      p.ACKFramesSent,
-		ackOnlyPacketsSent: p.ACKOnlyPacketsSent,
-		streamActivations:  p.StreamActivations,
-		sendLoopRuns:       p.SendLoopRuns,
+		packetsSent:          s.PacketsSent,
+		packetsReceived:      s.PacketsReceived,
+		bytesSent:            s.BytesSent,
+		streamFramesSent:     p.StreamFramesSent,
+		streamBytesSent:      p.StreamBytesSent,
+		ackFramesSent:        p.ACKFramesSent,
+		ackOnlyPacketsSent:   p.ACKOnlyPacketsSent,
+		streamActivations:    p.StreamActivations,
+		sendLoopRuns:         p.SendLoopRuns,
+		udpReceiveSyscalls:   u.UDPReceiveSyscalls,
+		udpDatagramsReceived: u.UDPDatagramsReceived,
+		udpGROReads:          u.UDPGROReads,
 	}
 }
 
@@ -212,14 +222,17 @@ func reportConnSenderStats(b *testing.B, sender *Conn, start benchConnStats) *la
 	b.ReportMetric(float64(packets)/float64(b.N), "qsender-packets/op")
 	b.ReportMetric(float64(bytes)/float64(b.N), "qsender-bytes/op")
 	return &layerLadderTransportCounters{
-		QUICPacketsSent:    packets,
-		QUICBytesSent:      bytes,
-		StreamFramesSent:   end.streamFramesSent - start.streamFramesSent,
-		StreamBytesSent:    end.streamBytesSent - start.streamBytesSent,
-		ACKFramesSent:      end.ackFramesSent - start.ackFramesSent,
-		ACKOnlyPacketsSent: end.ackOnlyPacketsSent - start.ackOnlyPacketsSent,
-		StreamActivations:  end.streamActivations - start.streamActivations,
-		SendLoopRuns:       end.sendLoopRuns - start.sendLoopRuns,
+		QUICPacketsSent:      packets,
+		QUICBytesSent:        bytes,
+		StreamFramesSent:     end.streamFramesSent - start.streamFramesSent,
+		StreamBytesSent:      end.streamBytesSent - start.streamBytesSent,
+		ACKFramesSent:        end.ackFramesSent - start.ackFramesSent,
+		ACKOnlyPacketsSent:   end.ackOnlyPacketsSent - start.ackOnlyPacketsSent,
+		StreamActivations:    end.streamActivations - start.streamActivations,
+		SendLoopRuns:         end.sendLoopRuns - start.sendLoopRuns,
+		UDPReceiveSyscalls:   end.udpReceiveSyscalls - start.udpReceiveSyscalls,
+		UDPDatagramsReceived: end.udpDatagramsReceived - start.udpDatagramsReceived,
+		UDPGROReads:          end.udpGROReads - start.udpGROReads,
 	}
 }
 
@@ -496,7 +509,12 @@ func BenchmarkConnStreamThroughput(b *testing.B) {
 		}
 	}
 	b.StopTimer()
-	emitLayerLadderSampleMetrics(b, "full-steady", int64(b.N)*int64(len(buf)), cpuStart, nil)
+	transport := reportConnSenderStats(b, client, clientStart)
+	emitLayerLadderSampleRecord(b, layerLadderSample{
+		Rung:      "full-steady",
+		Bytes:     int64(b.N) * int64(len(buf)),
+		Transport: transport,
+	}, cpuStart)
 	if err := s.Close(); err != nil {
 		b.Fatalf("close stream: %v", err)
 	}
