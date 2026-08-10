@@ -135,6 +135,11 @@ type BindOpts struct {
 type QUICTransportConfig struct {
 	KeepAlivePeriod time.Duration
 	MaxIdleTimeout  time.Duration
+	// InitialPacketSize is the initial QUIC packet size in bytes.
+	InitialPacketSize uint16
+	// MaxIncomingStreams is the maximum number of concurrent bidirectional
+	// streams accepted from a peer.
+	MaxIncomingStreams int64
 }
 
 // WithSecretKey sets the endpoint's identity. If unset, [Bind] generates a
@@ -433,6 +438,12 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		}
 		if c.transportConfig.MaxIdleTimeout != 0 {
 			quicConf.MaxIdleTimeout = c.transportConfig.MaxIdleTimeout
+		}
+		if c.transportConfig.InitialPacketSize != 0 {
+			quicConf.InitialPacketSize = c.transportConfig.InitialPacketSize
+		}
+		if c.transportConfig.MaxIncomingStreams != 0 {
+			quicConf.MaxIncomingStreams = c.transportConfig.MaxIncomingStreams
 		}
 	}
 	// The QUIC transport is driven over the magic socket rather than the raw

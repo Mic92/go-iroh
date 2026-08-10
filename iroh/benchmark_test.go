@@ -15,17 +15,49 @@ import (
 	"github.com/tmc/go-iroh/internal/socket"
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
+	"golang.org/x/sys/unix"
 )
 
 type layerLadderSample struct {
-	Rung       string `json:"rung"`
-	Lang       string `json:"lang"`
-	Sample     int    `json:"sample"`
-	Bytes      int64  `json:"bytes"`
-	DurationNS int64  `json:"duration_ns"`
+	Rung           string  `json:"rung"`
+	Lang           string  `json:"lang"`
+	Sample         int     `json:"sample"`
+	Bytes          int64   `json:"bytes"`
+	Messages       int64   `json:"messages,omitempty"`
+	DurationNS     int64   `json:"duration_ns"`
+	CPUUserNS      int64   `json:"cpu_user_ns,omitempty"`
+	CPUSysNS       int64   `json:"cpu_sys_ns,omitempty"`
+	OpDurationNS   []int64 `json:"op_duration_ns,omitempty"`
+	FlowBytes      []int64 `json:"flow_bytes,omitempty"`
+	FlowDurationNS []int64 `json:"flow_duration_ns,omitempty"`
+}
+
+type benchmarkCPUTime struct {
+	userNS int64
+	sysNS  int64
+}
+
+func readBenchmarkCPUTime(b *testing.B) benchmarkCPUTime {
+	b.Helper()
+	var usage unix.Rusage
+	if err := unix.Getrusage(unix.RUSAGE_SELF, &usage); err != nil {
+		b.Fatalf("get process CPU time: %v", err)
+	}
+	return benchmarkCPUTime{
+		userNS: usage.Utime.Sec*1e9 + int64(usage.Utime.Usec)*1e3,
+		sysNS:  usage.Stime.Sec*1e9 + int64(usage.Stime.Usec)*1e3,
+	}
 }
 
 func emitLayerLadderSample(b *testing.B, rung string, bytes int64) {
+	emitLayerLadderSampleMetrics(b, rung, bytes, benchmarkCPUTime{-1, -1}, nil)
+}
+
+func emitLayerLadderSampleMetrics(b *testing.B, rung string, bytes int64, cpuStart benchmarkCPUTime, opDurationNS []int64) {
+	emitLayerLadderSampleRecord(b, layerLadderSample{Rung: rung, Bytes: bytes, OpDurationNS: opDurationNS}, cpuStart)
+}
+
+func emitLayerLadderSampleRecord(b *testing.B, s layerLadderSample, cpuStart benchmarkCPUTime) {
 	b.Helper()
 	path := os.Getenv("IROH_LAYER_LADDER_JSONL")
 	if path == "" {
@@ -45,13 +77,15 @@ func emitLayerLadderSample(b *testing.B, rung string, bytes int64) {
 	if err != nil {
 		b.Fatalf("open layer-ladder JSONL: %v", err)
 	}
-	err = json.NewEncoder(f).Encode(layerLadderSample{
-		Rung:       rung,
-		Lang:       lang,
-		Sample:     sample,
-		Bytes:      bytes,
-		DurationNS: b.Elapsed().Nanoseconds(),
-	})
+	s.Lang = lang
+	s.Sample = sample
+	s.DurationNS = b.Elapsed().Nanoseconds()
+	if cpuStart.userNS >= 0 {
+		cpuEnd := readBenchmarkCPUTime(b)
+		s.CPUUserNS = cpuEnd.userNS - cpuStart.userNS
+		s.CPUSysNS = cpuEnd.sysNS - cpuStart.sysNS
+	}
+	err = json.NewEncoder(f).Encode(s)
 	closeErr := f.Close()
 	if err != nil {
 		b.Fatalf("write layer-ladder JSONL: %v", err)
@@ -62,7 +96,7 @@ func emitLayerLadderSample(b *testing.B, rung string, bytes int64) {
 }
 
 func benchmarkConnPair(b *testing.B, alpn string) (client, server *Conn) {
-	return benchmarkConnPairAddr(b, alpn, netip.IPv6Loopback())
+	return benchmarkConnPairAddr(b, alpn, netip.MustParseAddr("127.0.0.1"))
 }
 
 func benchmarkConnPairAddr(b *testing.B, alpn string, ip netip.Addr) (client, server *Conn) {
@@ -71,14 +105,15 @@ func benchmarkConnPairAddr(b *testing.B, alpn string, ip netip.Addr) (client, se
 	b.Cleanup(cancel)
 
 	srvKey, _ := key.GenerateSecretKey()
-	srvEP, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn),
+	transportConfig := WithTransportConfig(&QUICTransportConfig{InitialPacketSize: 1200, MaxIncomingStreams: 64})
+	srvEP, err := Bind(ctx, WithSecretKey(srvKey), WithALPNs(alpn), transportConfig,
 		WithBindAddr(netip.AddrPortFrom(ip, 0)))
 	if err != nil {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() { srvEP.Shutdown(context.Background()) })
 
-	clientEP, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(ip, 0)))
+	clientEP, err := Bind(ctx, WithBindAddr(netip.AddrPortFrom(ip, 0)), transportConfig)
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -147,11 +182,11 @@ func reportConnCipher(b *testing.B, c *Conn) {
 }
 
 func benchmarkQUICConnPair(b *testing.B, alpn string) (client, server *quic.Conn) {
-	return benchmarkQUICConnPairWithConfigAddr(b, alpn, &quic.Config{}, net.IPv6loopback)
+	return benchmarkQUICConnPairWithConfigAddr(b, alpn, &quic.Config{InitialPacketSize: 1200}, net.IPv4(127, 0, 0, 1))
 }
 
 func benchmarkQUICConnPairWithConfig(b *testing.B, alpn string, conf *quic.Config) (client, server *quic.Conn) {
-	return benchmarkQUICConnPairWithConfigAddr(b, alpn, conf, net.IPv6loopback)
+	return benchmarkQUICConnPairWithConfigAddr(b, alpn, conf, net.IPv4(127, 0, 0, 1))
 }
 
 func benchmarkQUICConnPairWithConfigAddr(b *testing.B, alpn string, conf *quic.Config, ip net.IP) (client, server *quic.Conn) {
@@ -271,16 +306,30 @@ func BenchmarkConnStreamPingPong(b *testing.B) {
 	b.ReportAllocs()
 	clientStart := snapshotConnStats(client)
 	serverStart := snapshotConnStats(server)
+	cpuStart := readBenchmarkCPUTime(b)
+	captureLatency := os.Getenv("IROH_CAPTURE_OP_LATENCY") == "1"
+	var opDurationNS []int64
+	if captureLatency {
+		opDurationNS = make([]int64, 0, b.N)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		var start time.Time
+		if captureLatency {
+			start = time.Now()
+		}
 		if _, err := s.Write(buf[:]); err != nil {
 			b.Fatalf("write: %v", err)
 		}
 		if _, err := io.ReadFull(s, buf[:]); err != nil {
 			b.Fatalf("read: %v", err)
 		}
+		if captureLatency {
+			opDurationNS = append(opDurationNS, time.Since(start).Nanoseconds())
+		}
 	}
 	b.StopTimer()
+	emitLayerLadderSampleMetrics(b, "full-ping", int64(b.N), cpuStart, opDurationNS)
 	reportConnStats(b, client, server, clientStart, serverStart)
 	reportConnCipher(b, client)
 	s.CancelRead(0)
@@ -453,16 +502,30 @@ func BenchmarkQUICRawUDPStreamPingPong(b *testing.B) {
 	b.ReportAllocs()
 	clientStart := snapshotQUICConnStats(client)
 	serverStart := snapshotQUICConnStats(server)
+	cpuStart := readBenchmarkCPUTime(b)
+	captureLatency := os.Getenv("IROH_CAPTURE_OP_LATENCY") == "1"
+	var opDurationNS []int64
+	if captureLatency {
+		opDurationNS = make([]int64, 0, b.N)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		var start time.Time
+		if captureLatency {
+			start = time.Now()
+		}
 		if _, err := s.Write(buf[:]); err != nil {
 			b.Fatalf("write: %v", err)
 		}
 		if _, err := io.ReadFull(s, buf[:]); err != nil {
 			b.Fatalf("read: %v", err)
 		}
+		if captureLatency {
+			opDurationNS = append(opDurationNS, time.Since(start).Nanoseconds())
+		}
 	}
 	b.StopTimer()
+	emitLayerLadderSampleMetrics(b, "quic-ping", int64(b.N), cpuStart, opDurationNS)
 	reportQUICConnStats(b, client, server, clientStart, serverStart)
 	s.CancelRead(0)
 	s.CancelWrite(0)
@@ -600,7 +663,7 @@ func BenchmarkConnDatagramThroughput(b *testing.B) {
 
 func benchmarkTCPConnPair(b *testing.B) (client, server net.Conn) {
 	b.Helper()
-	ln, err := net.Listen("tcp", "[::1]:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -651,16 +714,30 @@ func BenchmarkRawTCPConnPingPong(b *testing.B) {
 
 	var buf [1]byte
 	b.ReportAllocs()
+	cpuStart := readBenchmarkCPUTime(b)
+	captureLatency := os.Getenv("IROH_CAPTURE_OP_LATENCY") == "1"
+	var opDurationNS []int64
+	if captureLatency {
+		opDurationNS = make([]int64, 0, b.N)
+	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		var start time.Time
+		if captureLatency {
+			start = time.Now()
+		}
 		if _, err := client.Write(buf[:]); err != nil {
 			b.Fatalf("write tcp: %v", err)
 		}
 		if _, err := io.ReadFull(client, buf[:]); err != nil {
 			b.Fatalf("read tcp: %v", err)
 		}
+		if captureLatency {
+			opDurationNS = append(opDurationNS, time.Since(start).Nanoseconds())
+		}
 	}
 	b.StopTimer()
+	emitLayerLadderSampleMetrics(b, "tcp-ping", int64(b.N), cpuStart, opDurationNS)
 	client.Close()
 	server.Close()
 	<-done
@@ -694,7 +771,7 @@ func BenchmarkRawTCPConnThroughput(b *testing.B) {
 
 func benchmarkUDPConnPair(b *testing.B) (client, server *net.UDPConn) {
 	b.Helper()
-	server, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
+	server, err := net.ListenUDP("udp", net.UDPAddrFromAddrPort(netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), 0)))
 	if err != nil {
 		b.Fatal(err)
 	}
