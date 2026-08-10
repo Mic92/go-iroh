@@ -335,6 +335,7 @@ func BenchmarkConnMessageRate(b *testing.B) {
 			buf := make([]byte, size)
 			b.SetBytes(int64(size))
 			b.ReportAllocs()
+			clientStart := snapshotConnStats(client)
 			cpuStart := readBenchmarkCPUTime(b)
 			b.ResetTimer()
 			for range b.N {
@@ -350,7 +351,13 @@ func BenchmarkConnMessageRate(b *testing.B) {
 			if err := <-done; err != nil {
 				b.Fatal(err)
 			}
-			emitWorkloadSample(b, fmt.Sprintf("full-stream-msg-%d", size), size, cpuStart)
+			transport := reportConnSenderStats(b, client, clientStart)
+			emitLayerLadderSampleRecord(b, layerLadderSample{
+				Rung:      fmt.Sprintf("full-stream-msg-%d", size),
+				Bytes:     int64(b.N * size),
+				Messages:  int64(b.N),
+				Transport: transport,
+			}, cpuStart)
 		})
 	}
 }

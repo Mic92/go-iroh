@@ -19,17 +19,23 @@ import (
 )
 
 type layerLadderSample struct {
-	Rung           string  `json:"rung"`
-	Lang           string  `json:"lang"`
-	Sample         int     `json:"sample"`
-	Bytes          int64   `json:"bytes"`
-	Messages       int64   `json:"messages,omitempty"`
-	DurationNS     int64   `json:"duration_ns"`
-	CPUUserNS      int64   `json:"cpu_user_ns,omitempty"`
-	CPUSysNS       int64   `json:"cpu_sys_ns,omitempty"`
-	OpDurationNS   []int64 `json:"op_duration_ns,omitempty"`
-	FlowBytes      []int64 `json:"flow_bytes,omitempty"`
-	FlowDurationNS []int64 `json:"flow_duration_ns,omitempty"`
+	Rung           string                        `json:"rung"`
+	Lang           string                        `json:"lang"`
+	Sample         int                           `json:"sample"`
+	Bytes          int64                         `json:"bytes"`
+	Messages       int64                         `json:"messages,omitempty"`
+	DurationNS     int64                         `json:"duration_ns"`
+	CPUUserNS      int64                         `json:"cpu_user_ns,omitempty"`
+	CPUSysNS       int64                         `json:"cpu_sys_ns,omitempty"`
+	OpDurationNS   []int64                       `json:"op_duration_ns,omitempty"`
+	FlowBytes      []int64                       `json:"flow_bytes,omitempty"`
+	FlowDurationNS []int64                       `json:"flow_duration_ns,omitempty"`
+	Transport      *layerLadderTransportCounters `json:"transport,omitempty"`
+}
+
+type layerLadderTransportCounters struct {
+	UDPDatagramsSent uint64 `json:"udp_datagrams_sent"`
+	UDPBytesSent     uint64 `json:"udp_bytes_sent"`
 }
 
 type benchmarkCPUTime struct {
@@ -174,6 +180,19 @@ func reportConnStats(b *testing.B, client, server *Conn, clientStart, serverStar
 	b.ReportMetric(float64(packetsSent)/float64(b.N), "qpackets-sent/op")
 	b.ReportMetric(float64(packetsReceived)/float64(b.N), "qpackets-recv/op")
 	b.ReportMetric(float64(bytesSent)/float64(b.N), "qbytes-sent/op")
+}
+
+func reportConnSenderStats(b *testing.B, sender *Conn, start benchConnStats) *layerLadderTransportCounters {
+	b.Helper()
+	if b.N == 0 {
+		return nil
+	}
+	end := snapshotConnStats(sender)
+	packets := end.packetsSent - start.packetsSent
+	bytes := end.bytesSent - start.bytesSent
+	b.ReportMetric(float64(packets)/float64(b.N), "qsender-packets/op")
+	b.ReportMetric(float64(bytes)/float64(b.N), "qsender-bytes/op")
+	return &layerLadderTransportCounters{UDPDatagramsSent: packets, UDPBytesSent: bytes}
 }
 
 func reportConnCipher(b *testing.B, c *Conn) {
