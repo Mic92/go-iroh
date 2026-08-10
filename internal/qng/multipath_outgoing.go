@@ -84,6 +84,10 @@ type pathOpenState struct {
 	// for this path are sent to this address instead of the connection's
 	// original remote address.
 	qntRoute netip.AddrPort
+	// qntUDPAddr is the allocation-bearing net representation of qntRoute. The
+	// route is immutable after path creation, so convert it once rather than on
+	// every pass through the send loop.
+	qntUDPAddr *net.UDPAddr
 
 	// cidBlockedSent is set after we ask the peer for a path connection ID.
 	cidBlockedSent bool
@@ -612,7 +616,13 @@ func (c *Conn) qntOpenValidatedPathLocked() (protocol.PathID, netip.AddrPort, bo
 		return protocol.PathIDZero, netip.AddrPort{}, false, nil
 	}
 	c.multipathOut.nextPathID++
-	st := &pathOpenState{id: pid, validated: true, validatedChan: make(chan struct{}), qntRoute: route}
+	st := &pathOpenState{
+		id:            pid,
+		validated:     true,
+		validatedChan: make(chan struct{}),
+		qntRoute:      route,
+		qntUDPAddr:    qntProbeUDPAddr(route),
+	}
 	close(st.validatedChan)
 	c.multipathOut.paths[pid] = st
 	return pid, route, true, nil
@@ -850,7 +860,11 @@ func (c *Conn) pathSendQueueBlocked(st *pathOpenState) bool {
 
 func (c *Conn) sendPathBuffer(buf *packetBuffer, ecn protocol.ECN, st *pathOpenState) {
 	if st != nil && st.qntRoute.IsValid() {
-		addr := qntProbeUDPAddr(st.qntRoute)
+		addr := st.qntUDPAddr
+		if addr == nil {
+			addr = qntProbeUDPAddr(st.qntRoute)
+			st.qntUDPAddr = addr
+		}
 		if addr == nil {
 			buf.Release()
 			return
@@ -862,7 +876,7 @@ func (c *Conn) sendPathBuffer(buf *packetBuffer, ecn protocol.ECN, st *pathOpenS
 }
 
 func hasInvalidQNTRoute(st *pathOpenState) bool {
-	return st != nil && st.qntRoute.IsValid() && qntProbeUDPAddr(st.qntRoute) == nil
+	return st != nil && st.qntRoute.IsValid() && !validQNTProbeAddr(st.qntRoute)
 }
 
 func (c *Conn) multipathECNMode() protocol.ECN {

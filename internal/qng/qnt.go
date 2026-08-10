@@ -279,10 +279,15 @@ func (c *Conn) qntPendingProbeAddresses() []netip.AddrPort {
 
 func qntProbeUDPAddr(addr netip.AddrPort) *net.UDPAddr {
 	addr = canonicalNATTraversalAddr(addr)
-	if !addr.IsValid() || addr.Port() == 0 {
+	if !validQNTProbeAddr(addr) {
 		return nil
 	}
 	return net.UDPAddrFromAddrPort(addr)
+}
+
+func validQNTProbeAddr(addr netip.AddrPort) bool {
+	addr = canonicalNATTraversalAddr(addr)
+	return addr.IsValid() && addr.Port() != 0
 }
 
 func (c *Conn) qntRecordSentProbe(challenge [8]byte, remote netip.AddrPort) {
