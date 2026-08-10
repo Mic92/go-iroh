@@ -3328,6 +3328,15 @@ func (c *Conn) AwaitObservedAddr(ctx context.Context) (netip.AddrPort, bool) {
 func (c *Conn) triggerSending(now monotime.Time) error {
 	c.pacingDeadline = 0
 
+	// Queue a connection-level window update before consulting the send mode:
+	// SendAck / SendPacingLimited produce ack-only packets, which carry
+	// queued control frames but never call GetWindowUpdate themselves. A
+	// congestion-limited pure sink must still grant MAX_DATA, or it starves
+	// its sender of flow-control credit and the transfer deadlocks.
+	if offset := c.connFlowController.GetWindowUpdate(now); offset > 0 {
+		c.framer.QueueMaxDataFrame(offset)
+	}
+
 	sendMode := c.sentPacketHandler.SendMode(now)
 	switch sendMode {
 	case ackhandler.SendAny:
@@ -3423,9 +3432,6 @@ func (c *Conn) sendPackets(now monotime.Time) error {
 		return nil
 	}
 
-	if offset := c.connFlowController.GetWindowUpdate(now); offset > 0 {
-		c.framer.QueueMaxDataFrame(offset)
-	}
 	if cf := c.cryptoStreamManager.GetPostHandshakeData(protocol.MaxPostHandshakeCryptoFrameSize); cf != nil {
 		c.queueControlFrame(cf)
 	}

@@ -177,6 +177,22 @@ func (f *framer) Append(
 	return frames, singleFrame, hasSingleFrame, streamFrames, controlFrameLen + streamFrameLen
 }
 
+// AppendControlFrames appends queued control frames (window updates,
+// stream control frames, PATH_RESPONSE) without any stream data. It is
+// used for ack-only packets: a congestion- or pacing-limited receiver
+// must still be able to grant flow-control credit, or a pure sink
+// starves its sender of MAX_DATA and the connection deadlocks.
+func (f *framer) AppendControlFrames(
+	frames []ackhandler.Frame,
+	maxLen protocol.ByteCount,
+	now monotime.Time,
+	v protocol.Version,
+) ([]ackhandler.Frame, protocol.ByteCount) {
+	f.controlFrameMutex.Lock()
+	defer f.controlFrameMutex.Unlock()
+	return f.appendControlFrames(frames, maxLen, now, v)
+}
+
 func (f *framer) appendControlFrames(
 	frames []ackhandler.Frame,
 	maxLen protocol.ByteCount,

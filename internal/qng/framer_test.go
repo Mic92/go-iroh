@@ -46,3 +46,25 @@ func TestMaxDataFrameNotAliased(t *testing.T) {
 		t.Fatal("second emission reused the in-flight frame pointer")
 	}
 }
+
+// TestAppendControlFramesCarriesMaxData covers the ack-only packet path: a
+// congestion-limited receiver grants window updates through
+// AppendControlFrames, so a queued MAX_DATA must be emitted by it.
+func TestAppendControlFramesCarriesMaxData(t *testing.T) {
+	f := newFramer(nil)
+	f.QueueMaxDataFrame(1 << 20)
+	frames, length := f.AppendControlFrames(nil, 1000, monotime.Now(), protocol.Version1)
+	if len(frames) != 1 {
+		t.Fatalf("appended %d frames, want 1", len(frames))
+	}
+	md, ok := frames[0].Frame.(*wire.MaxDataFrame)
+	if !ok || md.MaximumData != 1<<20 {
+		t.Fatalf("frame = %#v, want MAX_DATA %d", frames[0].Frame, 1<<20)
+	}
+	if length == 0 {
+		t.Fatal("length not accounted")
+	}
+	if frames, _ := f.AppendControlFrames(nil, 1000, monotime.Now(), protocol.Version1); len(frames) != 0 {
+		t.Fatalf("second call re-emitted %d frames, want 0", len(frames))
+	}
+}
