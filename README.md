@@ -112,6 +112,16 @@ For a repeatable local check:
 go test ./... -count=1
 ```
 
+Run the focused wire-parser fuzz targets for one minute each:
+
+```sh
+go test -run '^$' -fuzz '^FuzzReadObserveItem$' -fuzztime 1m ./blobs
+go test -run '^$' -fuzz '^FuzzUnmarshal$' -fuzztime 1m ./internal/postcard
+go test -run '^$' -fuzz '^FuzzFromBytes$' -fuzztime 1m ./internal/pkarr
+go test -run '^$' -fuzz '^FuzzParseRelayFrames$' -fuzztime 1m ./internal/relayproto
+go test -run '^$' -fuzz '^FuzzKeyMaterialClientAuthHeader$' -fuzztime 1m ./internal/relayproto
+```
+
 For loopback stream/datagram latency and throughput, with raw TCP and UDP
 baselines:
 
