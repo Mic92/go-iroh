@@ -519,6 +519,7 @@ func BenchmarkConnStreamBurstThenSinglePingPong(b *testing.B) {
 	transport := reportConnSenderStats(b, client, clientStart)
 	emitLayerLadderSampleRecord(b, layerLadderSample{
 		Rung:         "full-burst-single-ping",
+		Bytes:        int64(b.N * writeSize),
 		Messages:     int64(b.N * (writesPerBurst + 1)),
 		OpDurationNS: opDurationNS,
 		Transport:    transport,
