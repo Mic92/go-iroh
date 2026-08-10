@@ -497,6 +497,9 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	// endpoint's address-lookup services (slice G), passed down as a func value
 	// so internal/socket does not import iroh.
 	ep.remotes = socket.NewRemoteMapWithMetrics(serveCtx, c.pathSelector, ep.resolveFunc(), magic.MetricsSet())
+	// Reaped remotes release their mapped addresses, so the socket's tables do
+	// not grow without bound under peer churn (upstream iroh issue #4293).
+	ep.remotes.SetOnEvict(sock.EvictRemote)
 	ep.magic.SetEndpointSender(func(id key.EndpointID, p []byte) bool {
 		err := ep.remotes.Actor(id).SendDatagram(p, func(addr socket.Addr, data []byte) bool {
 			return ep.magic.SendAddr(addr, data)

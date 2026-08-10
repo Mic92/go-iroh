@@ -154,6 +154,42 @@ func (s *Socket) PathAddr(remoteID key.EndpointID, ra net.Addr) Addr {
 	}
 }
 
+// EvictRemote drops the mapped addresses recorded for a reaped remote: the
+// endpoint-id mapping for id, every relay mapping whose remote endpoint is id,
+// and the custom mappings among addrs (the remote's known transport
+// addresses). Without eviction the tables grow without bound under peer churn
+// (the upstream Rust implementation has the same leak, iroh issue #4293). A
+// mapping is regenerated on the next use of the same key, so evicting a remote
+// that immediately returns only costs a fresh mapped address.
+func (s *Socket) EvictRemote(id key.EndpointID, addrs []Addr) {
+	s.endpointAddrs.Remove(id)
+
+	s.relayMu.Lock()
+	var relayKeys []string
+	for k, rk := range s.relayByKey {
+		if rk.EID == id {
+			relayKeys = append(relayKeys, k)
+			delete(s.relayByKey, k)
+		}
+	}
+	s.relayMu.Unlock()
+	for _, k := range relayKeys {
+		s.relayAddrs.Remove(k)
+	}
+
+	for _, a := range addrs {
+		c, ok := a.Custom()
+		if !ok {
+			continue
+		}
+		k := c.String()
+		s.customMu.Lock()
+		delete(s.customByKey, k)
+		s.customMu.Unlock()
+		s.customAddrs.Remove(k)
+	}
+}
+
 // LookupCustom returns the custom address for a custom mapped address, if known.
 func (s *Socket) LookupCustom(m CustomMappedAddr) (netaddr.CustomAddr, bool) {
 	key, ok := s.customAddrs.Lookup(m.Addr())
