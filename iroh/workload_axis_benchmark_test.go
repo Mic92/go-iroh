@@ -437,6 +437,97 @@ func BenchmarkConnStreamBurstPingPong(b *testing.B) {
 	<-done
 }
 
+func BenchmarkConnStreamBurstThenSinglePingPong(b *testing.B) {
+	const (
+		writesPerBurst = 64
+		writeSize      = 32
+	)
+	client, server := benchmarkConnPairAddr(b, "iroh-workload-burst-single-ping/0", workloadIPv4())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	stream, err := client.OpenStreamSync(ctx)
+	if err != nil {
+		b.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		peer, err := server.AcceptStream(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		burst := make([]byte, writesPerBurst*writeSize)
+		single := make([]byte, writeSize)
+		for {
+			if _, err := io.ReadFull(peer, burst); err != nil {
+				done <- err
+				return
+			}
+			if _, err := peer.Write([]byte{1}); err != nil {
+				done <- err
+				return
+			}
+			if _, err := io.ReadFull(peer, single); err != nil {
+				done <- err
+				return
+			}
+			if _, err := peer.Write([]byte{1}); err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+
+	buf := make([]byte, writeSize)
+	b.SetBytes(writeSize)
+	b.ReportAllocs()
+	clientStart := snapshotConnStats(client)
+	cpuStart := readBenchmarkCPUTime(b)
+	captureLatency := os.Getenv("IROH_CAPTURE_OP_LATENCY") == "1"
+	var opDurationNS []int64
+	if captureLatency {
+		opDurationNS = make([]int64, 0, b.N)
+	}
+	b.ResetTimer()
+	b.StopTimer()
+	for range b.N {
+		for range writesPerBurst {
+			if _, err := stream.Write(buf); err != nil {
+				b.Fatal(err)
+			}
+		}
+		var ack [1]byte
+		if _, err := io.ReadFull(stream, ack[:]); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		var start time.Time
+		if captureLatency {
+			start = time.Now()
+		}
+		if _, err := stream.Write(buf); err != nil {
+			b.Fatal(err)
+		}
+		if _, err := io.ReadFull(stream, ack[:]); err != nil {
+			b.Fatal(err)
+		}
+		if captureLatency {
+			opDurationNS = append(opDurationNS, time.Since(start).Nanoseconds())
+		}
+		b.StopTimer()
+	}
+	transport := reportConnSenderStats(b, client, clientStart)
+	emitLayerLadderSampleRecord(b, layerLadderSample{
+		Rung:         "full-burst-single-ping",
+		Messages:     int64(b.N * (writesPerBurst + 1)),
+		OpDurationNS: opDurationNS,
+		Transport:    transport,
+	}, cpuStart)
+	stream.CancelRead(0)
+	stream.CancelWrite(0)
+	<-done
+}
+
 func benchmarkQUICMessages(b *testing.B, client, server *quic.Conn, size int, rung string) {
 	b.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
