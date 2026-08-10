@@ -49,6 +49,7 @@ type SendStream struct {
 
 	dataForWriting []byte // during a Write() call, this slice is the part of p that still needs to be sent out
 	nextFrame      *wire.StreamFrame
+	active         bool
 
 	writeChan chan struct{}
 	writeOnce chan struct{}
@@ -179,7 +180,7 @@ func (s *SendStream) write(p []byte) (bool /* is newly completed */, int, error)
 
 		s.mutex.Unlock()
 		if !notifiedSender {
-			s.sender.onHasStreamData(s.streamID, s) // must be called without holding the mutex
+			s.notifyHasStreamData()
 			notifiedSender = true
 		}
 		if copied {
@@ -226,6 +227,9 @@ func (s *SendStream) popStreamFrame(maxBytes protocol.ByteCount, v protocol.Vers
 	if f != nil {
 		s.numOutstandingFrames++
 	}
+	if !hasMoreData {
+		s.active = false
+	}
 	s.mutex.Unlock()
 
 	if f == nil {
@@ -235,6 +239,17 @@ func (s *SendStream) popStreamFrame(maxBytes protocol.ByteCount, v protocol.Vers
 		Frame:   f,
 		Handler: (*sendStreamAckHandler)(s),
 	}, blocked, hasMoreData
+}
+
+func (s *SendStream) notifyHasStreamData() {
+	s.mutex.Lock()
+	if s.active {
+		s.mutex.Unlock()
+		return
+	}
+	s.active = true
+	s.mutex.Unlock()
+	s.sender.onHasStreamData(s.streamID, s)
 }
 
 func (s *SendStream) popNewOrRetransmittedStreamFrame(maxBytes protocol.ByteCount, v protocol.Version) (_ *wire.StreamFrame, _ *wire.StreamDataBlockedFrame, hasMoreData bool) {
@@ -434,7 +449,7 @@ func (s *SendStream) Close() error {
 	if cancelled {
 		return fmt.Errorf("close called for canceled stream %d", s.streamID)
 	}
-	s.sender.onHasStreamData(s.streamID, s) // need to send the FIN, must be called without holding the mutex
+	s.notifyHasStreamData()
 
 	s.ctxCancel(nil)
 	return nil
@@ -554,7 +569,7 @@ func (s *SendStream) updateSendWindow(limit protocol.ByteCount) {
 	hasStreamData := s.dataForWriting != nil || s.nextFrame != nil
 	s.mutex.Unlock()
 	if hasStreamData {
-		s.sender.onHasStreamData(s.streamID, s)
+		s.notifyHasStreamData()
 	}
 }
 
@@ -563,7 +578,7 @@ func (s *SendStream) onConnectionSendWindowUpdated() {
 	hasStreamData := s.dataForWriting != nil || s.nextFrame != nil
 	s.mutex.Unlock()
 	if hasStreamData {
-		s.sender.onHasStreamData(s.streamID, s)
+		s.notifyHasStreamData()
 	}
 }
 
@@ -730,7 +745,7 @@ func (s *sendStreamAckHandler) OnLost(f wire.Frame) {
 	s.retransmissionQueue = append(s.retransmissionQueue, sf)
 	s.mutex.Unlock()
 
-	s.sender.onHasStreamData(s.streamID, (*SendStream)(s))
+	(*SendStream)(s).notifyHasStreamData()
 }
 
 type sendStreamResetStreamHandler SendStream

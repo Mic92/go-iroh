@@ -15,6 +15,28 @@ func (s *sendStreamTestSender) onHasConnectionData() {}
 func (s *sendStreamTestSender) onHasStreamData(protocol.StreamID, *SendStream) {
 	s.streamData++
 }
+
+func TestSendStreamCoalescesActiveNotifications(t *testing.T) {
+	sender := new(sendStreamTestSender)
+	str := newSendStream(context.Background(), 0, sender, receiveStreamTestFlow{}, false)
+	for range 2 {
+		if _, err := str.Write([]byte("data")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, want := sender.streamData, 1; got != want {
+		t.Fatalf("notifications before pop: got %d, want %d", got, want)
+	}
+	if frame, _, more := str.popStreamFrame(protocol.MaxPacketBufferSize, protocol.Version1); frame.Frame == nil || more {
+		t.Fatalf("popStreamFrame = (%v, more %t), want frame and no more", frame.Frame, more)
+	}
+	if _, err := str.Write([]byte("more")); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sender.streamData, 2; got != want {
+		t.Fatalf("notifications after pop: got %d, want %d", got, want)
+	}
+}
 func (s *sendStreamTestSender) onHasStreamControlFrame(protocol.StreamID, streamControlFrameGetter) {
 }
 func (s *sendStreamTestSender) onStreamCompleted(protocol.StreamID) {}
