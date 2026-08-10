@@ -9,4 +9,9 @@ type PerformanceStats struct {
 	ACKOnlyPacketsSent uint64
 	StreamActivations  uint64
 	SendLoopRuns       uint64
+	UDPDatagramsSent   uint64
+	UDPBytesSent       uint64
+	UDPSendSyscalls    uint64
+	UDPGSOSyscalls     uint64
+	UDPGSOSegments     uint64
 }

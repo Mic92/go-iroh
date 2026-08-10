@@ -42,6 +42,11 @@ type layerLadderTransportCounters struct {
 	ACKOnlyPacketsSent   uint64 `json:"ack_only_packets_sent,omitempty"`
 	StreamActivations    uint64 `json:"stream_activations,omitempty"`
 	SendLoopRuns         uint64 `json:"send_loop_runs,omitempty"`
+	UDPDatagramsSent     uint64 `json:"udp_datagrams_sent,omitempty"`
+	UDPBytesSent         uint64 `json:"udp_bytes_sent,omitempty"`
+	UDPSendSyscalls      uint64 `json:"udp_send_syscalls,omitempty"`
+	UDPGSOSyscalls       uint64 `json:"udp_gso_syscalls,omitempty"`
+	UDPGSOSegments       uint64 `json:"udp_gso_segments,omitempty"`
 	UDPReceiveSyscalls   uint64 `json:"udp_receive_syscalls,omitempty"`
 	UDPDatagramsReceived uint64 `json:"udp_datagrams_received,omitempty"`
 	UDPGROReads          uint64 `json:"udp_gro_reads,omitempty"`
@@ -171,6 +176,11 @@ type benchConnStats struct {
 	ackOnlyPacketsSent   uint64
 	streamActivations    uint64
 	sendLoopRuns         uint64
+	udpDatagramsSent     uint64
+	udpBytesSent         uint64
+	udpSendSyscalls      uint64
+	udpGSOSyscalls       uint64
+	udpGSOSegments       uint64
 	udpReceiveSyscalls   uint64
 	udpDatagramsReceived uint64
 	udpGROReads          uint64
@@ -190,6 +200,11 @@ func snapshotConnStats(c *Conn) benchConnStats {
 		ackOnlyPacketsSent:   p.ACKOnlyPacketsSent,
 		streamActivations:    p.StreamActivations,
 		sendLoopRuns:         p.SendLoopRuns,
+		udpDatagramsSent:     p.UDPDatagramsSent,
+		udpBytesSent:         p.UDPBytesSent,
+		udpSendSyscalls:      p.UDPSendSyscalls,
+		udpGSOSyscalls:       p.UDPGSOSyscalls,
+		udpGSOSegments:       p.UDPGSOSegments,
 		udpReceiveSyscalls:   u.UDPReceiveSyscalls,
 		udpDatagramsReceived: u.UDPDatagramsReceived,
 		udpGROReads:          u.UDPGROReads,
@@ -230,6 +245,11 @@ func reportConnSenderStats(b *testing.B, sender *Conn, start benchConnStats) *la
 		ACKOnlyPacketsSent:   end.ackOnlyPacketsSent - start.ackOnlyPacketsSent,
 		StreamActivations:    end.streamActivations - start.streamActivations,
 		SendLoopRuns:         end.sendLoopRuns - start.sendLoopRuns,
+		UDPDatagramsSent:     end.udpDatagramsSent - start.udpDatagramsSent,
+		UDPBytesSent:         end.udpBytesSent - start.udpBytesSent,
+		UDPSendSyscalls:      end.udpSendSyscalls - start.udpSendSyscalls,
+		UDPGSOSyscalls:       end.udpGSOSyscalls - start.udpGSOSyscalls,
+		UDPGSOSegments:       end.udpGSOSegments - start.udpGSOSegments,
 		UDPReceiveSyscalls:   end.udpReceiveSyscalls - start.udpReceiveSyscalls,
 		UDPDatagramsReceived: end.udpDatagramsReceived - start.udpDatagramsReceived,
 		UDPGROReads:          end.udpGROReads - start.udpGROReads,

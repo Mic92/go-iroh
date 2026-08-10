@@ -26,6 +26,8 @@ type connCapabilities struct {
 	ECN bool
 }
 
+const minGSOSegments = 4
+
 // rawConn is a connection that allow reading of a receivedPackeh.
 type rawConn interface {
 	ReadPacket() (receivedPacket, error)

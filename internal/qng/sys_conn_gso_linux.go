@@ -35,7 +35,6 @@ func (c *gsoSendConn) WritePacket(b []byte, addr net.Addr, packetInfoOOB []byte,
 	if ecn != protocol.ECNUnsupported {
 		panic("cannot use ECN with a GSO send connection")
 	}
-	const minGSOSegments = 4
 	if gsoSize == 0 {
 		return c.basicConn.WritePacket(b, addr, packetInfoOOB, 0, ecn)
 	}

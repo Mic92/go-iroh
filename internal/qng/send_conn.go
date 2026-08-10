@@ -42,7 +42,8 @@ type sconn struct {
 	// wroteFirstPacket fields and the oob scratch buffer, so writes must not
 	// overlap. The mutex is uncontended on the common path and is never held
 	// across a blocking operation.
-	writeMu sync.Mutex
+	writeMu     sync.Mutex
+	performance sendConnPerformanceCounters
 
 	// If GSO enabled, and we receive a GSO error for this remote address, GSO is disabled.
 	gotGSOError bool
@@ -108,6 +109,9 @@ func (c *sconn) writePacket(p []byte, addr net.Addr, oob []byte, gsoSize uint16,
 		_, err = c.WritePacket(p, addr, oob, gsoSize, ecn)
 	}
 	c.wroteFirstPacket = true
+	if err == nil {
+		c.performance.recordWrite(len(p), gsoSize)
+	}
 	return err
 }
 
