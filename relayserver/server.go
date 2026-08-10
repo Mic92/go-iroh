@@ -24,6 +24,7 @@ import (
 
 const (
 	relayPath               = "/relay"
+	pingPath                = "/ping"
 	maxFrameSize            = 1024 * 1024
 	defaultEstablishTimeout = 30 * time.Second
 	defaultWriteTimeout     = 2 * time.Second
@@ -71,13 +72,18 @@ func (s *Server) Snapshot() metrics.Snapshot {
 	}
 }
 
-// ServeHTTP handles relay WebSocket requests at /relay.
+// ServeHTTP handles relay WebSocket requests at /relay and net-report latency
+// probes at /ping. Rust iroh clients require a 200 from /ping before selecting
+// a relay as their home relay (iroh-relay/src/http.rs).
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != relayPath {
+	switch r.URL.Path {
+	case relayPath:
+		s.handleRelay(w, r)
+	case pingPath:
+		w.WriteHeader(http.StatusOK)
+	default:
 		http.NotFound(w, r)
-		return
 	}
-	s.handleRelay(w, r)
 }
 
 type session struct {

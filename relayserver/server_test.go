@@ -313,3 +313,18 @@ func TestByteLimiterHonorsContext(t *testing.T) {
 		t.Fatalf("wait error = %v, want %v", err, context.Canceled)
 	}
 }
+
+func TestPingProbeReturns200(t *testing.T) {
+	srv := New()
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/ping")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("GET /ping = %d, want %d (Rust net-report probes require it)", resp.StatusCode, http.StatusOK)
+	}
+}
