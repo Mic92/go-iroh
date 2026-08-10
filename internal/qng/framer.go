@@ -198,7 +198,9 @@ func (f *framer) appendControlFrames(
 	if f.hasMaxDataFrame {
 		frameLen := f.maxDataFrame.Length(v)
 		if length+frameLen <= maxLen {
-			frames = append(frames, ackhandler.Frame{Frame: &f.maxDataFrame})
+			// Fresh allocation: the retransmission queue retains the frame
+			// pointer on loss, so the pending struct must not be shared.
+			frames = append(frames, ackhandler.Frame{Frame: &wire.MaxDataFrame{MaximumData: f.maxDataFrame.MaximumData}})
 			length += frameLen
 			f.hasMaxDataFrame = false
 		}

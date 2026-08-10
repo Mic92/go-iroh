@@ -32,7 +32,6 @@ type ReceiveStream struct {
 
 	queuedStopSending   bool
 	queuedMaxStreamData bool
-	maxStreamDataFrame  wire.MaxStreamDataFrame
 
 	// Set once we read the io.EOF or the cancellation error.
 	// Note that for local cancellations, this doesn't necessarily mean that we know the final offset yet.
@@ -562,10 +561,15 @@ func (s *ReceiveStream) getControlFrame(now monotime.Time) (_ ackhandler.Frame, 
 	}
 
 	s.queuedMaxStreamData = false
-	s.maxStreamDataFrame.StreamID = s.streamID
-	s.maxStreamDataFrame.MaximumStreamData = s.flowController.GetWindowUpdate(now)
+	// Allocate a fresh frame: the retransmission queue retains the pointer on
+	// loss, so a reused struct would mutate under it and could rewrite an
+	// already-committed window grant (GetWindowUpdate advances the window
+	// before the frame is sent, and returns 0 after the final offset).
 	return ackhandler.Frame{
-		Frame: &s.maxStreamDataFrame,
+		Frame: &wire.MaxStreamDataFrame{
+			StreamID:          s.streamID,
+			MaximumStreamData: s.flowController.GetWindowUpdate(now),
+		},
 	}, true, false
 }
 
