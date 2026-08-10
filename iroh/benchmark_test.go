@@ -441,6 +441,7 @@ func BenchmarkConnStreamThroughput(b *testing.B) {
 	b.ReportAllocs()
 	clientStart := snapshotConnStats(client)
 	serverStart := snapshotConnStats(server)
+	cpuStart := readBenchmarkCPUTime(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := s.Write(buf); err != nil {
@@ -448,7 +449,7 @@ func BenchmarkConnStreamThroughput(b *testing.B) {
 		}
 	}
 	b.StopTimer()
-	emitLayerLadderSample(b, "full-steady", int64(b.N)*int64(len(buf)))
+	emitLayerLadderSampleMetrics(b, "full-steady", int64(b.N)*int64(len(buf)), cpuStart, nil)
 	if err := s.Close(); err != nil {
 		b.Fatalf("close stream: %v", err)
 	}
