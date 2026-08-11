@@ -20,7 +20,7 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-var workloadMessageSizes = [...]int{32, 256, 1024}
+var workloadMessageSizes = [...]int{32, 256, 1024, 8192}
 
 const defaultWorkloadScalingBytes = 64 << 20
 

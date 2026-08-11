@@ -78,6 +78,11 @@ const (
 	// limit. Only streams under sustained full-buffer pressure reach it;
 	// it bounds the worst-case buffered-unsent bytes on cancel.
 	sendStreamWriteBufferMaxSize = 65536
+	// maxBufferedWriteSize is the largest single write that buffers (and
+	// grows the buffer). Larger writes keep the direct blocked-writer
+	// path, whose frames copy straight from the caller's slice — routing
+	// them through the buffer would add a full extra copy per write.
+	maxBufferedWriteSize = sendStreamWriteBufferMaxSize / 4
 )
 
 var (
@@ -126,6 +131,7 @@ func (s *SendStream) Write(p []byte) (int, error) {
 	// the general path unchanged.
 	if !s.writeActive && s.resetErr == nil && s.shutdownErr == nil &&
 		!s.finishedWriting && s.deadline.IsZero() && len(p) > 0 &&
+		len(p) <= maxBufferedWriteSize &&
 		s.active && s.growWriteBufferFor(len(p)) {
 		s.appendWriteBuffer(p)
 		if s.writesInEpisode < ^uint16(0) {
@@ -221,7 +227,7 @@ func (s *SendStream) writeVectored(bufs [][]byte) (int64, error) {
 		}
 		if !s.writeActive && s.resetErr == nil && s.shutdownErr == nil &&
 			!s.finishedWriting && s.deadline.IsZero() &&
-			s.active && s.growWriteBufferFor(len(p)) {
+			s.active && len(p) <= maxBufferedWriteSize && s.growWriteBufferFor(len(p)) {
 			s.appendWriteBuffer(p)
 			appended = true
 			total += int64(len(p))
@@ -286,7 +292,11 @@ func (s *SendStream) writeLocked(p []byte) (bool /* is newly completed */, int, 
 		}
 		// Copy a bounded tail so Write can return before the bytes are packetized.
 		// Larger writes retain the direct blocked-writer path.
-		if len(s.dataForWriting) > 0 && s.growWriteBufferFor(len(s.dataForWriting)) {
+		canBuffer := s.canBufferWrite()
+		if !canBuffer && len(p) <= maxBufferedWriteSize {
+			canBuffer = s.growWriteBufferFor(len(s.dataForWriting))
+		}
+		if canBuffer && len(s.dataForWriting) > 0 {
 			s.appendWriteBuffer(s.dataForWriting)
 			s.dataForWriting = nil
 			bytesWritten = len(p)

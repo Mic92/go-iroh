@@ -265,11 +265,21 @@ func TestSendStreamWriteBufferPreservesOrder(t *testing.T) {
 	}
 }
 
+// fillSendStreamWriteBuffer fills str's write buffer to the demand-grown
+// cap using cutoff-sized writes, which buffer and grow; a subsequent
+// write must block.
+func fillSendStreamWriteBuffer(t *testing.T, str *SendStream) {
+	t.Helper()
+	for total := 0; total < sendStreamWriteBufferMaxSize; total += maxBufferedWriteSize {
+		if n, err := str.Write(make([]byte, maxBufferedWriteSize)); err != nil || n != maxBufferedWriteSize {
+			t.Fatalf("fill Write = %d, %v", n, err)
+		}
+	}
+}
+
 func TestSendStreamWriteBufferBackpressure(t *testing.T) {
 	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
-	if n, err := str.Write(make([]byte, sendStreamWriteBufferMaxSize)); err != nil || n != sendStreamWriteBufferMaxSize {
-		t.Fatalf("initial Write = %d, %v", n, err)
-	}
+	fillSendStreamWriteBuffer(t, str)
 
 	type result struct {
 		n   int
@@ -335,9 +345,7 @@ func TestSendStreamWriteBufferDeadline(t *testing.T) {
 
 func TestSendStreamWriteBufferShutdown(t *testing.T) {
 	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
-	if _, err := str.Write(make([]byte, sendStreamWriteBufferMaxSize)); err != nil {
-		t.Fatal(err)
-	}
+	fillSendStreamWriteBuffer(t, str)
 	done := make(chan error, 1)
 	go func() {
 		_, err := str.Write([]byte("x"))
@@ -523,9 +531,7 @@ func TestSendStreamSerializesConcurrentWrites(t *testing.T) {
 
 func TestSendStreamConcurrentWriteWaitsForBlockedWriter(t *testing.T) {
 	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
-	if n, err := str.Write(make([]byte, sendStreamWriteBufferMaxSize)); n != sendStreamWriteBufferMaxSize || err != nil {
-		t.Fatalf("initial Write = %d, %v", n, err)
-	}
+	fillSendStreamWriteBuffer(t, str)
 	type result struct {
 		n   int
 		err error
@@ -624,7 +630,12 @@ func TestSendStreamFastPathCancelBetweenWrites(t *testing.T) {
 
 func TestSendStreamFastPathBufferBoundary(t *testing.T) {
 	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
-	if n, err := str.Write(make([]byte, sendStreamWriteBufferMaxSize-1)); err != nil || n != sendStreamWriteBufferMaxSize-1 {
+	for i := 0; i < 3; i++ {
+		if n, err := str.Write(make([]byte, maxBufferedWriteSize)); err != nil || n != maxBufferedWriteSize {
+			t.Fatalf("fill Write = %d, %v", n, err)
+		}
+	}
+	if n, err := str.Write(make([]byte, maxBufferedWriteSize-1)); err != nil || n != maxBufferedWriteSize-1 {
 		t.Fatalf("near-full Write = %d, %v", n, err)
 	}
 	// One byte still fits the buffer; two must block until a frame is popped.
@@ -741,7 +752,7 @@ func TestSendStreamWritevPartialConsumption(t *testing.T) {
 	// Element 0 fits the buffer; element 1 straddles it and blocks; the
 	// deadline then fires mid-element. bufs must reflect exactly the
 	// consumed prefix, including the partial element.
-	el0 := bytes.Repeat([]byte("a"), sendStreamWriteBufferMaxSize-8)
+	el0 := bytes.Repeat([]byte("a"), maxBufferedWriteSize-8)
 	el1 := bytes.Repeat([]byte("b"), 4*sendStreamWriteBufferMaxSize)
 	bufs := net.Buffers{el0, el1}
 	type result struct {
@@ -755,7 +766,7 @@ func TestSendStreamWritevPartialConsumption(t *testing.T) {
 	}()
 	waitForBlockedSendStreamWrite(t, str)
 	// Pop enough small frames to drain past el0 and partway into el1.
-	for popped := 0; popped <= len(el0)+sendStreamWriteBufferMaxSize/2; {
+	for popped := 0; popped <= len(el0)+maxBufferedWriteSize/2; {
 		frame, _, _ := str.popStreamFrame(257, protocol.Version1)
 		if frame.Frame == nil {
 			t.Fatal("popStreamFrame returned no frame")
@@ -830,8 +841,10 @@ func TestSendStreamWriteBufferDemandGrowth(t *testing.T) {
 	if limit != 2*sendStreamWriteBufferSize {
 		t.Fatalf("limit after first overflow = %d, want %d (geometric doubling)", limit, 2*sendStreamWriteBufferSize)
 	}
-	if _, err := str.Write(make([]byte, sendStreamWriteBufferMaxSize-sendStreamWriteBufferSize-100)); err != nil {
-		t.Fatal(err)
+	for i := 0; i < 3; i++ {
+		if _, err := str.Write(make([]byte, maxBufferedWriteSize)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	str.mutex.Lock()
 	limit = str.writeBufferLimitLocked()
@@ -842,7 +855,7 @@ func TestSendStreamWriteBufferDemandGrowth(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = str.Write(make([]byte, 200))
+		_, _ = str.Write(make([]byte, maxBufferedWriteSize))
 	}()
 	waitForBlockedSendStreamWrite(t, str)
 	select {
