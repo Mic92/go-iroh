@@ -105,6 +105,21 @@ func (s *SendStream) Write(p []byte) (int, error) {
 	// but sometimes people do it anyway.
 	// Make sure that we only execute one call at any given time to avoid hard to debug failures.
 	s.mutex.Lock()
+	// Steady-state fast path: no concurrent write episode, no error or
+	// deadline condition, stream already active, and the write fits in the
+	// buffer. The fast path never sets writeActive, so it creates no
+	// waiters and must wake none; any condition failing falls through to
+	// the general path unchanged.
+	if !s.writeActive && s.resetErr == nil && s.shutdownErr == nil &&
+		!s.finishedWriting && s.deadline.IsZero() && len(p) > 0 &&
+		s.active && s.bufferedWriteLen()+len(p) <= sendStreamWriteBufferSize {
+		s.appendWriteBuffer(p)
+		if s.writesInEpisode < ^uint16(0) {
+			s.writesInEpisode++
+		}
+		s.mutex.Unlock()
+		return len(p), nil
+	}
 	for s.writeActive {
 		s.mutex.Unlock()
 		<-s.writeWake

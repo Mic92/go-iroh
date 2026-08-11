@@ -588,3 +588,96 @@ func waitForBlockedSendStreamWrite(t *testing.T, str *SendStream) {
 	}
 	t.Fatal("Write did not block")
 }
+
+func TestSendStreamFastPathDeadlineFallsBack(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	if _, err := str.Write([]byte("warm")); err != nil {
+		t.Fatal(err)
+	}
+	if err := str.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := str.Write([]byte("x")); !errors.Is(err, errDeadline) || n != 0 {
+		t.Fatalf("Write with expired deadline = %d, %v; want 0, deadline error", n, err)
+	}
+	if err := str.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := str.Write([]byte("y")); err != nil || n != 1 {
+		t.Fatalf("Write after clearing deadline = %d, %v; want 1, nil", n, err)
+	}
+}
+
+func TestSendStreamFastPathCancelBetweenWrites(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	if _, err := str.Write([]byte("before")); err != nil {
+		t.Fatal(err)
+	}
+	str.CancelWrite(1)
+	n, err := str.Write([]byte("after"))
+	var streamErr *StreamError
+	if !errors.As(err, &streamErr) || n != 0 {
+		t.Fatalf("Write after CancelWrite = %d, %v; want 0, StreamError", n, err)
+	}
+}
+
+func TestSendStreamFastPathBufferBoundary(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	if n, err := str.Write(make([]byte, sendStreamWriteBufferSize-1)); err != nil || n != sendStreamWriteBufferSize-1 {
+		t.Fatalf("near-full Write = %d, %v", n, err)
+	}
+	// One byte still fits the buffer; two must block until a frame is popped.
+	if n, err := str.Write([]byte("a")); err != nil || n != 1 {
+		t.Fatalf("boundary Write = %d, %v; want 1, nil", n, err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if n, err := str.Write([]byte("bc")); err != nil || n != 2 {
+			t.Errorf("straddling Write = %d, %v; want 2, nil", n, err)
+		}
+	}()
+	waitForBlockedSendStreamWrite(t, str)
+	select {
+	case <-done:
+		t.Fatal("straddling Write returned without buffer space")
+	default:
+	}
+	frame, _, _ := str.popStreamFrame(257, protocol.Version1)
+	if frame.Frame == nil {
+		t.Fatal("popStreamFrame returned no frame")
+	}
+	frame.Frame.PutBack()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("straddling Write did not unblock")
+	}
+}
+
+func TestSendStreamFastPathCloseFlushesTail(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	want := []byte("buffered tail")
+	if _, err := str.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	if err := str.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	var fin bool
+	for {
+		frame, _, more := str.popStreamFrame(257, protocol.Version1)
+		if frame.Frame != nil {
+			got = append(got, frame.Frame.Data...)
+			fin = frame.Frame.Fin
+			frame.Frame.PutBack()
+		}
+		if !more {
+			break
+		}
+	}
+	if !bytes.Equal(got, want) || !fin {
+		t.Fatalf("popped %q fin=%v; want %q fin=true", got, fin, want)
+	}
+}
