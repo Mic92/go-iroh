@@ -58,6 +58,13 @@ func (s *Stream) Read(p []byte) (int, error) { return s.s.Read(p) }
 // Write writes data to s.
 func (s *Stream) Write(p []byte) (int, error) { return s.s.Write(p) }
 
+// ReadFrom implements [io.ReaderFrom]. See [SendStream.ReadFrom].
+func (s *Stream) ReadFrom(r io.Reader) (int64, error) { return s.s.ReadFrom(r) }
+
+// Writev writes the buffers in order as one write episode.
+// See [SendStream.Writev].
+func (s *Stream) Writev(bufs *net.Buffers) (int64, error) { return s.s.Writev(bufs) }
+
 // Close closes the send side of s.
 func (s *Stream) Close() error { return s.s.Close() }
 
