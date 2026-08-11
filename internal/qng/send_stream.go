@@ -52,12 +52,16 @@ type SendStream struct {
 	dataForWriting  []byte // during a Write() call, this slice is the part of p that still needs to be sent out
 	writeBuffer     []byte
 	writeBufferHead int
-	active          bool
-	writesInEpisode uint16
-	burstUntil      monotime.Time
-	corkPending     bool
-	activationTimer *time.Timer
-	activationGen   uint64
+	// writeBufferLimit is the demand-grown buffer limit; zero means
+	// sendStreamWriteBufferSize. It doubles toward
+	// sendStreamWriteBufferMaxSize only on the full-buffer write path.
+	writeBufferLimit int
+	active           bool
+	writesInEpisode  uint16
+	burstUntil       monotime.Time
+	corkPending      bool
+	activationTimer  *time.Timer
+	activationGen    uint64
 
 	writeChan   chan struct{}
 	writeActive bool
@@ -67,7 +71,14 @@ type SendStream struct {
 	flowController flowcontrol.StreamFlowController
 }
 
-const sendStreamWriteBufferSize = 4096
+const (
+	// sendStreamWriteBufferSize is the initial write buffer limit.
+	sendStreamWriteBufferSize = 4096
+	// sendStreamWriteBufferMaxSize caps the demand-grown write buffer
+	// limit. Only streams under sustained full-buffer pressure reach it;
+	// it bounds the worst-case buffered-unsent bytes on cancel.
+	sendStreamWriteBufferMaxSize = 65536
+)
 
 var (
 	_ io.ReaderFrom            = &SendStream{}
@@ -115,7 +126,7 @@ func (s *SendStream) Write(p []byte) (int, error) {
 	// the general path unchanged.
 	if !s.writeActive && s.resetErr == nil && s.shutdownErr == nil &&
 		!s.finishedWriting && s.deadline.IsZero() && len(p) > 0 &&
-		s.active && s.bufferedWriteLen()+len(p) <= sendStreamWriteBufferSize {
+		s.active && s.growWriteBufferFor(len(p)) {
 		s.appendWriteBuffer(p)
 		if s.writesInEpisode < ^uint16(0) {
 			s.writesInEpisode++
@@ -210,7 +221,7 @@ func (s *SendStream) writeVectored(bufs [][]byte) (int64, error) {
 		}
 		if !s.writeActive && s.resetErr == nil && s.shutdownErr == nil &&
 			!s.finishedWriting && s.deadline.IsZero() &&
-			s.active && s.bufferedWriteLen()+len(p) <= sendStreamWriteBufferSize {
+			s.active && s.growWriteBufferFor(len(p)) {
 			s.appendWriteBuffer(p)
 			appended = true
 			total += int64(len(p))
@@ -275,7 +286,7 @@ func (s *SendStream) writeLocked(p []byte) (bool /* is newly completed */, int, 
 		}
 		// Copy a bounded tail so Write can return before the bytes are packetized.
 		// Larger writes retain the direct blocked-writer path.
-		if s.canBufferWrite() && len(s.dataForWriting) > 0 {
+		if len(s.dataForWriting) > 0 && s.growWriteBufferFor(len(s.dataForWriting)) {
 			s.appendWriteBuffer(s.dataForWriting)
 			s.dataForWriting = nil
 			bytesWritten = len(p)
@@ -370,8 +381,33 @@ func (s *SendStream) bufferedWriteLen() int {
 	return len(s.writeBuffer) - s.writeBufferHead
 }
 
+// writeBufferLimitLocked returns the current demand-grown buffer limit
+// without growing it. The caller holds s.mutex.
+func (s *SendStream) writeBufferLimitLocked() int {
+	if s.writeBufferLimit == 0 {
+		return sendStreamWriteBufferSize
+	}
+	return s.writeBufferLimit
+}
+
+// growWriteBufferFor reports whether n more bytes fit the write buffer,
+// doubling the demand-grown limit toward the cap when they do not.
+// Growth happens only here — on the full-buffer write path — never on
+// stream open or on the drain side. The caller holds s.mutex.
+func (s *SendStream) growWriteBufferFor(n int) bool {
+	limit := s.writeBufferLimitLocked()
+	need := s.bufferedWriteLen() + n
+	for need > limit && limit < sendStreamWriteBufferMaxSize {
+		limit *= 2
+	}
+	s.writeBufferLimit = limit
+	return need <= limit
+}
+
+// canBufferWrite reports room under the current limit without growing;
+// the drain side uses it to decide when to wake a blocked writer.
 func (s *SendStream) canBufferWrite() bool {
-	return s.bufferedWriteLen()+len(s.dataForWriting) <= sendStreamWriteBufferSize
+	return s.bufferedWriteLen()+len(s.dataForWriting) <= s.writeBufferLimitLocked()
 }
 
 func (s *SendStream) appendWriteBuffer(p []byte) {
