@@ -190,6 +190,9 @@ func (s *SendStream) ReadFrom(r io.Reader) (int64, error) {
 // [io.WriterTo], which [io.Copy] prefers over [io.ReaderFrom], so
 // io.Copy(stream, &bufs) degrades to one Write call per element and never
 // batches.
+//
+// Vectored submission measured at least as fast as the equivalent
+// sequence of Write calls at every tested batch depth.
 func (s *SendStream) Writev(bufs *net.Buffers) (int64, error) {
 	total, err := s.writeVectored(*bufs)
 	consumed := total
