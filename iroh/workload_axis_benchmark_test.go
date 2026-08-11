@@ -715,3 +715,143 @@ func emitWorkloadSample(b *testing.B, rung string, size int, cpuStart benchmarkC
 func workloadIPv4() netip.Addr {
 	return netip.MustParseAddr("127.0.0.1")
 }
+
+// BenchmarkConnMessageRateWritev is the Stage 35 primary cell: 32-byte
+// messages sent batch-at-a-time through SendStream.Writev, against the
+// per-message Write cell in BenchmarkConnMessageRate.
+func BenchmarkConnMessageRateWritev(b *testing.B) {
+	const size = 32
+	for _, batch := range []int{2, 8} {
+		b.Run(fmt.Sprintf("size=%d/batch=%d", size, batch), func(b *testing.B) {
+			client, server := benchmarkConnPairAddr(b, "iroh-workload-conn-message/0", workloadIPv4())
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			stream, err := client.OpenStreamSync(ctx)
+			if err != nil {
+				b.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				peer, err := server.AcceptStream(ctx)
+				if err == nil {
+					_, err = io.CopyN(io.Discard, peer, int64(b.N*size))
+				}
+				if err == nil {
+					_, err = peer.Write([]byte{1})
+				}
+				done <- err
+			}()
+			msgs := make([][]byte, batch)
+			for i := range msgs {
+				msgs[i] = make([]byte, size)
+			}
+			scratch := make([][]byte, batch)
+			b.SetBytes(int64(size))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i += batch {
+				n := batch
+				if rem := b.N - i; rem < n {
+					n = rem
+				}
+				copy(scratch, msgs)
+				bufs := net.Buffers(scratch[:n])
+				if _, err := stream.Writev(&bufs); err != nil {
+					b.Fatal(err)
+				}
+			}
+			var ack [1]byte
+			if _, err := io.ReadFull(stream, ack[:]); err != nil {
+				b.Fatal(err)
+			}
+			b.StopTimer()
+			if err := <-done; err != nil {
+				b.Fatal(err)
+			}
+		})
+	}
+}
+
+// BenchmarkConnBurstThenSingleton is the Stage 35 batching-safety guard:
+// each op sends a 64-message burst followed by one singleton write and
+// waits for the receiver to acknowledge full delivery. A Writev arm that
+// regresses op completion versus the Write-loop arm means the singleton
+// is getting trapped behind the vector.
+func BenchmarkConnBurstThenSingleton(b *testing.B) {
+	const (
+		size  = 32
+		burst = 64
+	)
+	for _, mode := range []string{"writeloop", "writev"} {
+		b.Run("mode="+mode, func(b *testing.B) {
+			client, server := benchmarkConnPairAddr(b, "iroh-workload-conn-message/0", workloadIPv4())
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			stream, err := client.OpenStreamSync(ctx)
+			if err != nil {
+				b.Fatal(err)
+			}
+			const opBytes = (burst + 1) * size
+			done := make(chan error, 1)
+			go func() {
+				peer, err := server.AcceptStream(ctx)
+				if err != nil {
+					done <- err
+					return
+				}
+				buf := make([]byte, opBytes)
+				for {
+					if _, err := io.ReadFull(peer, buf); err != nil {
+						if err == io.EOF || err == io.ErrUnexpectedEOF {
+							err = nil
+						}
+						done <- err
+						return
+					}
+					if _, err := peer.Write([]byte{1}); err != nil {
+						done <- err
+						return
+					}
+				}
+			}()
+			msgs := make([][]byte, burst)
+			for i := range msgs {
+				msgs[i] = make([]byte, size)
+			}
+			scratch := make([][]byte, burst)
+			single := make([]byte, size)
+			var ack [1]byte
+			b.SetBytes(int64(opBytes))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if mode == "writev" {
+					copy(scratch, msgs)
+					bufs := net.Buffers(scratch)
+					if _, err := stream.Writev(&bufs); err != nil {
+						b.Fatal(err)
+					}
+				} else {
+					for _, m := range msgs {
+						if _, err := stream.Write(m); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+				if _, err := stream.Write(single); err != nil {
+					b.Fatal(err)
+				}
+				if _, err := io.ReadFull(stream, ack[:]); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			if err := stream.Close(); err != nil {
+				b.Fatal(err)
+			}
+			if err := <-done; err != nil {
+				b.Fatal(err)
+			}
+		})
+	}
+}
