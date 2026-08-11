@@ -3,6 +3,8 @@ package quic
 import (
 	"context"
 	"fmt"
+	"io"
+	"net"
 	"sync"
 	"time"
 
@@ -68,6 +70,7 @@ type SendStream struct {
 const sendStreamWriteBufferSize = 4096
 
 var (
+	_ io.ReaderFrom            = &SendStream{}
 	_ streamControlFrameGetter = &SendStream{}
 	_ outgoingStream           = &SendStream{}
 	_ sendStreamFrameHandler   = &SendStream{}
@@ -132,6 +135,102 @@ func (s *SendStream) Write(p []byte) (int, error) {
 		s.sender.onStreamCompleted(s.streamID)
 	}
 	return n, err
+}
+
+// ReadFrom implements [io.ReaderFrom]. It reads from r until EOF or error,
+// writing to the stream in buffer-sized chunks so each write stays on the
+// buffered fast path. Data is copied into stream-owned storage before each
+// chunk write returns.
+func (s *SendStream) ReadFrom(r io.Reader) (int64, error) {
+	var total int64
+	buf := make([]byte, sendStreamWriteBufferSize)
+	for {
+		n, rerr := r.Read(buf)
+		if n > 0 {
+			wn, werr := s.Write(buf[:n])
+			total += int64(wn)
+			if werr != nil {
+				return total, werr
+			}
+		}
+		if rerr == io.EOF {
+			return total, nil
+		}
+		if rerr != nil {
+			return total, rerr
+		}
+	}
+}
+
+// Writev writes the buffers in order as one write episode, amortizing the
+// per-call lock and bookkeeping across the vector. It returns the total
+// number of bytes written and advances bufs to reflect exactly what was
+// consumed, including a partially written element, so the caller can resume
+// after a short write. The stream copies data into owned storage before
+// Writev returns; the caller may reuse the underlying slices immediately.
+//
+// To send a [net.Buffers], call Writev directly: [net.Buffers] implements
+// [io.WriterTo], which [io.Copy] prefers over [io.ReaderFrom], so
+// io.Copy(stream, &bufs) degrades to one Write call per element and never
+// batches.
+func (s *SendStream) Writev(bufs *net.Buffers) (int64, error) {
+	total, err := s.writeVectored(*bufs)
+	consumed := total
+	for consumed > 0 && len(*bufs) > 0 {
+		if n := int64(len((*bufs)[0])); consumed >= n {
+			consumed -= n
+			*bufs = (*bufs)[1:]
+			continue
+		}
+		(*bufs)[0] = (*bufs)[0][consumed:]
+		consumed = 0
+	}
+	if total > 0 && len(*bufs) > 0 && err == nil {
+		// Unreachable today (writeVectored only stops early on error),
+		// kept so a future short write cannot silently desynchronize bufs.
+		err = io.ErrShortWrite
+	}
+	return total, err
+}
+
+// writeVectored writes the elements of bufs in order. Elements that fit the
+// write buffer in the steady state are appended under a single mutex hold;
+// any element that does not is delegated to Write, which handles activation,
+// blocking, deadlines, and errors. The delivered byte stream is identical to
+// the equivalent sequence of Write calls.
+func (s *SendStream) writeVectored(bufs [][]byte) (int64, error) {
+	var total int64
+	s.mutex.Lock()
+	appended := false
+	for i := 0; i < len(bufs); {
+		p := bufs[i]
+		if len(p) == 0 {
+			i++
+			continue
+		}
+		if !s.writeActive && s.resetErr == nil && s.shutdownErr == nil &&
+			!s.finishedWriting && s.deadline.IsZero() &&
+			s.active && s.bufferedWriteLen()+len(p) <= sendStreamWriteBufferSize {
+			s.appendWriteBuffer(p)
+			appended = true
+			total += int64(len(p))
+			i++
+			continue
+		}
+		s.mutex.Unlock()
+		n, err := s.Write(p)
+		total += int64(n)
+		if err != nil {
+			return total, err
+		}
+		i++
+		s.mutex.Lock()
+	}
+	if appended && s.writesInEpisode < ^uint16(0) {
+		s.writesInEpisode++
+	}
+	s.mutex.Unlock()
+	return total, nil
 }
 
 // writeLocked writes p. The caller holds s.mutex and owns the write operation.

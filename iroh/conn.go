@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"sync"
@@ -80,6 +81,28 @@ func (s *Stream) Context() context.Context { return s.s.Context() }
 
 // Write writes data to s.
 func (s *SendStream) Write(p []byte) (int, error) { return s.s.Write(p) }
+
+// ReadFrom implements [io.ReaderFrom]. It reads from r until EOF or error,
+// writing to the stream in buffer-sized chunks under a single lock
+// acquisition per chunk; [io.Copy] and every caller built on it picks this
+// up with no signature change. Data is copied into stream-owned storage
+// before each chunk write returns, so r's buffer is never retained.
+func (s *SendStream) ReadFrom(r io.Reader) (int64, error) { return s.s.ReadFrom(r) }
+
+// Writev writes the buffers in order as one write episode, amortizing the
+// per-call lock and bookkeeping across the vector. It returns the total
+// number of bytes written and advances bufs to reflect exactly what was
+// consumed, including a partially written element, so the caller can resume
+// after a short write. The stream copies data into owned storage before
+// Writev returns; the caller may reuse the underlying slices immediately.
+// The delivered byte stream is identical to the equivalent sequence of
+// Write calls; per-vector atomicity is not promised.
+//
+// To send a [net.Buffers], call Writev directly: net.Buffers implements
+// [io.WriterTo], which io.Copy prefers over io.ReaderFrom, so
+// io.Copy(stream, &bufs) degrades to one Write call per element and never
+// batches.
+func (s *SendStream) Writev(bufs *net.Buffers) (int64, error) { return s.s.Writev(bufs) }
 
 // Close closes s.
 func (s *SendStream) Close() error { return s.s.Close() }

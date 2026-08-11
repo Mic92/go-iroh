@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"runtime"
 	"sync"
 	"testing"
@@ -679,5 +680,132 @@ func TestSendStreamFastPathCloseFlushesTail(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) || !fin {
 		t.Fatalf("popped %q fin=%v; want %q fin=true", got, fin, want)
+	}
+}
+
+func TestSendStreamWriteCopiesCallerBuffer(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	p := []byte("immutable contract")
+	want := append([]byte(nil), p...)
+	if _, err := str.Write(p); err != nil {
+		t.Fatal(err)
+	}
+	for i := range p {
+		p[i] = 'X'
+	}
+	frame, _, _ := str.popStreamFrame(257, protocol.Version1)
+	if frame.Frame == nil {
+		t.Fatal("popStreamFrame returned no frame")
+	}
+	defer frame.Frame.PutBack()
+	if !bytes.Equal(frame.Frame.Data, want) {
+		t.Fatalf("frame data %q; want %q — stream retained the caller's buffer", frame.Frame.Data, want)
+	}
+}
+
+func TestSendStreamWritevCopiesCallerBuffers(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	a, b := []byte("first"), []byte("second")
+	want := []byte("firstsecond")
+	bufs := net.Buffers{a, b}
+	if n, err := str.Writev(&bufs); err != nil || n != int64(len(want)) {
+		t.Fatalf("Writev = %d, %v; want %d, nil", n, err, len(want))
+	}
+	if len(bufs) != 0 {
+		t.Fatalf("bufs not fully consumed: %d elements remain", len(bufs))
+	}
+	for i := range a {
+		a[i] = 'X'
+	}
+	for i := range b {
+		b[i] = 'X'
+	}
+	var got []byte
+	for {
+		frame, _, more := str.popStreamFrame(257, protocol.Version1)
+		if frame.Frame != nil {
+			got = append(got, frame.Frame.Data...)
+			frame.Frame.PutBack()
+		}
+		if !more {
+			break
+		}
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("popped %q; want %q — stream retained a caller buffer", got, want)
+	}
+}
+
+func TestSendStreamWritevPartialConsumption(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	// Element 0 fits the buffer; element 1 straddles it and blocks; the
+	// deadline then fires mid-element. bufs must reflect exactly the
+	// consumed prefix, including the partial element.
+	el0 := bytes.Repeat([]byte("a"), sendStreamWriteBufferSize-8)
+	el1 := bytes.Repeat([]byte("b"), 4*sendStreamWriteBufferSize)
+	bufs := net.Buffers{el0, el1}
+	type result struct {
+		n   int64
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		n, err := str.Writev(&bufs)
+		done <- result{n, err}
+	}()
+	waitForBlockedSendStreamWrite(t, str)
+	// Pop enough small frames to drain past el0 and partway into el1.
+	for popped := 0; popped <= len(el0)+sendStreamWriteBufferSize/2; {
+		frame, _, _ := str.popStreamFrame(257, protocol.Version1)
+		if frame.Frame == nil {
+			t.Fatal("popStreamFrame returned no frame")
+		}
+		popped += len(frame.Frame.Data)
+		frame.Frame.PutBack()
+	}
+	if err := str.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var r result
+	select {
+	case r = <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Writev did not unblock after deadline")
+	}
+	if !errors.Is(r.err, errDeadline) {
+		t.Fatalf("Writev error = %v; want deadline error", r.err)
+	}
+	if r.n <= int64(len(el0)) || r.n >= int64(len(el0)+len(el1)) {
+		t.Fatalf("Writev consumed %d bytes; want a mid-element count in (%d, %d)", r.n, len(el0), len(el0)+len(el1))
+	}
+	remaining := int64(len(el0)+len(el1)) - r.n
+	if len(bufs) != 1 || int64(len(bufs[0])) != remaining {
+		t.Fatalf("bufs after partial = %d elements, first %d bytes; want 1 element of %d bytes", len(bufs), len(bufs[0]), remaining)
+	}
+	if bufs[0][0] != 'b' {
+		t.Fatalf("remaining element starts with %q; want 'b'", bufs[0][0])
+	}
+}
+
+func TestSendStreamReadFrom(t *testing.T) {
+	str := newSendStream(context.Background(), 0, new(sendStreamTestSender), receiveStreamTestFlow{}, false)
+	want := bytes.Repeat([]byte("0123456789abcdef"), sendStreamWriteBufferSize/16/2)
+	n, err := str.ReadFrom(bytes.NewReader(want))
+	if err != nil || n != int64(len(want)) {
+		t.Fatalf("ReadFrom = %d, %v; want %d, nil", n, err, len(want))
+	}
+	var got []byte
+	for {
+		frame, _, more := str.popStreamFrame(257, protocol.Version1)
+		if frame.Frame != nil {
+			got = append(got, frame.Frame.Data...)
+			frame.Frame.PutBack()
+		}
+		if !more {
+			break
+		}
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("popped %d bytes; want %d", len(got), len(want))
 	}
 }
