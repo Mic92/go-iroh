@@ -172,7 +172,7 @@ func (m *MagicConn) ReadFrom(p []byte) (int, net.Addr, error) {
 				// quic-go. Drop and keep reading.
 				continue
 			}
-			m.recordRecv(b.info.Remote)
+			m.recordRecv(b.recvAddr())
 			n := copy(p, b.data)
 			b.release()
 			return n, addr, nil
