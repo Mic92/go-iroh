@@ -955,6 +955,13 @@ func (a *RemoteStateActor) PathInfos(conn Connection) []PathInfo {
 	infos := make([]PathInfo, 0, len(open))
 	byAddr := make(map[string]int, len(open))
 	for _, addr := range open {
+		// cs.addr and cs.paths overlap whenever qng validates a path whose
+		// address is the connection's own, so open can name one address twice.
+		// Reporting it twice yields two entries that both look selected, and
+		// only the last one receives the multipath stats merged in below.
+		if _, dup := byAddr[addr.String()]; dup {
+			continue
+		}
 		info := PathInfo{
 			Validated: true,
 			Addr:      addr,
