@@ -14,6 +14,7 @@ import (
 	"github.com/tmc/go-iroh/internal/relayclient"
 	"github.com/tmc/go-iroh/internal/relayproto"
 	"github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/metrics"
 	"github.com/tmc/go-iroh/netaddr"
 )
 
@@ -78,10 +79,28 @@ func TestRelayServerForwardsDatagramAndPong(t *testing.T) {
 		t.Fatalf("datagram = %q, want %q", got.Datagrams.Contents, payload)
 	}
 
-	snapshot := srv.Snapshot()
-	if snapshot["clients_accepted"] != 2 || snapshot["pings"] != 1 || snapshot["datagrams_forwarded"] != 1 {
-		t.Fatalf("Snapshot = %+v, want clients=2 pings=1 datagrams=1", snapshot)
+	// The forwarding counter is incremented after the datagram is queued, so
+	// the reader above can observe delivery before the server has counted it.
+	// Wait for the counter rather than assume the two are ordered.
+	snapshot := waitForSnapshot(t, srv, func(s metrics.Snapshot) bool {
+		return s["clients_accepted"] == 2 && s["pings"] == 1 && s["datagrams_forwarded"] == 1
+	})
+	if snapshot == nil {
+		t.Fatalf("Snapshot = %+v, want clients=2 pings=1 datagrams=1", srv.Snapshot())
 	}
+}
+
+// waitForSnapshot polls srv's counters until want is satisfied, returning the
+// matching snapshot or nil if it never settles.
+func waitForSnapshot(t *testing.T, srv *Server, want func(metrics.Snapshot) bool) metrics.Snapshot {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		if s := srv.Snapshot(); want(s) {
+			return s
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return nil
 }
 
 func TestRelayServerAcceptsTLSKeyMaterialAuth(t *testing.T) {
