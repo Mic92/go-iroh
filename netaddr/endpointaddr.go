@@ -65,6 +65,12 @@ type IPAddr struct{ Addr netip.AddrPort }
 //
 // Binary encoding ([CustomAddr.MarshalBinary], [CustomAddr.UnmarshalBinary]):
 // 8-byte little-endian u64 ID followed by the raw data bytes (minimum 8 bytes).
+//
+// CustomAddr mirrors upstream iroh's experimental custom-transport address
+// surface, which upstream excludes from its stability guarantees. The Go API
+// below follows this module's normal compatibility policy, but the
+// endpoint-ticket wire encoding of a CustomAddr may change to track upstream
+// without a major go-iroh version bump.
 type CustomAddr struct {
 	id   uint64
 	data []byte
