@@ -1,6 +1,9 @@
 # go-iroh
 
-`go-iroh` is a Go implementation of iroh. It provides peer-to-peer QUIC
+[![Go Reference](https://pkg.go.dev/badge/github.com/tmc/go-iroh.svg)](https://pkg.go.dev/github.com/tmc/go-iroh)
+
+`go-iroh` is a Go implementation of [iroh](https://github.com/n0-computer/iroh).
+It provides peer-to-peer QUIC
 endpoints identified by ed25519 public keys, with direct paths, relay fallback,
 QUIC Retry, multipath, QAD observed addresses, and QNT NAT traversal support,
 plus Rust-compatible ports of the iroh protocol stack: blobs, gossip, and docs.
@@ -20,6 +23,8 @@ Connectivity layer:
 | `dns` | pkarr TXT encoding and stdlib/DoH/DoT lookupers |
 | `pkarr` | pkarr signed DNS packet codec |
 | `relay` | public relay maps and relay configuration |
+| `relayserver` | embeddable relay server (backs `cmd/iroh-relay`) |
+| `dnsserver` | embeddable DNS and pkarr server (backs `cmd/iroh-dns-server`) |
 | `metrics` | small OpenMetrics registry |
 | `watch` | small generic watch values |
 
@@ -31,6 +36,7 @@ Protocols (Rust-compatible ports):
 | `gossip` | iroh-gossip pub/sub mesh (HyParView membership, PlumTree broadcast) |
 | `docs` | iroh-docs multi-writer key-value documents and range sync |
 | `endpointticket` | Rust-compatible endpoint ticket codec |
+| `irpc` | postcard-framed RPC helpers for iroh streams |
 | `postcard` | Rust-compatible postcard wire codec (shared with sibling modules) |
 | `http3` | adapts iroh connections for HTTP/3 implementations |
 
