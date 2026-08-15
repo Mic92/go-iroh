@@ -132,8 +132,8 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 
 	authCtx, authCancel := context.WithTimeout(ctx, s.establishTimeout)
 	id, err := authenticate(authCtx, conn, r.TLS, r.Header.Get(relayproto.ClientAuthHeader))
-	authCancel()
 	if err != nil {
+		authCancel()
 		return
 	}
 	<-s.pendingAuth
@@ -154,6 +154,16 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	defer s.unregister(sess)
+
+	// Confirm the handshake only once the session can be routed to. The client
+	// treats the confirmation as permission to send, and peers may already be
+	// sending to it; a datagram that arrives before registration is dropped
+	// with nothing to tell either side it happened.
+	err = confirmAuth(authCtx, conn)
+	authCancel()
+	if err != nil {
+		return
+	}
 
 	writerCtx, writerCancel := context.WithCancel(ctx)
 	defer writerCancel()
@@ -183,13 +193,12 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// authenticate verifies the client and returns its endpoint ID. It does not
+// confirm the handshake to the client; see confirmAuth.
 func authenticate(ctx context.Context, conn *websocket.Conn, state *tls.ConnectionState, clientAuthHeader string) (key.EndpointID, error) {
 	if clientAuthHeader != "" {
 		auth, err := relayproto.KeyMaterialClientAuthFromHeader(clientAuthHeader)
 		if err == nil && auth.Verify(state) == nil {
-			if err := conn.Write(ctx, websocket.MessageBinary, relayproto.ServerConfirmsAuth{}.AppendTo(nil)); err != nil {
-				return key.EndpointID{}, err
-			}
 			return auth.PublicKey.EndpointID(), nil
 		}
 	}
@@ -218,10 +227,13 @@ func authenticate(ctx context.Context, conn *websocket.Conn, state *tls.Connecti
 		deny(ctx, conn, "bad auth")
 		return key.EndpointID{}, err
 	}
-	if err := conn.Write(ctx, websocket.MessageBinary, relayproto.ServerConfirmsAuth{}.AppendTo(nil)); err != nil {
-		return key.EndpointID{}, err
-	}
 	return auth.PublicKey.EndpointID(), nil
+}
+
+// confirmAuth tells the client its handshake succeeded. It is separate from
+// authenticate so the caller can register the session first.
+func confirmAuth(ctx context.Context, conn *websocket.Conn) error {
+	return conn.Write(ctx, websocket.MessageBinary, relayproto.ServerConfirmsAuth{}.AppendTo(nil))
 }
 
 func deny(ctx context.Context, conn *websocket.Conn, reason string) {
