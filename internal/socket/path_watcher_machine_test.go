@@ -58,7 +58,9 @@ func pathWatcherMachineSpec() fuzztape.Machine[*pathWatcherMachine] {
 		Name:   "FuzzPathWatcherMachine",
 		Init:   newPathWatcherMachine,
 		Bubble: true,
-		// 60 ops is the measured floor: at 24 the parked state is not reached.
+		// Room for a long run of sends; the input length usually ends the
+		// sequence first. Every value from 24 up detected the parked
+		// goroutine on every seed measured.
 		MaxOps: 80,
 		Ops: []fuzztape.Op[*pathWatcherMachine]{{
 			Name: "subscribe",
