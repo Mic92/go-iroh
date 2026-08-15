@@ -59,6 +59,12 @@ type IPAddr struct{ Addr netip.AddrPort }
 // A registry of well-known transport ids is at
 // https://github.com/n0-computer/iroh/blob/main/TRANSPORTS.md.
 //
+// CustomAddr mirrors upstream iroh's experimental custom-transport address
+// surface, which upstream excludes from its stability guarantees. The Go API
+// below follows this module's normal compatibility policy, but the
+// endpoint-ticket wire encoding of a CustomAddr may change to track upstream
+// without a major go-iroh version bump.
+//
 // String encoding ([CustomAddr.String], [ParseCustomAddr]): "<id>_<data>" where
 // <id> is the transport ID as lowercase hex (no "0x", no leading zeros) and
 // <data> is the address bytes as lowercase hex.
