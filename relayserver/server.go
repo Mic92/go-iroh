@@ -277,6 +277,11 @@ func (s *Server) handleClientMsg(src *session, msg relayproto.ClientToRelayMsg) 
 	case relayproto.FrameClientToRelayDatagram, relayproto.FrameClientToRelayDatagramBat:
 		dst := s.lookup(msg.DstEndpointID)
 		if dst == nil {
+			// The destination is not connected here, so there is nowhere to put
+			// this datagram. Count it: to the sender an unrouted datagram and a
+			// dropped one are indistinguishable, and only the counter separates
+			// "nobody was there" from "the queue was full".
+			s.metrics.datagramsDropped.Add(1)
 			return
 		}
 		// Dropped datagrams surface downstream as QUIC loss and retransmission;

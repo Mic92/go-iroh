@@ -329,6 +329,24 @@ func TestPingProbeReturns200(t *testing.T) {
 	}
 }
 
+func TestUnroutableDatagramsAreCounted(t *testing.T) {
+	srv := New()
+	sk1, _ := key.GenerateSecretKey()
+	sk2, _ := key.GenerateSecretKey()
+	src := &session{id: sk1.Public().EndpointID()}
+
+	// sk2 never connected, so there is no session to route to.
+	srv.handleClientMsg(src, relayproto.ClientToRelayMsg{
+		Type:          relayproto.FrameClientToRelayDatagram,
+		DstEndpointID: sk2.Public().EndpointID(),
+		Datagrams:     relayproto.DatagramsFromBytes([]byte("nobody home")),
+	})
+	snapshot := srv.Snapshot()
+	if snapshot["datagrams_dropped"] != 1 || snapshot["datagrams_forwarded"] != 0 {
+		t.Fatalf("Snapshot = %+v, want dropped=1 forwarded=0", snapshot)
+	}
+}
+
 func TestDroppedDatagramsAreCounted(t *testing.T) {
 	srv := New()
 	sk1, _ := key.GenerateSecretKey()
