@@ -60,22 +60,28 @@ func TestServeRelaysAndHealth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cctx, ccancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer ccancel()
+	// Connecting and the round trip get separate budgets, so a slow dial
+	// cannot spend the deadline the forwarding assertion is waiting on and
+	// report itself as a forwarding failure.
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer dialCancel()
 
 	sk1, _ := key.GenerateSecretKey()
-	c1, err := relayclient.Connect(cctx, u, relayclient.Options{SecretKey: sk1})
+	c1, err := relayclient.Connect(dialCtx, u, relayclient.Options{SecretKey: sk1})
 	if err != nil {
 		t.Fatalf("connect c1: %v", err)
 	}
 	defer c1.Close()
 
 	sk2, _ := key.GenerateSecretKey()
-	c2, err := relayclient.Connect(cctx, u, relayclient.Options{SecretKey: sk2})
+	c2, err := relayclient.Connect(dialCtx, u, relayclient.Options{SecretKey: sk2})
 	if err != nil {
 		t.Fatalf("connect c2: %v", err)
 	}
 	defer c2.Close()
+
+	cctx, ccancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer ccancel()
 
 	payload := []byte("self-hosted relay works")
 	if err := c1.Send(cctx, relayproto.ClientToRelayMsg{
