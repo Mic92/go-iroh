@@ -2,15 +2,21 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -80,4 +86,4 @@ jobs:
           sudo sysctl -w net.core.rmem_max=7500000
           sudo sysctl -w net.core.wmem_max=7500000
       - name: Run tests with race detector
-        run: go test -race ./...
+        run: go test -race -count=1 ./...
