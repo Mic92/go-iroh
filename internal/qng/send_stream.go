@@ -179,20 +179,31 @@ func (s *SendStream) ReadFrom(r io.Reader) (int64, error) {
 	}
 }
 
-// Writev writes the buffers in order as one write episode, amortizing the
-// per-call lock and bookkeeping across the vector. It returns the total
-// number of bytes written and advances bufs to reflect exactly what was
-// consumed, including a partially written element, so the caller can resume
-// after a short write. The stream copies data into owned storage before
-// Writev returns; the caller may reuse the underlying slices immediately.
+// Writev writes the buffers in order, amortizing the per-call lock and
+// bookkeeping across the vector. It returns the total number of bytes
+// written and advances bufs to reflect exactly what was consumed,
+// including a partially written element, so the caller can resume after a
+// short write. The stream copies data into owned storage before Writev
+// returns; the caller may reuse the underlying slices immediately.
+//
+// Writev does not hold the stream for the whole vector. Elements too large
+// for the write buffer are delegated to Write, and another writer may
+// interleave between elements. The delivered byte stream is identical to
+// the equivalent sequence of Write calls.
 //
 // To send a [net.Buffers], call Writev directly: [net.Buffers] implements
 // [io.WriterTo], which [io.Copy] prefers over [io.ReaderFrom], so
 // io.Copy(stream, &bufs) degrades to one Write call per element and never
 // batches.
 //
-// Vectored submission measured at least as fast as the equivalent
-// sequence of Write calls at every tested batch depth.
+// For burst accounting, a Writev counts as one write for the group of
+// elements appended to the write buffer plus one per delegated element, so
+// a vector of mixed sizes is not accounted the same as either one Write or
+// N Writes.
+//
+// Writev is intended to be no slower than the equivalent sequence of Write
+// calls; whether it is faster depends on the batch depth and on how many
+// elements exceed the write buffer.
 func (s *SendStream) Writev(bufs *net.Buffers) (int64, error) {
 	total, err := s.writeVectored(*bufs)
 	consumed := total
