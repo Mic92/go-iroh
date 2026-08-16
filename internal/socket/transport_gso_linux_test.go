@@ -50,6 +50,26 @@ func TestMagicConnWriteMsgUDPSplitsMappedDestination(t *testing.T) {
 	}
 }
 
+func TestMagicConnWriteMsgUDPBlackholeCountsSegments(t *testing.T) {
+	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sock := NewSocket()
+	m := NewMagicConn(sock, udp)
+	t.Cleanup(func() { m.Close() })
+	udp.Close() // make every write fail without reporting EIO
+
+	payload := make([]byte, 12000)
+	addr := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 9}
+	if _, _, err := m.WriteMsgUDP(payload, udpSegmentMessage(1200), addr); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.Metrics().Blackholed, uint64(10); got != want {
+		t.Fatalf("Blackholed = %d, want %d", got, want)
+	}
+}
+
 func TestUDPSegmentSize(t *testing.T) {
 	for _, test := range []struct {
 		name string

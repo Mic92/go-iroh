@@ -34,7 +34,7 @@ func (m *MagicConn) WriteMsgUDP(p, oob []byte, addr *net.UDPAddr) (n, oobn int, 
 	if segmentSize > 0 && errors.Is(err, unix.EIO) {
 		return n, oobn, err
 	}
-	m.metrics.blackholed.Add(1)
+	m.metrics.blackholed.Add(uint64(segmentCount(len(p), segmentSize)))
 	return len(p), len(oob), nil
 }
 
