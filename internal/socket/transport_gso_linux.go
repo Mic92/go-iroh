@@ -31,6 +31,10 @@ func (m *MagicConn) WriteMsgUDP(p, oob []byte, addr *net.UDPAddr) (n, oobn int, 
 		}
 		return n, oobn, nil
 	}
+	// EIO on a segmented write is the kernel refusing GSO, not a lost
+	// datagram: the caller disables GSO and resends the batch one datagram at
+	// a time, and those resends are counted on the ordinary path. Counting
+	// here would count them twice.
 	if segmentSize > 0 && errors.Is(err, unix.EIO) {
 		return n, oobn, err
 	}
