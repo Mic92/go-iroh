@@ -318,9 +318,13 @@ func TestLiveSyncDownloadsRemoteContent(t *testing.T) {
 		case ev := <-bEvents:
 			switch ev.Kind {
 			case StoreEventInsertRemote:
-				if ev.ContentStatus != ContentMissing {
-					t.Fatalf("remote insert status = %v, want missing", ev.ContentStatus)
-				}
+				// The status is whatever the blob store said when the entry
+				// landed, and nothing orders the entry against its content:
+				// the content can arrive first, over a download this test did
+				// not ask for, leaving the insert already complete. Asserting
+				// missing here made the test fail whenever b won that race.
+				// What the test is really for is below — the content arrives
+				// and is the content that was published.
 			case StoreEventContentReady:
 				if ev.Hash != contentHash {
 					t.Fatalf("content ready hash = %s, want %s", ev.Hash, contentHash)
