@@ -79,7 +79,7 @@ func (s *FSStore) Open(ctx context.Context, hash Hash) (Blob, error) {
 		return nil, ErrBlobNotFound
 	}
 	if hash == EmptyHash {
-		return NewMemBlob(nil)
+		return NewMemBlob(nil), nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -122,7 +122,7 @@ type fsBlobWriter struct {
 
 func (w *fsBlobWriter) Write(p []byte) (int, error) {
 	if w.done {
-		return 0, errors.New("blobs: write after commit")
+		return 0, errors.New("blobs: write to finished blob")
 	}
 	return w.tmp.Write(p)
 }

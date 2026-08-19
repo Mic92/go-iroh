@@ -188,10 +188,7 @@ func (m *MemStore) Add(data []byte) (Hash, error) {
 	if m == nil {
 		return Hash{}, errors.New("blobs: nil store")
 	}
-	entry, err := NewMemBlob(data)
-	if err != nil {
-		return Hash{}, err
-	}
+	entry := NewMemBlob(data)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.entries == nil {
@@ -237,7 +234,7 @@ type memBlobWriter struct {
 
 func (w *memBlobWriter) Write(p []byte) (int, error) {
 	if w.done {
-		return 0, errors.New("blobs: write after commit")
+		return 0, errors.New("blobs: write to finished blob")
 	}
 	return w.buf.Write(p)
 }
@@ -270,13 +267,13 @@ type MemBlob struct {
 }
 
 // NewMemBlob returns a complete in-memory raw blob holding data.
-func NewMemBlob(data []byte) (*MemBlob, error) {
+func NewMemBlob(data []byte) *MemBlob {
 	outboard, root := bao.EncodeBuf(data, 4, true)
 	return &MemBlob{
 		hash:     Hash(root),
 		data:     append([]byte(nil), data...),
 		outboard: outboard,
-	}, nil
+	}
 }
 
 // Hash returns e's root hash.
