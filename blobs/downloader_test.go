@@ -223,7 +223,7 @@ func (c *fakeBlobConn) OpenStreamSync(ctx context.Context) (BidiStream, error) {
 
 	client, server := newTestBidiStreamPair()
 	go func() {
-		store, err := NewBytesMap(mapValues(blobs)...)
+		store, err := NewMemStore(mapValues(blobs)...)
 		if err != nil {
 			return
 		}

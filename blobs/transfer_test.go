@@ -483,11 +483,11 @@ func (w *testWriterAt) Bytes() []byte {
 }
 
 // mustStore returns an in-memory store holding data.
-func mustStore(t *testing.T, data ...[]byte) *BytesMap {
+func mustStore(t *testing.T, data ...[]byte) *MemStore {
 	t.Helper()
-	m, err := NewBytesMap(data...)
+	m, err := NewMemStore(data...)
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	return m
 }

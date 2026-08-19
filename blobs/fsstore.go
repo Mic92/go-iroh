@@ -74,7 +74,7 @@ func (s *FSStore) Open(ctx context.Context, hash Hash) (Blob, error) {
 		return nil, ErrBlobNotFound
 	}
 	if hash == EmptyHash {
-		return NewBytesEntry(nil)
+		return NewMemBlob(nil)
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()

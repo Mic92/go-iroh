@@ -107,9 +107,9 @@ func TestLiveSyncDownloadPolicySkipsRemotePut(t *testing.T) {
 		t.Fatalf("GenerateSecretKey: %v", err)
 	}
 	addr := netaddr.NewEndpointAddr(from.Public().EndpointID())
-	blobStore, err := blobs.NewBytesMap()
+	blobStore, err := blobs.NewMemStore()
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 
 	l := LiveSync{downloads: make(chan liveDownload, 1)}
@@ -149,9 +149,9 @@ func TestLiveSyncDownloadPolicySkipsEmptyKeyPut(t *testing.T) {
 		t.Fatalf("GenerateSecretKey: %v", err)
 	}
 	addr := netaddr.NewEndpointAddr(from.Public().EndpointID())
-	blobStore, err := blobs.NewBytesMap()
+	blobStore, err := blobs.NewMemStore()
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 
 	l := LiveSync{downloads: make(chan liveDownload, 1)}
@@ -189,9 +189,9 @@ func TestLiveSyncDownloadPolicySkipsContentReady(t *testing.T) {
 		t.Fatalf("GenerateSecretKey: %v", err)
 	}
 	addr := netaddr.NewEndpointAddr(from.Public().EndpointID())
-	blobStore, err := blobs.NewBytesMap()
+	blobStore, err := blobs.NewMemStore()
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	store := NewMemoryStore()
 	store.PutWithOrigin(entry, InsertOrigin{Kind: InsertOriginRemote, ContentStatus: ContentMissing})
@@ -222,9 +222,9 @@ func TestLiveSyncQueuesMultipleContentProviders(t *testing.T) {
 	entry := testSignedEntry(namespace, author, "public/k", NewRecord(hash, 14, 1))
 	store := NewMemoryStore()
 	store.PutWithOrigin(entry, InsertOrigin{Kind: InsertOriginRemote, ContentStatus: ContentMissing})
-	blobStore, err := blobs.NewBytesMap()
+	blobStore, err := blobs.NewMemStore()
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	firstKey := key.NewSecretKey(repeat32(0x01))
 	secondKey := key.NewSecretKey(repeat32(0x02))
@@ -271,17 +271,17 @@ func TestLiveSyncDownloadsRemoteContent(t *testing.T) {
 	entry := testSignedEntry(namespace, author, "k", NewRecord(contentHash, uint64(len(content)), 1))
 
 	aStore := NewMemoryStore()
-	aBlobs, err := blobs.NewBytesMap(content)
+	aBlobs, err := blobs.NewMemStore(content)
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	a, aGossip, aRouter := newLiveSyncNode(t, ctx, aStore, aBlobs)
 	defer aRouter.Shutdown(ctx)
 
 	bStore := NewMemoryStore()
-	bBlobs, err := blobs.NewBytesMap()
+	bBlobs, err := blobs.NewMemStore()
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	b, bGossip, bRouter := newLiveSyncNode(t, ctx, bStore, bBlobs)
 	defer bRouter.Shutdown(ctx)
@@ -344,7 +344,7 @@ func TestLiveSyncDownloadsRemoteContent(t *testing.T) {
 	}
 }
 
-func newLiveSyncNode(t *testing.T, ctx context.Context, store *MemoryStore, blobStore *blobs.BytesMap) (*iroh.Endpoint, *gossip.Gossip, *iroh.Router) {
+func newLiveSyncNode(t *testing.T, ctx context.Context, store *MemoryStore, blobStore *blobs.MemStore) (*iroh.Endpoint, *gossip.Gossip, *iroh.Router) {
 	t.Helper()
 	ep, err := iroh.Bind(ctx, iroh.WithBindAddr(netip.AddrPortFrom(netip.IPv6Loopback(), 0)))
 	if err != nil {

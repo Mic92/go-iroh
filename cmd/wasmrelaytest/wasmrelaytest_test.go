@@ -603,11 +603,11 @@ detail: document.body && document.body.getAttribute("data-detail")
 }
 
 // mustBlobStore returns an in-memory blob store holding data.
-func mustBlobStore(t *testing.T, data ...[]byte) *blobs.BytesMap {
+func mustBlobStore(t *testing.T, data ...[]byte) *blobs.MemStore {
 	t.Helper()
-	m, err := blobs.NewBytesMap(data...)
+	m, err := blobs.NewMemStore(data...)
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	return m
 }

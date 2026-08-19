@@ -137,15 +137,15 @@ func closeBlob(b Blob) {
 	}
 }
 
-// BytesMap is an in-memory [Store] holding complete raw blobs.
-type BytesMap struct {
+// MemStore is an in-memory [Store] holding complete raw blobs.
+type MemStore struct {
 	mu      sync.RWMutex
-	entries map[Hash]*BytesEntry
+	entries map[Hash]*MemBlob
 }
 
-// NewBytesMap returns a map containing data as complete raw blobs.
-func NewBytesMap(blobs ...[]byte) (*BytesMap, error) {
-	m := &BytesMap{entries: make(map[Hash]*BytesEntry)}
+// NewMemStore returns an in-memory store holding data as complete raw blobs.
+func NewMemStore(blobs ...[]byte) (*MemStore, error) {
+	m := &MemStore{entries: make(map[Hash]*MemBlob)}
 	for _, data := range blobs {
 		if _, err := m.Add(data); err != nil {
 			return nil, err
@@ -155,25 +155,25 @@ func NewBytesMap(blobs ...[]byte) (*BytesMap, error) {
 }
 
 // Add stores data as a complete raw blob and returns its hash.
-func (m *BytesMap) Add(data []byte) (Hash, error) {
+func (m *MemStore) Add(data []byte) (Hash, error) {
 	if m == nil {
-		return Hash{}, errors.New("blobs: nil bytes map")
+		return Hash{}, errors.New("blobs: nil store")
 	}
-	entry, err := NewBytesEntry(data)
+	entry, err := NewMemBlob(data)
 	if err != nil {
 		return Hash{}, err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.entries == nil {
-		m.entries = make(map[Hash]*BytesEntry)
+		m.entries = make(map[Hash]*MemBlob)
 	}
 	m.entries[entry.hash] = entry
 	return entry.hash, nil
 }
 
 // Open returns the blob for hash, or [ErrBlobNotFound].
-func (m *BytesMap) Open(ctx context.Context, hash Hash) (Blob, error) {
+func (m *MemStore) Open(ctx context.Context, hash Hash) (Blob, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
@@ -190,30 +190,30 @@ func (m *BytesMap) Open(ctx context.Context, hash Hash) (Blob, error) {
 }
 
 // NewBlob returns a writer that stores a blob in memory on Commit.
-func (m *BytesMap) NewBlob(ctx context.Context) (BlobWriter, error) {
+func (m *MemStore) NewBlob(ctx context.Context) (BlobWriter, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
 	if m == nil {
-		return nil, errors.New("blobs: nil bytes map")
+		return nil, errors.New("blobs: nil store")
 	}
-	return &bytesBlobWriter{m: m}, nil
+	return &memBlobWriter{m: m}, nil
 }
 
-type bytesBlobWriter struct {
-	m    *BytesMap
+type memBlobWriter struct {
+	m    *MemStore
 	buf  bytes.Buffer
 	done bool
 }
 
-func (w *bytesBlobWriter) Write(p []byte) (int, error) {
+func (w *memBlobWriter) Write(p []byte) (int, error) {
 	if w.done {
 		return 0, errors.New("blobs: write after commit")
 	}
 	return w.buf.Write(p)
 }
 
-func (w *bytesBlobWriter) Commit() (Hash, error) {
+func (w *memBlobWriter) Commit() (Hash, error) {
 	if w.done {
 		return Hash{}, errors.New("blobs: commit after commit")
 	}
@@ -226,23 +226,23 @@ func (w *bytesBlobWriter) Commit() (Hash, error) {
 	return hash, nil
 }
 
-func (w *bytesBlobWriter) Close() error {
+func (w *memBlobWriter) Close() error {
 	w.done = true
 	w.buf.Reset()
 	return nil
 }
 
-// BytesEntry is a complete in-memory raw blob entry.
-type BytesEntry struct {
+// MemBlob is a complete in-memory raw blob.
+type MemBlob struct {
 	hash     Hash
 	data     []byte
 	outboard []byte
 }
 
-// NewBytesEntry returns a complete in-memory raw blob entry for data.
-func NewBytesEntry(data []byte) (*BytesEntry, error) {
+// NewMemBlob returns a complete in-memory raw blob holding data.
+func NewMemBlob(data []byte) (*MemBlob, error) {
 	outboard, root := bao.EncodeBuf(data, 4, true)
-	return &BytesEntry{
+	return &MemBlob{
 		hash:     Hash(root),
 		data:     append([]byte(nil), data...),
 		outboard: outboard,
@@ -250,16 +250,16 @@ func NewBytesEntry(data []byte) (*BytesEntry, error) {
 }
 
 // Hash returns e's root hash.
-func (e *BytesEntry) Hash() Hash { return e.hash }
+func (e *MemBlob) Hash() Hash { return e.hash }
 
 // Size returns e's verified data size.
-func (e *BytesEntry) Size() (uint64, bool) { return uint64(len(e.data)), true }
+func (e *MemBlob) Size() (uint64, bool) { return uint64(len(e.data)), true }
 
 // IsComplete reports whether e has all data.
-func (e *BytesEntry) IsComplete() bool { return true }
+func (e *MemBlob) IsComplete() bool { return true }
 
 // DataReader returns an immutable reader for e's data.
-func (e *BytesEntry) DataReader(ctx context.Context) (io.ReaderAt, error) {
+func (e *MemBlob) DataReader(ctx context.Context) (io.ReaderAt, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
@@ -267,7 +267,7 @@ func (e *BytesEntry) DataReader(ctx context.Context) (io.ReaderAt, error) {
 }
 
 // Outboard returns an immutable reader for e's BAO outboard.
-func (e *BytesEntry) Outboard(ctx context.Context) (Outboard, error) {
+func (e *MemBlob) Outboard(ctx context.Context) (Outboard, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}

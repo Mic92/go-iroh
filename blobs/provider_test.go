@@ -9,11 +9,11 @@ import (
 	"lukechampine.com/blake3/bao"
 )
 
-func TestBytesMapEntry(t *testing.T) {
+func TestMemStoreEntry(t *testing.T) {
 	data := bytes.Repeat([]byte("a"), BlockSize+17)
-	m, err := NewBytesMap(data)
+	m, err := NewMemStore(data)
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	hash := NewHash(data)
 	entry, err := m.Open(context.Background(), hash)
@@ -57,9 +57,9 @@ func TestBytesMapEntry(t *testing.T) {
 
 func TestMapStoreServesBlob(t *testing.T) {
 	data := []byte("provider map store")
-	m, err := NewBytesMap(data)
+	m, err := NewMemStore(data)
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	hash := NewHash(data)
 	got, err := ReadBlob(context.Background(), m, hash)
@@ -87,10 +87,10 @@ func TestMapStoreServesBlob(t *testing.T) {
 	}
 }
 
-func TestBytesMapHonorsCanceledContext(t *testing.T) {
-	m, err := NewBytesMap([]byte("x"))
+func TestMemStoreHonorsCanceledContext(t *testing.T) {
+	m, err := NewMemStore([]byte("x"))
 	if err != nil {
-		t.Fatalf("NewBytesMap: %v", err)
+		t.Fatalf("NewMemStore: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
