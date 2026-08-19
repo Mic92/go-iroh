@@ -391,7 +391,10 @@ func (c *Conn) StableID() uint64 { return c.stableID }
 
 // Stats returns a snapshot of connection statistics.
 func (c *Conn) Stats() ConnStats {
-	s := c.qc.ConnectionStats()
+	return connStats(c.qc.ConnectionStats())
+}
+
+func connStats(s quic.ConnectionStats) ConnStats {
 	return ConnStats{
 		MinRTT:          s.MinRTT,
 		LatestRTT:       s.LatestRTT,
