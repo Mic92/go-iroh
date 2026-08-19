@@ -162,23 +162,26 @@ func (w *fsBlobWriter) Close() error {
 }
 
 // BlobStatus reports the local storage state for hash.
-func (s *FSStore) BlobStatus(hash Hash) BlobStatus {
+func (s *FSStore) BlobStatus(ctx context.Context, hash Hash) (BlobStatus, error) {
+	if err := ctxErr(ctx); err != nil {
+		return NotFoundBlobStatus(), err
+	}
 	if hash == EmptyHash {
-		return CompleteBlobStatus(0)
+		return CompleteBlobStatus(0), nil
 	}
 	if s == nil {
-		return NotFoundBlobStatus()
+		return NotFoundBlobStatus(), nil
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	info, err := os.Stat(s.dataPath(hash))
 	if errors.Is(err, os.ErrNotExist) {
-		return NotFoundBlobStatus()
+		return NotFoundBlobStatus(), nil
 	}
 	if err != nil {
-		return PartialBlobStatus(unknownBlobSize)
+		return NotFoundBlobStatus(), fmt.Errorf("blobs: stat data: %w", err)
 	}
-	return CompleteBlobStatus(info.Size())
+	return CompleteBlobStatus(info.Size()), nil
 }
 
 func (s *FSStore) dataPath(hash Hash) string {
@@ -205,7 +208,7 @@ func (e fsEntry) Size() (uint64, bool) { return e.size, true }
 
 func (e fsEntry) IsComplete() bool { return true }
 
-func (e fsEntry) DataReader(ctx context.Context) (io.ReaderAt, error) {
+func (e fsEntry) DataReader(ctx context.Context) (BlobReader, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}

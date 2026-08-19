@@ -50,7 +50,11 @@ func TestFSStoreConcurrentStress(t *testing.T) {
 					_ = temp.Close()
 					return
 				}
-				store.BlobStatus(hash)
+				if _, err := store.BlobStatus(context.Background(), hash); err != nil {
+					t.Errorf("BlobStatus: %v", err)
+					_ = temp.Close()
+					return
+				}
 				// The worker holds a temp tag on hash for this whole round, so
 				// a concurrent GC must not be able to collect it. Any error
 				// here, absence included, is a failure.

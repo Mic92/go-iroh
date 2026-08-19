@@ -26,20 +26,33 @@ type Blob interface {
 	Hash() Hash
 	Size() (size uint64, verified bool)
 	IsComplete() bool
-	DataReader(ctx context.Context) (io.ReaderAt, error)
+	DataReader(ctx context.Context) (BlobReader, error)
 	Outboard(ctx context.Context) (Outboard, error)
 }
 
-// Outboard is a BAO outboard reader.
+// BlobReader reads a blob's data at arbitrary offsets. Callers must close it:
+// a filesystem-backed store hands out an open file, and a caller that does not
+// close it leaks a descriptor per read.
+type BlobReader interface {
+	io.ReaderAt
+	io.Closer
+}
+
+// Outboard is a BAO outboard reader. Callers must close it, for the same
+// reason as [BlobReader].
 type Outboard interface {
 	io.ReaderAt
+	io.Closer
 	Size() int64
 }
 
 // Stater is an optional [Store] upgrade that reports blob status without
 // opening the blob. Use [Status], which falls back to Open.
+//
+// A Stater must report the same status Open would: an upgrade may change what
+// a status query costs, never what it answers.
 type Stater interface {
-	BlobStatus(Hash) BlobStatus
+	BlobStatus(ctx context.Context, hash Hash) (BlobStatus, error)
 }
 
 // Sink is an optional [Store] upgrade that accepts new blobs. Use [WriteBlob]
@@ -96,7 +109,6 @@ func ReadBlob(ctx context.Context, s Store, hash Hash) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer closeBlob(blob)
 	if !blob.IsComplete() {
 		return nil, ErrBlobNotFound
 	}
@@ -111,9 +123,12 @@ func ReadBlob(ctx context.Context, s Store, hash Hash) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer closeReaderAt(r)
+	defer r.Close()
+	// ReadFull rather than ReadAt: ReadAt reports a short read as io.EOF, so
+	// discarding that error would return a zero-padded buffer as success when
+	// the stored data is shorter than the size Open reported.
 	data := make([]byte, size)
-	if _, err := r.ReadAt(data, 0); err != nil && err != io.EOF {
+	if _, err := io.ReadFull(io.NewSectionReader(r, 0, int64(size)), data); err != nil {
 		return nil, fmt.Errorf("blobs: read data: %w", err)
 	}
 	return data, nil
@@ -149,12 +164,6 @@ func ReadFromBlob(ctx context.Context, s Sink, r io.Reader) (Hash, error) {
 	}
 	defer tag.Close()
 	return tag.Hash(), nil
-}
-
-func closeBlob(b Blob) {
-	if c, ok := b.(io.Closer); ok {
-		_ = c.Close()
-	}
 }
 
 // MemStore is an in-memory [Store] holding complete raw blobs.
@@ -280,11 +289,11 @@ func (e *MemBlob) Size() (uint64, bool) { return uint64(len(e.data)), true }
 func (e *MemBlob) IsComplete() bool { return true }
 
 // DataReader returns an immutable reader for e's data.
-func (e *MemBlob) DataReader(ctx context.Context) (io.ReaderAt, error) {
+func (e *MemBlob) DataReader(ctx context.Context) (BlobReader, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
-	return bytes.NewReader(e.data), nil
+	return byteReader{Reader: bytes.NewReader(e.data)}, nil
 }
 
 // Outboard returns an immutable reader for e's BAO outboard.
@@ -292,7 +301,7 @@ func (e *MemBlob) Outboard(ctx context.Context) (Outboard, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, err
 	}
-	return byteOutboard{Reader: bytes.NewReader(e.outboard), size: int64(len(e.outboard))}, nil
+	return byteOutboard{byteReader: byteReader{Reader: bytes.NewReader(e.outboard)}, size: int64(len(e.outboard))}, nil
 }
 
 func ctxErr(ctx context.Context) error {
@@ -302,8 +311,16 @@ func ctxErr(ctx context.Context) error {
 	return ctx.Err()
 }
 
-type byteOutboard struct {
+// byteReader adapts a bytes.Reader to the closable reader interfaces. Nothing
+// needs releasing, so Close is a no-op.
+type byteReader struct {
 	*bytes.Reader
+}
+
+func (byteReader) Close() error { return nil }
+
+type byteOutboard struct {
+	byteReader
 	size int64
 }
 

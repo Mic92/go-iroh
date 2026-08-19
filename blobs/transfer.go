@@ -165,7 +165,6 @@ func writeObserve(ctx context.Context, s io.Writer, store Store, req ObserveRequ
 	if err != nil {
 		return err
 	}
-	defer closeBlob(blob)
 	size, verified := blob.Size()
 	if !blob.IsComplete() || !verified {
 		return ErrBlobNotFound
@@ -220,7 +219,6 @@ func writeBlob(ctx context.Context, s io.Writer, store Store, hash Hash, singleL
 	if err != nil {
 		return err
 	}
-	defer closeBlob(blob)
 	size, verified := blob.Size()
 	if !blob.IsComplete() || !verified {
 		return ErrBlobNotFound
@@ -236,7 +234,6 @@ func writeBlobRange(ctx context.Context, s io.Writer, store Store, hash Hash, ra
 	if err != nil {
 		return err
 	}
-	defer closeBlob(blob)
 	size, verified := blob.Size()
 	if !blob.IsComplete() || !verified {
 		return ErrBlobNotFound
@@ -258,24 +255,18 @@ func extractRange(ctx context.Context, s io.Writer, blob Blob, offset, length ui
 	if err != nil {
 		return fmt.Errorf("blobs: open data: %w", err)
 	}
-	defer closeReaderAt(data)
+	defer data.Close()
 	outboard, err := blob.Outboard(ctx)
 	if err != nil {
 		return fmt.Errorf("blobs: open outboard: %w", err)
 	}
-	defer closeReaderAt(outboard)
+	defer outboard.Close()
 	if outboard.Size() < 0 || uint64(outboard.Size()) > maxInt64 {
 		return ErrUnsupportedRequest
 	}
 	dataSection := io.NewSectionReader(data, 0, int64(size))
 	outboardSection := io.NewSectionReader(outboard, 0, outboard.Size())
 	return ExtractBlobRange(s, dataSection, outboardSection, offset, length)
-}
-
-func closeReaderAt(r io.ReaderAt) {
-	if c, ok := r.(io.Closer); ok {
-		_ = c.Close()
-	}
 }
 
 func checkedAdd(a, b uint64) (uint64, bool) {

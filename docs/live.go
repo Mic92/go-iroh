@@ -199,7 +199,7 @@ func (l *LiveSync) handleStoreEvent(ctx context.Context, opts liveSyncOptions, e
 	}
 	_ = l.topic.Broadcast(ctx, msg)
 	hash := ev.Entry.Entry.ContentHash()
-	if blobs.Status(ctx, opts.BlobStore, hash).IsComplete() {
+	if contentComplete(ctx, opts.BlobStore, hash) {
 		l.broadcastContentReady(ctx, hash)
 	}
 }
@@ -232,7 +232,7 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 		}
 		hash := op.Entry.Entry.ContentHash()
 		status := ContentMissing
-		if blobs.Status(ctx, opts.BlobStore, hash).IsComplete() {
+		if contentComplete(ctx, opts.BlobStore, hash) {
 			status = ContentComplete
 		}
 		outcome := store.PutWithOrigin(op.Entry, InsertOrigin{
@@ -272,7 +272,7 @@ func (l *LiveSync) broadcastContentReady(ctx context.Context, hash blobs.Hash) {
 }
 
 func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash blobs.Hash, entryKey []byte, applyPolicy bool, peer key.EndpointID) {
-	if l.downloads == nil || hash == blobs.EmptyHash || blobs.Status(ctx, opts.BlobStore, hash).IsComplete() {
+	if l.downloads == nil || hash == blobs.EmptyHash || contentComplete(ctx, opts.BlobStore, hash) {
 		return
 	}
 	// applyPolicy is false for callers that already filtered by policy (the
@@ -333,7 +333,7 @@ func (l *LiveSync) runDownloader(ctx context.Context, store *MemoryStore, opts l
 		case <-ctx.Done():
 			return
 		case req := <-l.downloads:
-			if blobs.Status(ctx, opts.BlobStore, req.Hash).IsComplete() {
+			if contentComplete(ctx, opts.BlobStore, req.Hash) {
 				store.contentReady(req.Hash)
 				continue
 			}
@@ -390,6 +390,19 @@ func (p *pendingDownload) snapshot() []netaddr.EndpointAddr {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]netaddr.EndpointAddr(nil), p.providers...)
+}
+
+// contentComplete reports whether the store holds hash in full.
+//
+// A store that cannot answer is treated as not holding the content: these
+// call sites gate broadcasts and downloads, where re-fetching content we
+// already have is cheap and announcing content we cannot read is not.
+func contentComplete(ctx context.Context, store blobs.Store, hash blobs.Hash) bool {
+	status, err := blobs.Status(ctx, store, hash)
+	if err != nil {
+		return false
+	}
+	return status.IsComplete()
 }
 
 func downloadBlob(ctx context.Context, ep *iroh.Endpoint, providers []netaddr.EndpointAddr, store blobs.Store, hash blobs.Hash) error {

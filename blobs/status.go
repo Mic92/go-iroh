@@ -1,6 +1,9 @@
 package blobs
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // BlobState is the local storage state of a blob.
 type BlobState uint8
@@ -58,25 +61,35 @@ func (s BlobStatus) IsNotFound() bool { return s.State == BlobNotFound }
 // Status reports the local storage status for hash in store.
 //
 // Status uses [Stater] when store implements it, and otherwise falls back to
-// [Store.Open].
-func Status(ctx context.Context, store Store, hash Hash) BlobStatus {
+// [Store.Open]. Both paths report the same status; the upgrade changes only
+// what the query costs.
+//
+// A missing blob is [NotFoundBlobStatus] with a nil error. A non-nil error
+// means the status could not be determined, which is not the same as the blob
+// being absent.
+func Status(ctx context.Context, store Store, hash Hash) (BlobStatus, error) {
 	if hash == EmptyHash {
-		return CompleteBlobStatus(0)
+		return CompleteBlobStatus(0), nil
 	}
 	if store == nil {
-		return NotFoundBlobStatus()
+		return NotFoundBlobStatus(), nil
 	}
 	if st, ok := store.(Stater); ok {
-		return st.BlobStatus(hash)
+		return st.BlobStatus(ctx, hash)
 	}
 	blob, err := store.Open(ctx, hash)
+	if errors.Is(err, ErrBlobNotFound) {
+		return NotFoundBlobStatus(), nil
+	}
 	if err != nil {
-		return NotFoundBlobStatus()
+		return NotFoundBlobStatus(), err
 	}
-	defer closeBlob(blob)
 	size, verified := blob.Size()
-	if !blob.IsComplete() || !verified || size > maxInt64 {
-		return NotFoundBlobStatus()
+	if !verified || size > maxInt64 {
+		return PartialBlobStatus(unknownBlobSize), nil
 	}
-	return CompleteBlobStatus(int64(size))
+	if !blob.IsComplete() {
+		return PartialBlobStatus(int64(size)), nil
+	}
+	return CompleteBlobStatus(int64(size)), nil
 }

@@ -28,8 +28,12 @@ func TestFSStorePersistsBlob(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen NewFSStore: %v", err)
 	}
-	if got := reopened.BlobStatus(hash); !got.IsComplete() || got.Size != int64(len(data)) {
-		t.Fatalf("BlobStatus = %+v, want complete size %d", got, len(data))
+	status, err := reopened.BlobStatus(context.Background(), hash)
+	if err != nil {
+		t.Fatalf("BlobStatus: %v", err)
+	}
+	if !status.IsComplete() || status.Size != int64(len(data)) {
+		t.Fatalf("BlobStatus = %+v, want complete size %d", status, len(data))
 	}
 	got, err := ReadBlob(context.Background(), reopened, hash)
 	if err != nil {
