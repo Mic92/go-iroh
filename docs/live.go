@@ -199,7 +199,7 @@ func (l *LiveSync) handleStoreEvent(ctx context.Context, opts liveSyncOptions, e
 	}
 	_ = l.topic.Broadcast(ctx, msg)
 	hash := ev.Entry.Entry.ContentHash()
-	if blobs.Status(opts.BlobStore, hash).IsComplete() {
+	if blobs.Status(ctx, opts.BlobStore, hash).IsComplete() {
 		l.broadcastContentReady(ctx, hash)
 	}
 }
@@ -232,7 +232,7 @@ func (l *LiveSync) handleReceived(ctx context.Context, namespace NamespaceID, st
 		}
 		hash := op.Entry.Entry.ContentHash()
 		status := ContentMissing
-		if blobs.Status(opts.BlobStore, hash).IsComplete() {
+		if blobs.Status(ctx, opts.BlobStore, hash).IsComplete() {
 			status = ContentComplete
 		}
 		outcome := store.PutWithOrigin(op.Entry, InsertOrigin{
@@ -272,7 +272,7 @@ func (l *LiveSync) broadcastContentReady(ctx context.Context, hash blobs.Hash) {
 }
 
 func (l *LiveSync) queueDownload(ctx context.Context, opts liveSyncOptions, hash blobs.Hash, entryKey []byte, applyPolicy bool, peer key.EndpointID) {
-	if l.downloads == nil || hash == blobs.EmptyHash || blobs.Status(opts.BlobStore, hash).IsComplete() {
+	if l.downloads == nil || hash == blobs.EmptyHash || blobs.Status(ctx, opts.BlobStore, hash).IsComplete() {
 		return
 	}
 	// applyPolicy is false for callers that already filtered by policy (the
@@ -333,7 +333,7 @@ func (l *LiveSync) runDownloader(ctx context.Context, store *MemoryStore, opts l
 		case <-ctx.Done():
 			return
 		case req := <-l.downloads:
-			if blobs.Status(opts.BlobStore, req.Hash).IsComplete() {
+			if blobs.Status(ctx, opts.BlobStore, req.Hash).IsComplete() {
 				store.contentReady(req.Hash)
 				continue
 			}
@@ -396,11 +396,11 @@ func downloadBlob(ctx context.Context, ep *iroh.Endpoint, providers []netaddr.En
 	if ep == nil {
 		return errors.New("docs: nil endpoint")
 	}
-	add, ok := store.(blobs.BlobAdder)
+	sink, ok := store.(blobs.Sink)
 	if !ok {
-		return errors.New("docs: blob store cannot add content")
+		return fmt.Errorf("docs: download blob: %w", blobs.ErrStoreReadOnly)
 	}
-	d := blobs.NewDownloader(add, blobs.BlobConnectorFunc(func(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (blobs.BlobConn, error) {
+	d := blobs.NewDownloader(sink, blobs.BlobConnectorFunc(func(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (blobs.BlobConn, error) {
 		conn, err := ep.Connect(ctx, addr, alpn)
 		if err != nil {
 			return nil, err

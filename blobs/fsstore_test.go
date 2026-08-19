@@ -31,20 +31,17 @@ func TestFSStorePersistsBlob(t *testing.T) {
 	if got := reopened.BlobStatus(hash); !got.IsComplete() || got.Size != int64(len(data)) {
 		t.Fatalf("BlobStatus = %+v, want complete size %d", got, len(data))
 	}
-	got, ok := reopened.GetBlob(hash)
-	if !ok {
-		t.Fatal("GetBlob = false, want true")
+	got, err := ReadBlob(context.Background(), reopened, hash)
+	if err != nil {
+		t.Fatalf("ReadBlob: %v", err)
 	}
 	if !bytes.Equal(got, data) {
-		t.Fatal("GetBlob data mismatch")
+		t.Fatal("ReadBlob data mismatch")
 	}
 
-	entry, ok, err := reopened.Get(context.Background(), hash)
+	entry, err := reopened.Open(context.Background(), hash)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
-	}
-	if !ok {
-		t.Fatal("Get = false, want true")
 	}
 	r, err := entry.DataReader(context.Background())
 	if err != nil {
@@ -112,12 +109,12 @@ func TestFSStoreImportFileCopy(t *testing.T) {
 	if want := NewHash(data); hash != want {
 		t.Fatalf("ImportFile hash = %s, want %s", hash, want)
 	}
-	got, ok := store.GetBlob(hash)
-	if !ok {
-		t.Fatal("GetBlob = false, want true")
+	got, err := ReadBlob(context.Background(), store, hash)
+	if err != nil {
+		t.Fatalf("ReadBlob: %v", err)
 	}
 	if !bytes.Equal(got, data) {
-		t.Fatal("GetBlob data mismatch")
+		t.Fatal("ReadBlob data mismatch")
 	}
 }
 
@@ -136,12 +133,12 @@ func TestFSStoreImportFileTryReference(t *testing.T) {
 	if want := NewHash(data); hash != want {
 		t.Fatalf("ImportFile hash = %s, want %s", hash, want)
 	}
-	got, ok := store.GetBlob(hash)
-	if !ok {
-		t.Fatal("GetBlob = false, want true")
+	got, err := ReadBlob(context.Background(), store, hash)
+	if err != nil {
+		t.Fatalf("ReadBlob: %v", err)
 	}
 	if !bytes.Equal(got, data) {
-		t.Fatal("GetBlob data mismatch")
+		t.Fatal("ReadBlob data mismatch")
 	}
 }
 
@@ -156,7 +153,7 @@ func TestFSStoreHonorsCanceledContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := store.Get(ctx, hash); err == nil {
+	if _, err := store.Open(ctx, hash); err == nil {
 		t.Fatal("Get canceled context error = nil")
 	}
 }
@@ -168,4 +165,68 @@ func writeTempBlobFile(t *testing.T, data []byte) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// TestGCKeepsUncommittedBlob pins the invariant that FSStore.NewBlob relies on:
+// an in-flight blob has no hash yet, so no tag can protect it, and GC must skip
+// it because its temporary name does not parse as a Hash.
+func TestGCKeepsUncommittedBlob(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	w, err := store.NewBlob(ctx)
+	if err != nil {
+		t.Fatalf("NewBlob: %v", err)
+	}
+	defer w.Close()
+	data := []byte("still being written")
+	if _, err := w.Write(data); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	if _, err := store.GC(ctx); err != nil {
+		t.Fatalf("GC: %v", err)
+	}
+
+	hash, err := w.Commit()
+	if err != nil {
+		t.Fatalf("Commit after GC: %v", err)
+	}
+	got, err := ReadBlob(ctx, store, hash)
+	if err != nil {
+		t.Fatalf("ReadBlob: %v", err)
+	}
+	if !bytes.Equal(got, data) {
+		t.Fatalf("blob = %q, want %q", got, data)
+	}
+}
+
+// TestCloseAfterCommitIsNoop pins the database/sql.Tx contract documented on
+// BlobWriter: defer w.Close() is correct whether or not Commit is reached.
+func TestCloseAfterCommitIsNoop(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewFSStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFSStore: %v", err)
+	}
+	w, err := store.NewBlob(ctx)
+	if err != nil {
+		t.Fatalf("NewBlob: %v", err)
+	}
+	data := []byte("committed")
+	if _, err := w.Write(data); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	hash, err := w.Commit()
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close after Commit = %v, want nil", err)
+	}
+	if _, err := ReadBlob(ctx, store, hash); err != nil {
+		t.Fatalf("blob gone after Close: %v", err)
+	}
 }

@@ -216,7 +216,7 @@ func (h *Handler) contentStatus() func(SignedEntry) ContentStatus {
 		return h.ContentStatus
 	}
 	return func(entry SignedEntry) ContentStatus {
-		switch blobs.Status(h.BlobStore, entry.Entry.ContentHash()).State {
+		switch blobs.Status(context.Background(), h.BlobStore, entry.Entry.ContentHash()).State {
 		case blobs.BlobComplete:
 			return ContentComplete
 		case blobs.BlobPartial:

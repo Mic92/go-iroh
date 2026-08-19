@@ -49,7 +49,7 @@ func (s *FSStore) importFileCopy(path string) (Hash, error) {
 	}
 	defer src.Close()
 
-	dataTmp, err := os.CreateTemp(s.dataDir, ".import-data-*")
+	dataTmp, err := os.CreateTemp(s.dataDir, importTempPrefix+"*")
 	if err != nil {
 		return Hash{}, fmt.Errorf("blobs: create import data: %w", err)
 	}
@@ -66,7 +66,7 @@ func (s *FSStore) importFileCopy(path string) (Hash, error) {
 }
 
 func (s *FSStore) importFileLink(path string) (Hash, error) {
-	dataTmp, err := os.CreateTemp(s.dataDir, ".import-data-*")
+	dataTmp, err := os.CreateTemp(s.dataDir, importTempPrefix+"*")
 	if err != nil {
 		return Hash{}, fmt.Errorf("blobs: create import data: %w", err)
 	}
@@ -144,6 +144,11 @@ func (s *FSStore) finishImport(dataTmp *os.File, syncData bool) (Hash, error) {
 	}
 	return hash, nil
 }
+
+// importTempPrefix names in-flight import and write temporaries. It must not
+// parse as a [Hash]: [FSStore.GC] walks the data directory and skips names
+// that [ParseHash] rejects, which is what keeps uncommitted content alive.
+const importTempPrefix = ".import-data-"
 
 func removeTemp(name string) {
 	_ = os.Remove(name)

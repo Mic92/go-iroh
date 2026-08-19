@@ -9,11 +9,6 @@ import (
 	"github.com/tmc/go-iroh/netaddr"
 )
 
-// BlobAdder stores complete raw blobs.
-type BlobAdder interface {
-	Add([]byte) (Hash, error)
-}
-
 // BlobConnector opens blob protocol connections to providers.
 type BlobConnector interface {
 	Connect(ctx context.Context, addr netaddr.EndpointAddr, alpn string) (BlobConn, error)
@@ -78,7 +73,7 @@ type DownloaderOptions struct {
 
 // Downloader downloads blobs from multiple providers.
 type Downloader struct {
-	store BlobAdder
+	store Sink
 	conn  BlobConnector
 	opts  DownloaderOptions
 
@@ -92,7 +87,10 @@ type Downloader struct {
 }
 
 // NewDownloader returns a downloader using store and conn.
-func NewDownloader(store BlobAdder, conn BlobConnector, opts DownloaderOptions) *Downloader {
+//
+// store must implement [Sink]; downloaded content is streamed into a
+// [BlobWriter] rather than buffered.
+func NewDownloader(store Sink, conn BlobConnector, opts DownloaderOptions) *Downloader {
 	if opts.Concurrency <= 0 {
 		opts.Concurrency = 1
 	}
@@ -129,7 +127,7 @@ func (d *Downloader) Download(ctx context.Context, hash Hash, providers []netadd
 		return errors.New("blobs: nil downloader connector")
 	}
 	if hash == EmptyHash {
-		got, err := d.store.Add(nil)
+		got, err := d.commitEmpty(ctx)
 		if err != nil {
 			return fmt.Errorf("blobs: store empty blob: %w", err)
 		}
@@ -230,15 +228,9 @@ func (d *Downloader) tryProvider(ctx context.Context, hash Hash, addr netaddr.En
 		d.event(DownloadEvent{Kind: DownloadProviderFailed, Hash: hash, Provider: addr, Err: err})
 		return downloadResult{addr: addr, err: err}
 	}
-	data, err := GetBlobBytes(ctx, stream, hash)
+	got, err := d.streamBlob(ctx, stream, hash)
 	if err != nil {
 		err = fmt.Errorf("blobs: get blob from provider %s: %w", addr.ID, err)
-		d.event(DownloadEvent{Kind: DownloadProviderFailed, Hash: hash, Provider: addr, Err: err})
-		return downloadResult{addr: addr, err: err}
-	}
-	got, err := d.store.Add(data)
-	if err != nil {
-		err = fmt.Errorf("blobs: store blob: %w", err)
 		d.event(DownloadEvent{Kind: DownloadProviderFailed, Hash: hash, Provider: addr, Err: err})
 		return downloadResult{addr: addr, err: err}
 	}
@@ -292,4 +284,28 @@ func (d *Downloader) event(ev DownloadEvent) {
 	d.eventMu.Lock()
 	defer d.eventMu.Unlock()
 	d.opts.OnEvent(ev)
+}
+
+// streamBlob downloads hash from stream straight into a [BlobWriter], so the
+// blob is never held in memory, and returns the stored root hash.
+func (d *Downloader) streamBlob(ctx context.Context, stream BidiStream, hash Hash) (Hash, error) {
+	w, err := d.store.NewBlob(ctx)
+	if err != nil {
+		return Hash{}, err
+	}
+	defer w.Close()
+	if err := DownloadBlob(ctx, stream, hash, w); err != nil {
+		return Hash{}, err
+	}
+	return w.Commit()
+}
+
+// commitEmpty stores the zero-length blob.
+func (d *Downloader) commitEmpty(ctx context.Context) (Hash, error) {
+	w, err := d.store.NewBlob(ctx)
+	if err != nil {
+		return Hash{}, err
+	}
+	defer w.Close()
+	return w.Commit()
 }

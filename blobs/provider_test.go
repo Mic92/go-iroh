@@ -16,12 +16,9 @@ func TestBytesMapEntry(t *testing.T) {
 		t.Fatalf("NewBytesMap: %v", err)
 	}
 	hash := NewHash(data)
-	entry, ok, err := m.Get(context.Background(), hash)
+	entry, err := m.Open(context.Background(), hash)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
-	}
-	if !ok {
-		t.Fatal("Get = false, want true")
 	}
 	if got := entry.Hash(); got != hash {
 		t.Fatalf("Hash = %s, want %s", got, hash)
@@ -65,9 +62,9 @@ func TestMapStoreServesBlob(t *testing.T) {
 		t.Fatalf("NewBytesMap: %v", err)
 	}
 	hash := NewHash(data)
-	got, ok := m.Store().GetBlob(hash)
-	if !ok {
-		t.Fatal("GetBlob = false, want true")
+	got, err := ReadBlob(context.Background(), m, hash)
+	if err != nil {
+		t.Fatalf("ReadBlob: %v", err)
 	}
 	if !bytes.Equal(got, data) {
 		t.Fatalf("GetBlob = %q, want %q", got, data)
@@ -76,7 +73,7 @@ func TestMapStoreServesBlob(t *testing.T) {
 	client, server := newTestBidiStreamPair()
 	errc := make(chan error, 1)
 	go func() {
-		errc <- ServeBlob(context.Background(), server, m.Store())
+		errc <- ServeBlob(context.Background(), server, m)
 	}()
 	got, err = GetBlobBytes(context.Background(), client, hash)
 	if err != nil {
@@ -97,7 +94,7 @@ func TestBytesMapHonorsCanceledContext(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := m.Get(ctx, NewHash([]byte("x"))); err == nil {
+	if _, err := m.Open(ctx, NewHash([]byte("x"))); err == nil {
 		t.Fatal("Get canceled context error = nil")
 	}
 }

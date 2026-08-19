@@ -4,19 +4,25 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
 	"lukechampine.com/blake3/bao"
 )
 
-// Map stores provider-side blob entries addressable by root hash.
-type Map interface {
-	Get(ctx context.Context, hash Hash) (MapEntry, bool, error)
+// Store holds blobs addressable by root hash.
+//
+// Open reports a missing blob as [ErrBlobNotFound]. A Store may also implement
+// [Stater] to answer status queries without opening the blob, and [Sink] to
+// accept new blobs; callers should use the package-level [Status] and
+// [WriteBlob] rather than asserting for those interfaces themselves.
+type Store interface {
+	Open(ctx context.Context, hash Hash) (Blob, error)
 }
 
-// MapEntry is one provider-side blob entry.
-type MapEntry interface {
+// Blob is one stored blob, complete or partial.
+type Blob interface {
 	Hash() Hash
 	Size() (size uint64, verified bool)
 	IsComplete() bool
@@ -30,7 +36,108 @@ type Outboard interface {
 	Size() int64
 }
 
-// BytesMap is an in-memory [Map] for complete raw blobs.
+// Stater is an optional [Store] upgrade that reports blob status without
+// opening the blob. Use [Status], which falls back to Open.
+type Stater interface {
+	BlobStatus(Hash) BlobStatus
+}
+
+// Sink is an optional [Store] upgrade that accepts new blobs. Use [WriteBlob]
+// or [ReadFromBlob], which report a Store that cannot add content.
+type Sink interface {
+	NewBlob(ctx context.Context) (BlobWriter, error)
+}
+
+// BlobWriter accumulates one blob. Write the content, then call Commit to
+// store it and learn its root hash.
+//
+// Close releases the writer's resources. Close after a successful Commit is a
+// no-op, so
+//
+//	w, err := s.NewBlob(ctx)
+//	if err != nil {
+//		return err
+//	}
+//	defer w.Close()
+//
+// is always correct, whether or not Commit is reached. A writer that is closed
+// without committing discards its content.
+//
+// An uncommitted writer has no hash yet, so it cannot be protected by a
+// [TempTag]. Implementations must keep in-flight content out of reach of
+// [FSStore.GC] by other means; see [FSStore.NewBlob] for how the filesystem
+// store does it.
+type BlobWriter interface {
+	io.Writer
+	Commit() (Hash, error)
+	Close() error
+}
+
+// ReadBlob returns the complete contents of hash from s.
+//
+// ReadBlob buffers the whole blob in memory. Prefer [Store.Open] and the
+// returned [Blob]'s DataReader for blobs of unknown size.
+func ReadBlob(ctx context.Context, s Store, hash Hash) ([]byte, error) {
+	blob, err := s.Open(ctx, hash)
+	if err != nil {
+		return nil, err
+	}
+	defer closeBlob(blob)
+	if !blob.IsComplete() {
+		return nil, ErrBlobNotFound
+	}
+	size, verified := blob.Size()
+	if !verified {
+		return nil, ErrBlobNotFound
+	}
+	if size > maxInt64 {
+		return nil, ErrUnsupportedRequest
+	}
+	r, err := blob.DataReader(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer closeReaderAt(r)
+	data := make([]byte, size)
+	if _, err := r.ReadAt(data, 0); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("blobs: read data: %w", err)
+	}
+	return data, nil
+}
+
+// WriteBlob stores data in s and returns its root hash.
+//
+// s must implement [Sink].
+func WriteBlob(ctx context.Context, s Store, data []byte) (Hash, error) {
+	return ReadFromBlob(ctx, s, bytes.NewReader(data))
+}
+
+// ReadFromBlob streams r into s and returns the stored blob's root hash.
+//
+// s must implement [Sink]. ReadFromBlob does not buffer the whole blob.
+func ReadFromBlob(ctx context.Context, s Store, r io.Reader) (Hash, error) {
+	sink, ok := s.(Sink)
+	if !ok {
+		return Hash{}, ErrStoreReadOnly
+	}
+	w, err := sink.NewBlob(ctx)
+	if err != nil {
+		return Hash{}, err
+	}
+	defer w.Close()
+	if _, err := io.Copy(w, r); err != nil {
+		return Hash{}, err
+	}
+	return w.Commit()
+}
+
+func closeBlob(b Blob) {
+	if c, ok := b.(io.Closer); ok {
+		_ = c.Close()
+	}
+}
+
+// BytesMap is an in-memory [Store] holding complete raw blobs.
 type BytesMap struct {
 	mu      sync.RWMutex
 	entries map[Hash]*BytesEntry
@@ -65,28 +172,64 @@ func (m *BytesMap) Add(data []byte) (Hash, error) {
 	return entry.hash, nil
 }
 
-// Get returns the entry for hash.
-func (m *BytesMap) Get(ctx context.Context, hash Hash) (MapEntry, bool, error) {
+// Open returns the blob for hash, or [ErrBlobNotFound].
+func (m *BytesMap) Open(ctx context.Context, hash Hash) (Blob, error) {
 	if err := ctxErr(ctx); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if m == nil {
-		return nil, false, nil
+		return nil, ErrBlobNotFound
 	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry, ok := m.entries[hash]
-	return entry, ok, nil
+	if !ok {
+		return nil, ErrBlobNotFound
+	}
+	return entry, nil
 }
 
-// Store returns a [Store] view over m.
-func (m *BytesMap) Store() Store {
-	return MapStore{Map: m}
+// NewBlob returns a writer that stores a blob in memory on Commit.
+func (m *BytesMap) NewBlob(ctx context.Context) (BlobWriter, error) {
+	if err := ctxErr(ctx); err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, errors.New("blobs: nil bytes map")
+	}
+	return &bytesBlobWriter{m: m}, nil
 }
 
-// GetBlob returns the full blob bytes for hash if m contains it.
-func (m *BytesMap) GetBlob(hash Hash) ([]byte, bool) {
-	return MapStore{Map: m}.GetBlob(hash)
+type bytesBlobWriter struct {
+	m    *BytesMap
+	buf  bytes.Buffer
+	done bool
+}
+
+func (w *bytesBlobWriter) Write(p []byte) (int, error) {
+	if w.done {
+		return 0, errors.New("blobs: write after commit")
+	}
+	return w.buf.Write(p)
+}
+
+func (w *bytesBlobWriter) Commit() (Hash, error) {
+	if w.done {
+		return Hash{}, errors.New("blobs: commit after commit")
+	}
+	hash, err := w.m.Add(w.buf.Bytes())
+	if err != nil {
+		return Hash{}, err
+	}
+	w.done = true
+	w.buf.Reset()
+	return hash, nil
+}
+
+func (w *bytesBlobWriter) Close() error {
+	w.done = true
+	w.buf.Reset()
+	return nil
 }
 
 // BytesEntry is a complete in-memory raw blob entry.
@@ -129,38 +272,6 @@ func (e *BytesEntry) Outboard(ctx context.Context) (Outboard, error) {
 		return nil, err
 	}
 	return byteOutboard{Reader: bytes.NewReader(e.outboard), size: int64(len(e.outboard))}, nil
-}
-
-// MapStore adapts a complete raw-blob [Map] to the older [Store] interface.
-type MapStore struct {
-	Map Map
-}
-
-// GetBlob returns the full blob bytes for hash if m contains a complete entry.
-func (m MapStore) GetBlob(hash Hash) ([]byte, bool) {
-	if m.Map == nil {
-		return nil, false
-	}
-	entry, ok, err := m.Map.Get(context.Background(), hash)
-	if err != nil || !ok || !entry.IsComplete() {
-		return nil, false
-	}
-	size, verified := entry.Size()
-	if !verified {
-		return nil, false
-	}
-	r, err := entry.DataReader(context.Background())
-	if err != nil {
-		return nil, false
-	}
-	data := make([]byte, size)
-	if _, err := r.ReadAt(data, 0); err != nil && err != io.EOF {
-		return nil, false
-	}
-	if NewHash(data) != hash {
-		return nil, false
-	}
-	return data, true
 }
 
 func ctxErr(ctx context.Context) error {

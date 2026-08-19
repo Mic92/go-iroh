@@ -40,7 +40,7 @@ func TestFSStoreConcurrentStress(t *testing.T) {
 					return
 				}
 				store.BlobStatus(hash)
-				if _, _, err := store.Get(context.Background(), hash); err != nil {
+				if _, err := store.Open(context.Background(), hash); err != nil {
 					t.Errorf("Get: %v", err)
 					_ = temp.Close()
 					return

@@ -1,5 +1,7 @@
 package blobs
 
+import "context"
+
 // BlobState is the local storage state of a blob.
 type BlobState uint8
 
@@ -53,25 +55,28 @@ func (s BlobStatus) IsPartial() bool { return s.State == BlobPartial }
 // IsNotFound reports whether s describes a missing blob.
 func (s BlobStatus) IsNotFound() bool { return s.State == BlobNotFound }
 
-// BlobStater reports local blob storage status.
-type BlobStater interface {
-	BlobStatus(Hash) BlobStatus
-}
-
 // Status reports the local storage status for hash in store.
-func Status(store Store, hash Hash) BlobStatus {
+//
+// Status uses [Stater] when store implements it, and otherwise falls back to
+// [Store.Open].
+func Status(ctx context.Context, store Store, hash Hash) BlobStatus {
 	if hash == EmptyHash {
 		return CompleteBlobStatus(0)
 	}
 	if store == nil {
 		return NotFoundBlobStatus()
 	}
-	if st, ok := store.(BlobStater); ok {
+	if st, ok := store.(Stater); ok {
 		return st.BlobStatus(hash)
 	}
-	data, ok := store.GetBlob(hash)
-	if !ok {
+	blob, err := store.Open(ctx, hash)
+	if err != nil {
 		return NotFoundBlobStatus()
 	}
-	return CompleteBlobStatus(int64(len(data)))
+	defer closeBlob(blob)
+	size, verified := blob.Size()
+	if !blob.IsComplete() || !verified || size > maxInt64 {
+		return NotFoundBlobStatus()
+	}
+	return CompleteBlobStatus(int64(size))
 }

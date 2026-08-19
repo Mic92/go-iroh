@@ -335,9 +335,9 @@ func TestLiveSyncDownloadsRemoteContent(t *testing.T) {
 			t.Fatal(ctx.Err())
 		}
 	}
-	got, ok := bBlobs.GetBlob(contentHash)
-	if !ok {
-		t.Fatal("downloaded blob missing from b store")
+	got, err := blobs.ReadBlob(context.Background(), bBlobs, contentHash)
+	if err != nil {
+		t.Fatalf("downloaded blob missing from b store: %v", err)
 	}
 	if string(got) != string(content) {
 		t.Fatalf("downloaded blob = %q, want %q", got, content)
