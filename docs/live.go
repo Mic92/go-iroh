@@ -408,7 +408,14 @@ func downloadBlob(ctx context.Context, ep *iroh.Endpoint, providers []netaddr.En
 		return blobConn{Conn: conn}, nil
 	}), blobs.DownloaderOptions{Concurrency: len(providers)})
 	defer d.Close()
-	return d.Download(ctx, hash, providers)
+	tag, err := d.Download(ctx, hash, providers)
+	if err != nil {
+		return err
+	}
+	// Live sync holds no durable name for downloaded content: the document
+	// entry that referenced the hash is the record, and the blob store is the
+	// caller's to collect. Release the tag and let the caller's policy decide.
+	return tag.Close()
 }
 
 type blobConn struct {

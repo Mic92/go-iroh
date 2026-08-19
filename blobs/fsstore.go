@@ -47,6 +47,11 @@ func NewFSStore(dir string) (*FSStore, error) {
 }
 
 // Add stores data as a complete raw blob and returns its hash.
+//
+// The blob is unprotected when Add returns, so a [FSStore.GC] running
+// concurrently may collect it before the caller can name it with
+// [FSStore.SetTag]. Callers that collect garbage should use [FSStore.NewBlob]
+// and hold the [TempTag] that [BlobWriter.Commit] returns.
 func (s *FSStore) Add(data []byte) (Hash, error) {
 	if s == nil {
 		return Hash{}, errors.New("blobs: nil fs store")
@@ -122,24 +127,24 @@ func (w *fsBlobWriter) Write(p []byte) (int, error) {
 	return w.tmp.Write(p)
 }
 
-func (w *fsBlobWriter) Commit() (Hash, error) {
+func (w *fsBlobWriter) Commit() (*TempTag, error) {
 	if w.done {
-		return Hash{}, errors.New("blobs: commit after commit")
+		return nil, errors.New("blobs: commit after commit")
 	}
 	if err := w.tmp.Sync(); err != nil {
-		return Hash{}, fmt.Errorf("blobs: sync blob data: %w", err)
+		return nil, fmt.Errorf("blobs: sync blob data: %w", err)
 	}
 	if _, err := w.tmp.Seek(0, io.SeekStart); err != nil {
-		return Hash{}, fmt.Errorf("blobs: rewind blob data: %w", err)
+		return nil, fmt.Errorf("blobs: rewind blob data: %w", err)
 	}
 	name := w.tmp.Name()
-	hash, err := w.store.finishImport(w.tmp, false)
+	_, tag, err := w.store.finishImport(w.tmp, false, true)
 	if err != nil {
-		return Hash{}, err
+		return nil, err
 	}
 	w.done = true
 	removeTemp(name)
-	return hash, nil
+	return tag, nil
 }
 
 func (w *fsBlobWriter) Close() error {

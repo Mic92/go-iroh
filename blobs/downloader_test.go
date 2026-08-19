@@ -34,7 +34,7 @@ func TestDownloaderFailover(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = d.Close() })
 
-	if err := d.Download(context.Background(), hash, []netaddr.EndpointAddr{bad, good}); err != nil {
+	if _, err := d.Download(context.Background(), hash, []netaddr.EndpointAddr{bad, good}); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 	if got := store.blobs[hash]; string(got) != string(data) {
@@ -75,10 +75,10 @@ func TestDownloaderReusesConnection(t *testing.T) {
 	d := NewDownloader(store, conn, DownloaderOptions{Concurrency: 1})
 	t.Cleanup(func() { _ = d.Close() })
 
-	if err := d.Download(context.Background(), firstHash, []netaddr.EndpointAddr{addr}); err != nil {
+	if _, err := d.Download(context.Background(), firstHash, []netaddr.EndpointAddr{addr}); err != nil {
 		t.Fatalf("first Download: %v", err)
 	}
-	if err := d.Download(context.Background(), secondHash, []netaddr.EndpointAddr{addr}); err != nil {
+	if _, err := d.Download(context.Background(), secondHash, []netaddr.EndpointAddr{addr}); err != nil {
 		t.Fatalf("second Download: %v", err)
 	}
 	if conn.connects[addr.String()] != 1 {
@@ -104,7 +104,7 @@ func TestDownloaderConcurrentFailover(t *testing.T) {
 	d := NewDownloader(store, conn, DownloaderOptions{Concurrency: 2})
 	t.Cleanup(func() { _ = d.Close() })
 
-	if err := d.Download(context.Background(), hash, []netaddr.EndpointAddr{one, two}); err != nil {
+	if _, err := d.Download(context.Background(), hash, []netaddr.EndpointAddr{one, two}); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 	if got := store.blobs[hash]; string(got) != string(data) {
@@ -138,7 +138,7 @@ func TestDownloaderConcurrentOnEvent(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = d.Close() })
 
-	if err := d.Download(context.Background(), hash, []netaddr.EndpointAddr{one, two}); err != nil {
+	if _, err := d.Download(context.Background(), hash, []netaddr.EndpointAddr{one, two}); err != nil {
 		t.Fatalf("Download: %v", err)
 	}
 	if len(events) == 0 {
@@ -163,7 +163,7 @@ type downloadStoreWriter struct {
 
 func (w *downloadStoreWriter) Write(p []byte) (int, error) { return w.buf.Write(p) }
 
-func (w *downloadStoreWriter) Commit() (Hash, error) {
+func (w *downloadStoreWriter) Commit() (*TempTag, error) {
 	data := w.buf.Bytes()
 	hash := NewHash(data)
 	w.store.mu.Lock()
@@ -173,7 +173,7 @@ func (w *downloadStoreWriter) Commit() (Hash, error) {
 	}
 	w.store.blobs[hash] = append([]byte(nil), data...)
 	w.done = true
-	return hash, nil
+	return &TempTag{value: RawHash(hash)}, nil
 }
 
 func (w *downloadStoreWriter) Close() error { w.done = true; return nil }

@@ -51,6 +51,21 @@ type Sink interface {
 // BlobWriter accumulates one blob. Write the content, then call Commit to
 // store it and learn its root hash.
 //
+// Commit returns a [TempTag] rather than a bare [Hash] because a blob is
+// collectible the instant it is stored. A caller that received only a hash
+// could not protect the blob it names: the hash does not exist until the blob
+// does, so every add-then-protect sequence has a window in which a concurrent
+// [FSStore.GC] may delete the blob, and the tag the caller then creates names a
+// file that is already gone. Commit closes that window by installing the blob
+// and its tag together. Close the tag once durable ownership is established,
+// usually by naming the blob with [FSStore.SetTag]:
+//
+//	tag, err := w.Commit()
+//	if err != nil {
+//		return err
+//	}
+//	defer tag.Close()
+//
 // Close releases the writer's resources. Close after a successful Commit is a
 // no-op, so
 //
@@ -64,12 +79,11 @@ type Sink interface {
 // without committing discards its content.
 //
 // An uncommitted writer has no hash yet, so it cannot be protected by a
-// [TempTag]. Implementations must keep in-flight content out of reach of
-// [FSStore.GC] by other means; see [FSStore.NewBlob] for how the filesystem
-// store does it.
+// TempTag. Implementations must keep in-flight content out of reach of GC by
+// other means; see [FSStore.NewBlob] for how the filesystem store does it.
 type BlobWriter interface {
 	io.Writer
-	Commit() (Hash, error)
+	Commit() (*TempTag, error)
 	Close() error
 }
 
@@ -107,20 +121,21 @@ func ReadBlob(ctx context.Context, s Store, hash Hash) ([]byte, error) {
 
 // WriteBlob stores data in s and returns its root hash.
 //
-// s must implement [Sink].
-func WriteBlob(ctx context.Context, s Store, data []byte) (Hash, error) {
+// WriteBlob releases the blob's [TempTag] before returning, so the blob is
+// unprotected by the time the caller sees its hash. Callers that run
+// [FSStore.GC] concurrently should use [Sink.NewBlob] and hold the tag Commit
+// returns.
+func WriteBlob(ctx context.Context, s Sink, data []byte) (Hash, error) {
 	return ReadFromBlob(ctx, s, bytes.NewReader(data))
 }
 
 // ReadFromBlob streams r into s and returns the stored blob's root hash.
 //
-// s must implement [Sink]. ReadFromBlob does not buffer the whole blob.
-func ReadFromBlob(ctx context.Context, s Store, r io.Reader) (Hash, error) {
-	sink, ok := s.(Sink)
-	if !ok {
-		return Hash{}, ErrStoreReadOnly
-	}
-	w, err := sink.NewBlob(ctx)
+// ReadFromBlob does not buffer the whole blob. It releases the blob's [TempTag]
+// before returning; see [WriteBlob] for what that means for callers that
+// collect garbage.
+func ReadFromBlob(ctx context.Context, s Sink, r io.Reader) (Hash, error) {
+	w, err := s.NewBlob(ctx)
 	if err != nil {
 		return Hash{}, err
 	}
@@ -128,7 +143,12 @@ func ReadFromBlob(ctx context.Context, s Store, r io.Reader) (Hash, error) {
 	if _, err := io.Copy(w, r); err != nil {
 		return Hash{}, err
 	}
-	return w.Commit()
+	tag, err := w.Commit()
+	if err != nil {
+		return Hash{}, err
+	}
+	defer tag.Close()
+	return tag.Hash(), nil
 }
 
 func closeBlob(b Blob) {
@@ -213,17 +233,18 @@ func (w *memBlobWriter) Write(p []byte) (int, error) {
 	return w.buf.Write(p)
 }
 
-func (w *memBlobWriter) Commit() (Hash, error) {
+func (w *memBlobWriter) Commit() (*TempTag, error) {
 	if w.done {
-		return Hash{}, errors.New("blobs: commit after commit")
+		return nil, errors.New("blobs: commit after commit")
 	}
 	hash, err := w.m.Add(w.buf.Bytes())
 	if err != nil {
-		return Hash{}, err
+		return nil, err
 	}
 	w.done = true
 	w.buf.Reset()
-	return hash, nil
+	// A MemStore never collects, so the tag protects nothing and holds no store.
+	return &TempTag{value: RawHash(hash)}, nil
 }
 
 func (w *memBlobWriter) Close() error {

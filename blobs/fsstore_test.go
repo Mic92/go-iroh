@@ -190,11 +190,12 @@ func TestGCKeepsUncommittedBlob(t *testing.T) {
 		t.Fatalf("GC: %v", err)
 	}
 
-	hash, err := w.Commit()
+	tag, err := w.Commit()
 	if err != nil {
 		t.Fatalf("Commit after GC: %v", err)
 	}
-	got, err := ReadBlob(ctx, store, hash)
+	defer tag.Close()
+	got, err := ReadBlob(ctx, store, tag.Hash())
 	if err != nil {
 		t.Fatalf("ReadBlob: %v", err)
 	}
@@ -219,14 +220,15 @@ func TestCloseAfterCommitIsNoop(t *testing.T) {
 	if _, err := w.Write(data); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
-	hash, err := w.Commit()
+	tag, err := w.Commit()
 	if err != nil {
 		t.Fatalf("Commit: %v", err)
 	}
+	defer tag.Close()
 	if err := w.Close(); err != nil {
 		t.Fatalf("Close after Commit = %v, want nil", err)
 	}
-	if _, err := ReadBlob(ctx, store, hash); err != nil {
+	if _, err := ReadBlob(ctx, store, tag.Hash()); err != nil {
 		t.Fatalf("blob gone after Close: %v", err)
 	}
 }
