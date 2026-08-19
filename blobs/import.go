@@ -142,19 +142,23 @@ func (s *FSStore) finishImport(dataTmp *os.File, syncData, protect bool) (Hash, 
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !fileExists(s.dataPath(hash)) || !fileExists(s.outboardPath(hash)) {
+		if err := os.Rename(dataTmp.Name(), s.dataPath(hash)); err != nil {
+			return Hash{}, nil, fmt.Errorf("blobs: install import data: %w", err)
+		}
+		if err := os.Rename(outTmp.Name(), s.outboardPath(hash)); err != nil {
+			_ = os.Remove(s.dataPath(hash))
+			return Hash{}, nil, fmt.Errorf("blobs: install import outboard: %w", err)
+		}
+	}
+	// Tag last, after every path that can fail. Creating it earlier would leave
+	// an entry in s.temp that nothing could release: the caller gets no handle
+	// on an error, and TempTag.Close takes s.mu, so it cannot be closed from
+	// here either. Atomicity is unaffected, since holding s.mu across the
+	// installs and the tag is the whole of the argument.
 	var tag *TempTag
 	if protect {
 		tag = s.newTempTagLocked(RawHash(hash))
-	}
-	if fileExists(s.dataPath(hash)) && fileExists(s.outboardPath(hash)) {
-		return hash, tag, nil
-	}
-	if err := os.Rename(dataTmp.Name(), s.dataPath(hash)); err != nil {
-		return Hash{}, nil, fmt.Errorf("blobs: install import data: %w", err)
-	}
-	if err := os.Rename(outTmp.Name(), s.outboardPath(hash)); err != nil {
-		_ = os.Remove(s.dataPath(hash))
-		return Hash{}, nil, fmt.Errorf("blobs: install import outboard: %w", err)
 	}
 	return hash, tag, nil
 }
