@@ -227,3 +227,23 @@ func impossibleObserveItem() []byte {
 	frame := appendVarint(nil, uint64(len(item)))
 	return append(frame, item...)
 }
+
+// TestRequestTypeWireValues pins the Rust iroh-blobs wire discriminants. The
+// gap at 2-7 is reserved by that numbering; these values are protocol, not
+// implementation detail, and may not be renumbered.
+func TestRequestTypeWireValues(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		got  RequestType
+		want uint64
+	}{
+		{"RequestGet", RequestGet, 0},
+		{"RequestObserve", RequestObserve, 1},
+		{"RequestPush", RequestPush, 8},
+		{"RequestGetMany", RequestGetMany, 9},
+	} {
+		if uint64(tt.got) != tt.want {
+			t.Errorf("%s = %d, want %d", tt.name, tt.got, tt.want)
+		}
+	}
+}

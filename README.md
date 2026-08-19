@@ -11,6 +11,10 @@ plus Rust-compatible ports of the iroh protocol stack: blobs, gossip, and docs.
 The module is a clean-room Go port targeting wire compatibility with upstream
 Rust iroh. It is not affiliated with the n0 team.
 
+Wire compatibility and Go API stability are separate promises. The wire
+protocol tracks pinned upstream releases; the Go API is not stable before v1
+and may change in any v0 release.
+
 ## Packages
 
 Connectivity layer:
@@ -38,7 +42,7 @@ Protocols (Rust-compatible ports):
 | `endpointticket` | Rust-compatible endpoint ticket codec |
 | `irpc` | postcard-framed RPC helpers for iroh streams |
 | `postcard` | Rust-compatible postcard wire codec (shared with sibling modules) |
-| `http3` | adapts iroh connections for HTTP/3 implementations |
+| `quicconn` | adapts iroh connections to a QUIC-like surface |
 
 Commands:
 

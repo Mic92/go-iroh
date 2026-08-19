@@ -1,4 +1,4 @@
-package http3_test
+package quicconn_test
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tmc/go-iroh/http3"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/netaddr"
+	"github.com/tmc/go-iroh/quicconn"
 )
 
 func TestConnStreams(t *testing.T) {
@@ -61,19 +61,19 @@ func TestConnStreams(t *testing.T) {
 	}
 	defer serverConn.CloseWithError(0, "")
 
-	clientH3 := http3.NewConn(clientConn)
-	serverH3 := http3.NewConn(serverConn)
-	if clientH3.IrohConn() != clientConn {
+	clientQC := quicconn.NewConn(clientConn)
+	serverQC := quicconn.NewConn(serverConn)
+	if clientQC.IrohConn() != clientConn {
 		t.Fatal("IrohConn did not return the underlying connection")
 	}
-	var nilConn *http3.Conn
+	var nilConn *quicconn.Conn
 	if nilConn.IrohConn() != nil {
 		t.Fatal("nil Conn returned a non-nil underlying connection")
 	}
 
 	done := make(chan error, 1)
 	go func() {
-		s, err := serverH3.AcceptBidi(ctx)
+		s, err := serverQC.AcceptBidi(ctx)
 		if err != nil {
 			done <- err
 			return
@@ -82,7 +82,7 @@ func TestConnStreams(t *testing.T) {
 		done <- err
 	}()
 
-	stream, err := clientH3.OpenBidi(ctx)
+	stream, err := clientQC.OpenBidi(ctx)
 	if err != nil {
 		t.Fatalf("open bidi: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestConnStreams(t *testing.T) {
 	uniData := make(chan []byte, 1)
 	uniErr := make(chan error, 1)
 	go func() {
-		s, err := serverH3.AcceptUni(ctx)
+		s, err := serverQC.AcceptUni(ctx)
 		if err != nil {
 			uniErr <- err
 			return
@@ -148,7 +148,7 @@ func TestConnStreams(t *testing.T) {
 		uniData <- b
 	}()
 
-	send, err := clientH3.OpenUni(ctx)
+	send, err := clientQC.OpenUni(ctx)
 	if err != nil {
 		t.Fatalf("open uni: %v", err)
 	}
@@ -178,10 +178,10 @@ func TestConnStreams(t *testing.T) {
 		t.Fatal(ctx.Err())
 	}
 
-	if err := clientH3.SendDatagram([]byte("datagram")); err != nil {
+	if err := clientQC.SendDatagram([]byte("datagram")); err != nil {
 		t.Fatalf("send datagram: %v", err)
 	}
-	datagram, err := serverH3.ReceiveDatagram(ctx)
+	datagram, err := serverQC.ReceiveDatagram(ctx)
 	if err != nil {
 		t.Fatalf("receive datagram: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestConnStreams(t *testing.T) {
 		t.Fatalf("datagram = %q, want datagram", datagram)
 	}
 
-	if err := clientH3.Close(0, ""); err != nil {
+	if err := clientQC.Close(0, ""); err != nil {
 		t.Fatalf("close connection: %v", err)
 	}
 }
