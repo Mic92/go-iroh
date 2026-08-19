@@ -4,6 +4,8 @@
 // challenge protocol, and forwards relay datagrams between connected endpoint
 // ids. It is intentionally small: persistence, metrics, access control, and
 // clustering belong above this package.
+//
+// The Go API is not stable before v1 and may change in any v0 release.
 package relayserver
 
 import (

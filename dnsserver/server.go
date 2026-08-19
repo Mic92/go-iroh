@@ -1,4 +1,6 @@
 // Package dnsserver implements an embeddable iroh DNS and pkarr relay server.
+//
+// The Go API is not stable before v1 and may change in any v0 release.
 package dnsserver
 
 import (

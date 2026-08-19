@@ -4,6 +4,8 @@
 //
 // It is the public surface of the Rust crate iroh-relay (the client connection
 // and wire protocol live in internal packages).
+//
+// The Go API is not stable before v1 and may change in any v0 release.
 package relay
 
 import (
