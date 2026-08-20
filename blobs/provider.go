@@ -19,6 +19,13 @@ import (
 // [WriteBlob] rather than asserting for those interfaces themselves.
 type Store interface {
 	Open(ctx context.Context, hash Hash) (Blob, error)
+
+	// GetBlob is retained in v0.0.2 so that code using the pre-v0.1 Store
+	// interface can compile while it is migrated. New code should use
+	// [ReadBlob] or [Store.Open].
+	//
+	// Deprecated: use [ReadBlob] or [Store.Open].
+	GetBlob(hash Hash) ([]byte, bool)
 }
 
 // Blob is one stored blob, complete or partial.

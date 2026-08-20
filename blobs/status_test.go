@@ -52,6 +52,8 @@ type statusStore struct {
 
 func (s statusStore) Open(context.Context, Hash) (Blob, error) { return nil, ErrBlobNotFound }
 
+func (s statusStore) GetBlob(Hash) ([]byte, bool) { return nil, false }
+
 func (s statusStore) BlobStatus(_ context.Context, hash Hash) (BlobStatus, error) {
 	if hash != s.hash {
 		return NotFoundBlobStatus(), nil
