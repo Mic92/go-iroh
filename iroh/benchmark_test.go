@@ -3,6 +3,7 @@ package iroh
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -22,6 +23,7 @@ type layerLadderSample struct {
 	Rung           string                        `json:"rung"`
 	Lang           string                        `json:"lang"`
 	Sample         int                           `json:"sample"`
+	PID            int                           `json:"pid,omitempty"`
 	Bytes          int64                         `json:"bytes"`
 	Messages       int64                         `json:"messages,omitempty"`
 	DurationNS     int64                         `json:"duration_ns"`
@@ -101,13 +103,20 @@ func emitLayerLadderSampleRecord(b *testing.B, s layerLadderSample, cpuStart ben
 		lang = "go"
 	}
 	// The testing package may invoke a benchmark several times while choosing
-	// b.N. Keep only the final calibrated invocation from this process.
+	// b.N, so keep only the final calibrated invocation from this process.
+	// Replacing this process's own warm-up is intended; replacing any other
+	// record destroys a measurement, and the record already in the file says
+	// which of the two this is.
+	s.Lang = lang
+	s.Sample = sample
+	s.PID = os.Getpid()
+	if err := checkLadderPathOwnership(path, s); err != nil {
+		b.Fatal(err)
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		b.Fatalf("open layer-ladder JSONL: %v", err)
 	}
-	s.Lang = lang
-	s.Sample = sample
 	s.DurationNS = b.Elapsed().Nanoseconds()
 	if cpuStart.userNS >= 0 {
 		cpuEnd := readBenchmarkCPUTime(b)
@@ -122,6 +131,47 @@ func emitLayerLadderSampleRecord(b *testing.B, s layerLadderSample, cpuStart ben
 	if closeErr != nil {
 		b.Fatalf("close layer-ladder JSONL: %v", closeErr)
 	}
+}
+
+// checkLadderPathOwnership reports an error when path already holds anything
+// other than this process's own b.N warm-up for this cell and repetition, which
+// is the only record O_TRUNC may destroy. Every other outcome -- another cell,
+// another repetition, another process, a file this check cannot parse, a path it
+// cannot read -- is an error, because the alternative is a fail-open that
+// reports a destroyed measurement as a successful one.
+func checkLadderPathOwnership(path string, s layerLadderSample) error {
+	prev, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil // first write to this path
+	}
+	if err != nil {
+		return fmt.Errorf("read layer-ladder JSONL %s to check for an existing record: %w", path, err)
+	}
+	if len(prev) == 0 {
+		return nil
+	}
+	var old layerLadderSample
+	if err := json.Unmarshal(prev, &old); err != nil {
+		return fmt.Errorf("layer-ladder JSONL %s holds %d bytes this check cannot parse (%v): "+
+			"O_TRUNC would destroy it unexamined; remove the file to start a fresh run", path, len(prev), err)
+	}
+	if old.Rung != "" && old.Rung != s.Rung {
+		return fmt.Errorf("layer-ladder JSONL %s already holds rung %q and this is %q: "+
+			"one cell per path, or O_TRUNC destroys the other cell's sample", path, old.Rung, s.Rung)
+	}
+	if old.Rung == s.Rung && old.Sample != s.Sample {
+		return fmt.Errorf("layer-ladder JSONL %s already holds sample %d of rung %q and this is sample %d: "+
+			"the repetition must be part of the path, or O_TRUNC keeps only the last",
+			path, old.Sample, s.Rung, s.Sample)
+	}
+	// Matching rung and sample still does not make the record ours: a second
+	// process measuring the same cell writes an identical-looking one.
+	if old.PID != s.PID {
+		return fmt.Errorf("layer-ladder JSONL %s already holds a record from process %d and this is process %d: "+
+			"only this process's own warm-up may be replaced; remove the file to start a fresh run",
+			path, old.PID, s.PID)
+	}
+	return nil
 }
 
 func benchmarkConnPair(b *testing.B, alpn string) (client, server *Conn) {
