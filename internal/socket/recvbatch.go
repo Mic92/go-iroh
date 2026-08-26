@@ -104,12 +104,16 @@ type recvBatch struct {
 	info      RecvInfo
 	ip        netip.AddrPort
 	releaseIP bool
+	groBuf    *[]byte
 	releaseFn func()
 }
 
 func (b recvBatch) release() {
 	if b.releaseIP {
 		putIPRecvBuffer(b.data)
+	}
+	if b.groBuf != nil {
+		groRecvPool.Put(b.groBuf)
 	}
 	if b.releaseFn != nil {
 		b.releaseFn()
