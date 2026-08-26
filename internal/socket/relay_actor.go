@@ -471,6 +471,7 @@ type activeRelay struct {
 	url    netaddr.RelayURL
 
 	sendCh   chan RelaySendItem
+	batchBuf []byte
 	stopCh   chan struct{}
 	stopOnce sync.Once
 
@@ -810,20 +811,60 @@ func pingTimeoutDuration(st *connectedState) time.Duration {
 	return relayPingTimeoutMax
 }
 
-// sendDatagrams sends a batch of queued datagrams as client-to-relay datagram
-// frames, one frame per item (each item already carries its own batch encoding).
+// sendDatagrams merges runs of equally sized datagrams to one endpoint into
+// DatagramBatch frames, like the GSO batches the Rust client sends.
 func (r *activeRelay) sendDatagrams(client relayClient, items []RelaySendItem) error {
 	ctx, cancel := context.WithTimeout(context.Background(), pingInterval)
 	defer cancel()
-	for _, it := range items {
-		err := client.Send(ctx, relayproto.ClientToRelayMsg{
+	return coalesceDatagrams(items, relayproto.MaxPacketSize-key.PublicKeySize-3, &r.batchBuf,
+		func(m relayproto.ClientToRelayMsg) error { return client.Send(ctx, m) })
+}
+
+// coalesceDatagrams calls send once per wire frame. Batched Contents alias
+// *buf and are only valid during send.
+func coalesceDatagrams(items []RelaySendItem, maxSize int, buf *[]byte, send func(relayproto.ClientToRelayMsg) error) error {
+	var scratch []byte
+	if buf == nil {
+		buf = &scratch
+	}
+	for i := 0; i < len(items); {
+		head := items[i]
+		seg := len(head.Datagrams.Contents)
+		j := i + 1
+		total := seg
+		if head.Datagrams.SegmentSize == 0 && seg > 0 {
+			for j < len(items) {
+				it := items[j]
+				n := len(it.Datagrams.Contents)
+				if it.RemoteEndpoint != head.RemoteEndpoint || it.Datagrams.SegmentSize != 0 ||
+					it.Datagrams.Ecn != head.Datagrams.Ecn || n == 0 || n > seg || total+n > maxSize {
+					break
+				}
+				total += n
+				j++
+				if n < seg {
+					break
+				}
+			}
+		}
+		msg := relayproto.ClientToRelayMsg{
 			Type:          relayproto.FrameClientToRelayDatagram,
-			DstEndpointID: it.RemoteEndpoint,
-			Datagrams:     it.Datagrams,
-		})
-		if err != nil {
+			DstEndpointID: head.RemoteEndpoint,
+			Datagrams:     head.Datagrams,
+		}
+		if j-i > 1 {
+			b := (*buf)[:0]
+			for _, it := range items[i:j] {
+				b = append(b, it.Datagrams.Contents...)
+			}
+			*buf = b
+			msg.Datagrams.SegmentSize = uint16(seg)
+			msg.Datagrams.Contents = b
+		}
+		if err := send(msg); err != nil {
 			return err
 		}
+		i = j
 	}
 	return nil
 }

@@ -41,6 +41,7 @@ func (c *fakeRelayClient) Send(ctx context.Context, msg relayproto.ClientToRelay
 		case <-c.done:
 		}
 	}
+	msg.Datagrams.Contents = bytes.Clone(msg.Datagrams.Contents)
 	select {
 	case c.sent <- msg:
 		return nil
@@ -264,7 +265,9 @@ func TestActorBatching(t *testing.T) {
 		select {
 		case msg := <-client.sent:
 			if msg.Type == relayproto.FrameClientToRelayDatagram || msg.Type == relayproto.FrameClientToRelayDatagramBat {
-				got[string(msg.Datagrams.Contents)] = true
+				for _, seg := range splitSegments(msg.Datagrams) {
+					got[string(seg)] = true
+				}
 			}
 		case <-deadline:
 			t.Fatalf("got %d/%d datagrams", len(got), n)
