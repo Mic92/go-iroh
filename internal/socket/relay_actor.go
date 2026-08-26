@@ -813,8 +813,10 @@ func pingTimeoutDuration(st *connectedState) time.Duration {
 // sendDatagrams sends a batch of queued datagrams as client-to-relay datagram
 // frames, one frame per item (each item already carries its own batch encoding).
 func (r *activeRelay) sendDatagrams(client relayClient, items []RelaySendItem) error {
+	ctx, cancel := context.WithTimeout(context.Background(), pingInterval)
+	defer cancel()
 	for _, it := range items {
-		err := r.send(client, relayproto.ClientToRelayMsg{
+		err := client.Send(ctx, relayproto.ClientToRelayMsg{
 			Type:          relayproto.FrameClientToRelayDatagram,
 			DstEndpointID: it.RemoteEndpoint,
 			Datagrams:     it.Datagrams,
