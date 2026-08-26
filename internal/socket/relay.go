@@ -72,8 +72,12 @@ func (t *RelayTransport) deliver(ctx context.Context, dm RelayRecvDatagram) {
 	}
 	for {
 		n := min(len(b), stride)
+		rb := recvBatch{data: b[:n], info: RecvInfo{Remote: remote}}
+		if n == len(b) {
+			rb.releaseFn = dm.Datagrams.Release
+		}
 		select {
-		case t.recvCh <- recvBatch{data: b[:n], info: RecvInfo{Remote: remote}}:
+		case t.recvCh <- rb:
 		case <-ctx.Done():
 			return
 		}

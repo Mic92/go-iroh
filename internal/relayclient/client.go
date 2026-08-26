@@ -168,8 +168,15 @@ func (c *Client) Recv(ctx context.Context) (relayproto.RelayToClientMsg, error) 
 	if err != nil {
 		return relayproto.RelayToClientMsg{}, err
 	}
-	// Copying parse: rd reuses its buffer and datagrams outlive this call.
-	return relayproto.ParseRelayToClientMsg(data, c.version)
+	msg, err := relayproto.ParseRelayToClientMsgNoCopy(data, c.version)
+	if err != nil {
+		return msg, err
+	}
+	// rd reuses its buffer and datagrams outlive this call.
+	if msg.Type == relayproto.FrameRelayToClientDatagram || msg.Type == relayproto.FrameRelayToClientDatagramBat {
+		msg.Datagrams = msg.Datagrams.Pooled()
+	}
+	return msg, nil
 }
 
 // Close closes the relay connection.
