@@ -304,7 +304,7 @@ func TestSessionQueueByteLimit(t *testing.T) {
 	msg := relayproto.RelayToClientMsg{Type: relayproto.FrameStatus, Status: relayproto.StatusHealthy}
 	n := int64(len(msg.AppendTo(nil)))
 	sess := &session{
-		send:           make(chan []byte, 2),
+		send:           make(chan *[]byte, 2),
 		maxQueuedBytes: n,
 	}
 	if !sess.enqueue(msg) {
@@ -373,7 +373,7 @@ func TestDroppedDatagramsAreCounted(t *testing.T) {
 	src := &session{id: sk1.Public().EndpointID()}
 	dst := &session{
 		id:   sk2.Public().EndpointID(),
-		send: make(chan []byte), // unbuffered and never drained: enqueue always fails
+		send: make(chan *[]byte), // unbuffered and never drained: enqueue always fails
 	}
 	srv.register(dst)
 
