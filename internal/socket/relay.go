@@ -1,9 +1,11 @@
 package socket
 
 import (
+	"bytes"
 	"context"
 
 	"github.com/tmc/go-iroh/internal/relayproto"
+	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 	"github.com/tmc/go-iroh/watch"
@@ -89,15 +91,39 @@ func (t *RelayTransport) deliver(ctx context.Context, dm RelayRecvDatagram) {
 // is treated as lost (QUIC's loss recovery retransmits), matching the Rust
 // blackhole-on-failure invariant (iroh/src/socket/transports.rs:1176).
 func (t *RelayTransport) Send(m RelayMappedAddr, p []byte) bool {
+	return t.SendBatch(m, p, 0)
+}
+
+// maxRelayBatch is the largest Datagrams.Contents that fits a relay frame.
+const maxRelayBatch = relayproto.MaxPacketSize - key.PublicKeySize - 3
+
+// SendBatch is Send for a GSO-style buffer of segSize-sized datagrams (the
+// last may be shorter). segSize 0 means a single datagram.
+func (t *RelayTransport) SendBatch(m RelayMappedAddr, p []byte, segSize int) bool {
 	rk, ok := t.sock.LookupRelay(m)
 	if !ok {
 		return false
 	}
-	return t.actor.Send(RelaySendItem{
-		RemoteEndpoint: rk.EID,
-		URL:            rk.URL,
-		Datagrams:      relayproto.DatagramsFromBytes(p),
-	})
+	if segSize <= 0 || segSize >= len(p) {
+		return t.actor.Send(RelaySendItem{
+			RemoteEndpoint: rk.EID,
+			URL:            rk.URL,
+			Datagrams:      relayproto.DatagramsFromBytes(p),
+		})
+	}
+	per := max(1, maxRelayBatch/segSize) * segSize
+	for len(p) > 0 {
+		n := min(len(p), per)
+		d := relayproto.Datagrams{Contents: bytes.Clone(p[:n])}
+		if n > segSize {
+			d.SegmentSize = uint16(segSize)
+		}
+		if !t.actor.Send(RelaySendItem{RemoteEndpoint: rk.EID, URL: rk.URL, Datagrams: d}) {
+			return false
+		}
+		p = p[n:]
+	}
+	return true
 }
 
 // SetHomeRelay designates url as the endpoint's home relay. See

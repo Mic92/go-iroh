@@ -336,6 +336,32 @@ func isDefinitelyIP(addr netip.Addr) bool {
 	return addr.As16()[0] != 0xfd
 }
 
+func segmentCount(n, segmentSize int) int {
+	if segmentSize <= 0 {
+		return 1
+	}
+	return (n + segmentSize - 1) / segmentSize
+}
+
+// sendRelayBatch forwards a segmented buffer to a relay mapped destination as
+// relay batch frames. It reports false if dst is not a known relay address.
+func (m *MagicConn) sendRelayBatch(dst netip.Addr, p []byte, segSize int) bool {
+	if m.transports.relay == nil || Classify(dst) != KindRelay {
+		return false
+	}
+	mapped := RelayMappedAddrFromAddr(dst)
+	if _, ok := m.sock.LookupRelay(mapped); !ok {
+		return false
+	}
+	segs := uint64(segmentCount(len(p), segSize))
+	if m.transports.relay.SendBatch(mapped, p, segSize) {
+		m.metrics.relaySent.Add(segs)
+	} else {
+		m.metrics.blackholed.Add(segs)
+	}
+	return true
+}
+
 // relayAddrForMapped returns the relay Addr for mapped.
 func relayAddrForMapped(sock *Socket, mapped netip.Addr) (Addr, bool) {
 	if rk, ok := sock.LookupRelay(RelayMappedAddrFromAddr(mapped)); ok {

@@ -436,3 +436,38 @@ func TestRelayRateLimitedCounted(t *testing.T) {
 		t.Fatalf("rateLimited after RateLimited = %d, want 1", got)
 	}
 }
+
+func TestRelayTransportSendBatch(t *testing.T) {
+	client := newFakeRelayClient()
+	a, _ := startActorWith(t, client)
+	sock := NewSocket()
+	rt := NewRelayTransport(sock, a, make(chan recvBatch, 8))
+	url := testURL(t)
+	peer, _ := key.GenerateSecretKey()
+	a.SetHomeRelay(url)
+	m := sock.RelayMappedAddrFor(url, peer.Public().EndpointID())
+
+	const seg = 1200
+	n := maxRelayBatch/seg*seg + seg + 100
+	p := make([]byte, n)
+	for i := range p {
+		p[i] = byte(i / seg)
+	}
+	if !rt.SendBatch(m, p, seg) {
+		t.Fatal("SendBatch returned false")
+	}
+	var got []byte
+	for len(got) < n {
+		msg := waitDatagramSend(t, client)
+		if len(msg.Datagrams.Contents) > seg && msg.Datagrams.SegmentSize != seg {
+			t.Fatalf("segment size = %d, want %d", msg.Datagrams.SegmentSize, seg)
+		}
+		if len(msg.Datagrams.Contents) > maxRelayBatch {
+			t.Fatalf("frame contents %d > %d", len(msg.Datagrams.Contents), maxRelayBatch)
+		}
+		got = append(got, msg.Datagrams.Contents...)
+	}
+	if !bytes.Equal(got, p) {
+		t.Fatal("reassembled payload differs")
+	}
+}

@@ -816,7 +816,7 @@ func pingTimeoutDuration(st *connectedState) time.Duration {
 func (r *activeRelay) sendDatagrams(client relayClient, items []RelaySendItem) error {
 	ctx, cancel := context.WithTimeout(context.Background(), pingInterval)
 	defer cancel()
-	return coalesceDatagrams(items, relayproto.MaxPacketSize-key.PublicKeySize-3, &r.batchBuf,
+	return coalesceDatagrams(items, maxRelayBatch, &r.batchBuf,
 		func(m relayproto.ClientToRelayMsg) error { return client.Send(ctx, m) })
 }
 

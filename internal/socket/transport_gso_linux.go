@@ -43,8 +43,11 @@ func (m *MagicConn) WriteMsgUDP(p, oob []byte, addr *net.UDPAddr) (n, oobn int, 
 }
 
 func (m *MagicConn) writeMsgSegments(p []byte, addr *net.UDPAddr, segmentSize int) {
-	if segmentSize <= 0 {
+	if segmentSize <= 0 || segmentSize >= len(p) {
 		m.WriteTo(p, addr)
+		return
+	}
+	if m.sendRelayBatch(canonicalAddrPort(addr.AddrPort()).Addr(), p, segmentSize) {
 		return
 	}
 	for len(p) > 0 {
@@ -52,13 +55,6 @@ func (m *MagicConn) writeMsgSegments(p []byte, addr *net.UDPAddr, segmentSize in
 		m.WriteTo(p[:n], addr)
 		p = p[n:]
 	}
-}
-
-func segmentCount(n, segmentSize int) int {
-	if segmentSize <= 0 {
-		return 1
-	}
-	return (n + segmentSize - 1) / segmentSize
 }
 
 func udpSegmentSize(oob []byte) int {
