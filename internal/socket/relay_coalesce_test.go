@@ -61,3 +61,19 @@ func TestCoalesceDatagrams(t *testing.T) {
 		t.Fatalf("maxSize: got %d msgs, want 2", len(got))
 	}
 }
+
+func splitSegments(d relayproto.Datagrams) [][]byte {
+	if d.SegmentSize == 0 || len(d.Contents) == 0 {
+		return [][]byte{d.Contents}
+	}
+	stride := int(d.SegmentSize)
+	var out [][]byte
+	for off := 0; off < len(d.Contents); off += stride {
+		end := off + stride
+		if end > len(d.Contents) {
+			end = len(d.Contents)
+		}
+		out = append(out, d.Contents[off:end])
+	}
+	return out
+}

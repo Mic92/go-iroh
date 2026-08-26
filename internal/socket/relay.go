@@ -59,38 +59,27 @@ func (t *RelayTransport) forwardRecv(ctx context.Context) {
 }
 
 // deliver splits dm into single datagrams (by its segment size) and forwards
-// each to the recv channel.
+// each to the recv channel. dm.Datagrams.Contents is owned by dm (the relay
+// client copies on receive) and ReadFrom copies out, so segments alias it.
 func (t *RelayTransport) deliver(ctx context.Context, dm RelayRecvDatagram) {
 	remote := RelayAddr(dm.URL, dm.Src)
-	for _, seg := range splitSegments(dm.Datagrams) {
-		data := make([]byte, len(seg))
-		copy(data, seg)
+	b := dm.Datagrams.Contents
+	stride := max(len(b), 1)
+	if dm.Datagrams.SegmentSize != 0 {
+		stride = int(dm.Datagrams.SegmentSize)
+	}
+	for {
+		n := min(len(b), stride)
 		select {
-		case t.recvCh <- recvBatch{data: data, info: RecvInfo{Remote: remote}}:
+		case t.recvCh <- recvBatch{data: b[:n], info: RecvInfo{Remote: remote}}:
 		case <-ctx.Done():
 			return
 		}
-	}
-}
-
-// splitSegments returns the individual datagrams in d. A zero segment size means
-// a single datagram; otherwise the contents are sliced into segment-size strides
-// (the final segment may be shorter), matching the relay GRO stride
-// (iroh/src/socket/transports/relay.rs:154).
-func splitSegments(d relayproto.Datagrams) [][]byte {
-	if d.SegmentSize == 0 || len(d.Contents) == 0 {
-		return [][]byte{d.Contents}
-	}
-	stride := int(d.SegmentSize)
-	var out [][]byte
-	for off := 0; off < len(d.Contents); off += stride {
-		end := off + stride
-		if end > len(d.Contents) {
-			end = len(d.Contents)
+		b = b[n:]
+		if len(b) == 0 {
+			return
 		}
-		out = append(out, d.Contents[off:end])
 	}
-	return out
 }
 
 // Send routes p to the relay addressed by the relay mapped address m. It looks
