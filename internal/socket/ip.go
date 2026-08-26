@@ -106,16 +106,9 @@ func (t *IpTransport) serveGRO(ctx context.Context) {
 			seg = n
 		}
 		recordUDPReceive((n+seg-1)/seg, seg < n)
-		src := canonicalAddrPort(ap)
-		for off := 0; off < n; off += seg {
-			end := min(off+seg, n)
-			b := recvBatch{data: buf[off:end], ip: src}
-			if end == n {
-				b.groBuf = bp
-			}
-			if !t.enqueue(ctx, b) {
-				return
-			}
+		b := recvBatch{data: buf[:n], stride: seg, ip: canonicalAddrPort(ap), groBuf: bp}
+		if !t.enqueue(ctx, b) {
+			return
 		}
 	}
 }
