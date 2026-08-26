@@ -153,7 +153,7 @@ func (c *Client) Version() relayproto.ProtocolVersion { return c.version }
 
 // Send sends a client-to-relay message.
 func (c *Client) Send(ctx context.Context, msg relayproto.ClientToRelayMsg) error {
-	return c.conn.Write(ctx, websocket.MessageBinary, msg.AppendTo(nil))
+	return c.conn.Write(ctx, websocket.MessageBinary, msg.AppendTo(make([]byte, 0, msg.EncodedLen())))
 }
 
 // Recv receives the next relay-to-client message.

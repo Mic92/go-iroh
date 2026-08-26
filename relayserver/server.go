@@ -345,7 +345,7 @@ func (s *Server) lookup(id key.EndpointID) *session {
 }
 
 func (s *session) enqueue(msg relayproto.RelayToClientMsg) bool {
-	b := msg.AppendTo(nil)
+	b := msg.AppendTo(make([]byte, 0, msg.EncodedLen()))
 	n := int64(len(b))
 	for {
 		queued := s.queuedBytes.Load()
