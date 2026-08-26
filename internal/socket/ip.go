@@ -253,10 +253,10 @@ func (t *IpTransport) Serve(ctx context.Context) {
 }
 
 // serveGRO is the receive loop for a socket with UDP_GRO enabled: one read can
-// return a run of equally sized datagrams from the same peer, so it splits the
-// read at the segment size the kernel reports and queues one batch per datagram.
-// Only the last of them carries the buffer, which goes back to the pool when that
-// batch is released.
+// return a run of equally sized datagrams from the same peer, so it queues the
+// whole read as one batch strided by the segment size the kernel reports and
+// hands the buffer back to the pool once ReadFrom has copied out the last
+// segment.
 func (t *IpTransport) serveGRO(ctx context.Context) {
 	// The read carries the segment size and, on a wildcard socket, the
 	// packet-info message too: room for both, not just the one.
@@ -290,15 +290,9 @@ func (t *IpTransport) serveGRO(ctx context.Context) {
 			// covers every datagram in it.
 			t.recordLocal(src, oob[:oobn])
 		}
-		for off := 0; off < n; off += seg {
-			end := min(off+seg, n)
-			b := recvBatch{data: buf[off:end], ip: src}
-			if end == n {
-				b.groBuf = bp
-			}
-			if !t.enqueue(ctx, b) {
-				return
-			}
+		b := recvBatch{data: buf[:n], stride: seg, ip: src, groBuf: bp}
+		if !t.enqueue(ctx, b) {
+			return
 		}
 	}
 }
