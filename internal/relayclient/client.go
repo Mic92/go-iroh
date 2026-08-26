@@ -58,6 +58,7 @@ type Client struct {
 	conn    *websocket.Conn
 	version relayproto.ProtocolVersion
 	url     netaddr.RelayURL
+	rd      relayproto.FrameReader
 }
 
 // Connect dials the relay at u and completes the protocol handshake.
@@ -157,11 +158,12 @@ func (c *Client) Send(ctx context.Context, msg relayproto.ClientToRelayMsg) erro
 
 // Recv receives the next relay-to-client message.
 func (c *Client) Recv(ctx context.Context) (relayproto.RelayToClientMsg, error) {
-	_, data, err := c.conn.Read(ctx)
+	data, err := c.rd.Read(ctx, c.conn)
 	if err != nil {
 		return relayproto.RelayToClientMsg{}, err
 	}
-	return relayproto.ParseRelayToClientMsgNoCopy(data, c.version)
+	// Copying parse: rd reuses its buffer and datagrams outlive this call.
+	return relayproto.ParseRelayToClientMsg(data, c.version)
 }
 
 // Close closes the relay connection.

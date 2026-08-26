@@ -191,8 +191,9 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	// passed to wait fits in a full bucket.
 	limiter := newByteLimiter(s.clientRate, maxFrameSize)
 
+	var rd relayproto.FrameReader
 	for {
-		_, data, err := conn.Read(ctx)
+		data, err := rd.Read(ctx, conn)
 		if err != nil {
 			return
 		}
