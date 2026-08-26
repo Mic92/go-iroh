@@ -54,9 +54,18 @@ type relayMetrics struct {
 	datagramsDropped   atomic.Uint64
 }
 
+// Option configures a [Server].
+type Option func(*Server)
+
+// WithClientRate sets the per-client receive rate limit in bytes per
+// second (default 64 MiB/s); <= 0 disables it.
+func WithClientRate(bytesPerSecond int64) Option {
+	return func(s *Server) { s.clientRate = bytesPerSecond }
+}
+
 // New returns a relay server.
-func New() *Server {
-	return &Server{
+func New(opts ...Option) *Server {
+	s := &Server{
 		clients:          make(map[key.EndpointID]*session),
 		establishTimeout: defaultEstablishTimeout,
 		writeTimeout:     defaultWriteTimeout,
@@ -64,6 +73,10 @@ func New() *Server {
 		maxQueuedBytes:   defaultMaxQueuedBytes,
 		pendingAuth:      make(chan struct{}, defaultMaxPendingAuth),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Snapshot returns the server's counter snapshot for [metrics.Registry].
@@ -375,6 +388,9 @@ func newByteLimiter(rate int64, burst int) *byteLimiter {
 }
 
 func (l *byteLimiter) wait(ctx context.Context, n int) error {
+	if l.rate <= 0 {
+		return nil
+	}
 	for {
 		now := time.Now()
 		l.tokens += now.Sub(l.last).Seconds() * l.rate
