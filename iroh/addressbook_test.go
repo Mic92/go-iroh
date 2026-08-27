@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 )
@@ -108,5 +110,29 @@ func TestWildcardBindAdvertisesInterfaceAddrs(t *testing.T) {
 	off := bindLocal(t, ctx, WithBindAddr(netip.MustParseAddrPort("[::]:0")), WithoutInterfaceAddrs())
 	if ips := off.Addr().IPAddrs(); len(ips) != 0 {
 		t.Fatalf("WithoutInterfaceAddrs: Addr() = %v", off.Addr())
+	}
+}
+
+// TestAddrChangesArePublished: address publishers (pkarr, mDNS, gossip) hear
+// about the endpoint's addresses without the application relaying them.
+func TestAddrChangesArePublished(t *testing.T) {
+	ctx := context.Background()
+	got := make(chan dns.EndpointData, 8)
+	var svcs AddressLookupServices
+	svcs.AddPublisher(AddressPublisherFunc(func(d dns.EndpointData) { got <- d }))
+	ep := bindLocal(t, ctx, WithAddressLookup(&svcs))
+
+	want := netip.MustParseAddrPort("192.0.2.7:4242")
+	ep.AddExternalAddr(want)
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case d := <-got:
+			if slices.Contains(d.IPAddrs(), want) {
+				return
+			}
+		case <-deadline:
+			t.Fatal("publisher never saw the added address")
+		}
 	}
 }

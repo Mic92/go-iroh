@@ -584,6 +584,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 	ep.refreshInterfaceAddrs()
 	ep.addrWatch = watch.NewValueFunc(ep.Addr(), endpointAddrEqual)
 	go ep.runInterfaceAddrs(serveCtx)
+	go ep.runPublishAddr(serveCtx)
 	if ep.netReport != nil {
 		go ep.runNetReport(serveCtx, c.netReportEvery)
 	}
@@ -1079,6 +1080,22 @@ func (e *Endpoint) WatchAddr() watch.Observer[netaddr.EndpointAddr] {
 		e.addrWatch = watch.NewValueFunc(e.addrLocked(), endpointAddrEqual)
 	}
 	return e.addrWatch.Watch()
+}
+
+// runPublishAddr hands every change of Addr() to the address publishers
+// (pkarr, mDNS, gossip).
+func (e *Endpoint) runPublishAddr(ctx context.Context) {
+	w := e.WatchAddr()
+	addr := w.Current()
+	for {
+		if !addr.IsEmpty() {
+			e.lookup.Publish(dns.EndpointDataFromAddr(addr))
+		}
+		var err error
+		if addr, err = w.Updated(ctx); err != nil {
+			return
+		}
+	}
 }
 
 func (e *Endpoint) updateAddrWatchLocked() {
