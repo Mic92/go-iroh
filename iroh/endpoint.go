@@ -58,6 +58,7 @@ type Endpoint struct {
 	// back to the endpoint, so there is no import cycle.
 	remotes *socket.RemoteMap
 	lookup  *AddressLookupServices
+	book    *MemoryLookup
 
 	mu          sync.Mutex
 	closed      bool
@@ -265,10 +266,11 @@ func WithRelayTLSConfig(cfg *stdtls.Config) Option {
 }
 
 // WithAddressLookup sets the address-lookup services the endpoint uses to
-// resolve additional addresses for a remote endpoint (pkarr, DNS, in-memory).
-// The per-remote state machine consults them through its resolve hook. When
-// unset, the endpoint does no lookup-driven address resolution and connects only
-// to the addresses passed to [Endpoint.Connect].
+// resolve addresses for a remote endpoint (pkarr, DNS, mDNS, gossip). They
+// are consulted by [Endpoint.Connect] when the [netaddr.EndpointAddr] carries
+// no transport address, and by the per-remote state machine to find
+// additional paths. The endpoint always has an in-memory service fed by
+// [Endpoint.AddEndpointAddr] in addition to these.
 func WithAddressLookup(s *AddressLookupServices) Option {
 	return func(c *config) error {
 		c.lookup = s
@@ -477,6 +479,12 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		})
 	}
 
+	book := NewMemoryLookupWithProvenance(addressBookProvenance)
+	if c.lookup == nil {
+		c.lookup = &AddressLookupServices{}
+	}
+	c.lookup.AddResolver(book)
+
 	custom := customTransportAdapters(c.custom)
 	var magic *socket.MagicConn
 	if udp == nil {
@@ -513,6 +521,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		hooks:        append([]EndpointHooks(nil), c.hooks...),
 		custom:       append([]CustomTransport(nil), c.custom...),
 		lookup:       c.lookup,
+		book:         book,
 		closedCh:     make(chan struct{}),
 		stableIDs:    make(map[*quic.Conn]uint64),
 	}
@@ -756,6 +765,28 @@ func (e *Endpoint) setExternalNATTraversalCandidates(addrs ...netip.AddrPort) bo
 
 	e.advertiseNATTraversalCandidates()
 	return true
+}
+
+const addressBookProvenance = "endpoint"
+
+// AddEndpointAddr records transport addresses for a remote endpoint so that
+// a later [Endpoint.Connect] with only its [key.EndpointID] can reach it.
+// Accepted connections record their remote path automatically.
+func (e *Endpoint) AddEndpointAddr(addr netaddr.EndpointAddr) {
+	if addr.ID.IsZero() || addr.IsEmpty() {
+		return
+	}
+	e.book.AddEndpointAddr(addr)
+}
+
+// resolveAddr fills addr from the first lookup result that has addresses.
+func (e *Endpoint) resolveAddr(ctx context.Context, addr netaddr.EndpointAddr) netaddr.EndpointAddr {
+	for item, err := range e.lookup.Resolve(ctx, addr.ID) {
+		if ra := item.Addr(); err == nil && !ra.IsEmpty() {
+			return addr.WithAddrs(ra.Addrs()...)
+		}
+	}
+	return addr
 }
 
 // AddExternalAddr pins addr as an externally reachable address and advertises
@@ -1191,9 +1222,12 @@ var ErrHandshakeRejected = errors.New("iroh: handshake rejected by hook")
 var ErrConnClosedDuringHandshake = errors.New("iroh: connection closed during handshake")
 
 // Connect dials the endpoint identified by addr and negotiates alpn, returning
-// an established [Conn]. It tries the direct IP addresses in addr in order, then
-// (if relays are enabled) the relay URLs in addr. A relay path carries the QUIC
-// handshake over a relay mapped address that routes through the relay transport.
+// an established [Conn]. It races the direct IP addresses in addr and (if
+// relays are enabled) its relay URLs. A relay path carries the QUIC handshake
+// over a relay mapped address that routes through the relay transport. When
+// addr holds only an ID, addresses recorded with [Endpoint.AddEndpointAddr],
+// learned from accepted connections, or found by the configured address
+// lookup services are used; [ErrNoAddress] is returned if none are known.
 //
 // Connect blocks until the handshake completes and the peer identity is
 // verified. To send 0-RTT early data before the handshake completes, use
@@ -1265,6 +1299,10 @@ func (e *Endpoint) connectEarly(ctx context.Context, addr netaddr.EndpointAddr, 
 	}
 
 	dials := e.dialTargets(addr)
+	if len(dials) == 0 {
+		addr = e.resolveAddr(ctx, addr)
+		dials = e.dialTargets(addr)
+	}
 	if len(dials) == 0 {
 		return nil, ErrNoAddress
 	}
@@ -1556,6 +1594,9 @@ func (e *Endpoint) registerConn(remote key.EndpointID, qc *quic.Conn, remoteAddr
 	}
 	pathAddr := e.sock.PathAddr(remote, qc.RemoteAddr())
 	adapter := newConnAdapter(qc, pathAddr)
+	if ta, _ := transportAddrFromSocket(pathAddr); ta != nil {
+		e.AddEndpointAddr(netaddr.NewEndpointAddr(remote, ta))
+	}
 	if pathAddr.Kind() == socket.AddrIP {
 		for _, u := range remoteAddr.RelayURLs() {
 			m := e.sock.RelayMappedAddrFor(u, remote)
@@ -1616,14 +1657,11 @@ func (e *Endpoint) removeStableIDWhenClosed(qc *quic.Conn) {
 }
 
 // resolveFunc returns the address-lookup hook the RemoteMap actors use to
-// resolve additional addresses for a remote, or nil when no lookup services are
-// configured. It adapts the iroh AddressLookupServices stream to the socket
-// package's ResolveFunc, so internal/socket does not import iroh.
+// resolve additional addresses for a remote. It adapts the iroh
+// AddressLookupServices stream to the socket package's ResolveFunc, so
+// internal/socket does not import iroh.
 func (e *Endpoint) resolveFunc() socket.ResolveFunc {
 	lookup := e.lookup
-	if lookup == nil {
-		return nil
-	}
 	return func(ctx context.Context, id key.EndpointID) iter.Seq2[socket.ResolvedAddr, error] {
 		return func(yield func(socket.ResolvedAddr, error) bool) {
 			for item, err := range lookup.Resolve(ctx, id) {

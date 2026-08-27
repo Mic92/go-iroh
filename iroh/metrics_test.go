@@ -110,7 +110,8 @@ func TestEndpointMetrics(t *testing.T) {
 		t.Fatalf("server socket Metrics = %+v, want IP receives", sm.Socket)
 	}
 
-	if _, err := client.Connect(ctx, netaddr.NewEndpointAddr(server.ID()), alpn); err == nil {
+	unknown, _ := key.GenerateSecretKey()
+	if _, err := client.Connect(ctx, netaddr.NewEndpointAddr(unknown.Public().EndpointID()), alpn); err == nil {
 		t.Fatal("connect without address succeeded")
 	}
 	cm = client.Metrics()

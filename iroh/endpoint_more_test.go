@@ -519,16 +519,6 @@ func containsAddrPort(addrs []netip.AddrPort, want netip.AddrPort) bool {
 func TestEndpointWithAddressLookup(t *testing.T) {
 	ctx := context.Background()
 
-	// Without WithAddressLookup, the endpoint installs no resolve hook.
-	plain, err := Bind(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer plain.Shutdown(ctx)
-	if plain.resolveFunc() != nil {
-		t.Error("resolveFunc() != nil without WithAddressLookup, want nil")
-	}
-
 	// With WithAddressLookup, the hook resolves through the registered services.
 	sk, _ := key.GenerateSecretKey()
 	id := sk.Public().EndpointID()
