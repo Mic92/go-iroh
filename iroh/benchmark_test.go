@@ -70,6 +70,14 @@ func readBenchmarkCPUTime(b *testing.B) benchmarkCPUTime {
 	}
 }
 
+// reportCPUPerOp reports process CPU time per op since start. Unlike ns/op it
+// is insensitive to frequency scaling and to time spent blocked.
+func reportCPUPerOp(b *testing.B, start benchmarkCPUTime) {
+	end := readBenchmarkCPUTime(b)
+	ns := (end.userNS - start.userNS) + (end.sysNS - start.sysNS)
+	b.ReportMetric(float64(ns)/float64(b.N)/1e3, "cpu-µs/op")
+}
+
 func emitLayerLadderSample(b *testing.B, rung string, bytes int64) {
 	emitLayerLadderSampleMetrics(b, rung, bytes, benchmarkCPUTime{-1, -1}, nil)
 }
@@ -533,6 +541,7 @@ func BenchmarkConnStreamThroughput(b *testing.B) {
 		}
 	}
 	b.StopTimer()
+	reportCPUPerOp(b, cpuStart)
 	transport := reportConnSenderStats(b, client, clientStart)
 	emitLayerLadderSampleRecord(b, layerLadderSample{
 		Rung:      "full-steady",

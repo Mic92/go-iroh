@@ -54,9 +54,18 @@ type relayMetrics struct {
 	datagramsDropped   atomic.Uint64
 }
 
+// Option configures a [Server].
+type Option func(*Server)
+
+// WithClientRate sets the per-client receive rate limit in bytes per
+// second (default 64 MiB/s); <= 0 disables it.
+func WithClientRate(bytesPerSecond int64) Option {
+	return func(s *Server) { s.clientRate = bytesPerSecond }
+}
+
 // New returns a relay server.
-func New() *Server {
-	return &Server{
+func New(opts ...Option) *Server {
+	s := &Server{
 		clients:          make(map[key.EndpointID]*session),
 		establishTimeout: defaultEstablishTimeout,
 		writeTimeout:     defaultWriteTimeout,
@@ -64,6 +73,10 @@ func New() *Server {
 		maxQueuedBytes:   defaultMaxQueuedBytes,
 		pendingAuth:      make(chan struct{}, defaultMaxPendingAuth),
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Snapshot returns the server's counter snapshot for [metrics.Registry].
@@ -178,8 +191,9 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	// passed to wait fits in a full bucket.
 	limiter := newByteLimiter(s.clientRate, maxFrameSize)
 
+	var rd relayproto.FrameReader
 	for {
-		_, data, err := conn.Read(ctx)
+		data, err := rd.Read(ctx, conn)
 		if err != nil {
 			return
 		}
@@ -331,7 +345,7 @@ func (s *Server) lookup(id key.EndpointID) *session {
 }
 
 func (s *session) enqueue(msg relayproto.RelayToClientMsg) bool {
-	b := msg.AppendTo(nil)
+	b := msg.AppendTo(make([]byte, 0, msg.EncodedLen()))
 	n := int64(len(b))
 	for {
 		queued := s.queuedBytes.Load()
@@ -375,6 +389,9 @@ func newByteLimiter(rate int64, burst int) *byteLimiter {
 }
 
 func (l *byteLimiter) wait(ctx context.Context, n int) error {
+	if l.rate <= 0 {
+		return nil
+	}
 	for {
 		now := time.Now()
 		l.tokens += now.Sub(l.last).Seconds() * l.rate
