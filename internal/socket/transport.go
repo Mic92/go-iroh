@@ -51,8 +51,10 @@ type MagicConn struct {
 	readDeadline  deadline
 	writeDeadline deadline
 
-	recvAddrs map[netip.AddrPort]*net.UDPAddr
-	metrics   Metrics
+	recvAddrsMu sync.RWMutex
+	recvAddrs   map[netip.AddrPort]*net.UDPAddr
+
+	metrics Metrics
 
 	endpointMu     sync.RWMutex
 	endpointSender func(key.EndpointID, []byte) bool
@@ -239,12 +241,26 @@ func (m *MagicConn) recvAddr(info RecvInfo) (net.Addr, bool) {
 	}
 }
 
+// udpAddr returns the *net.UDPAddr for ap, caching it so that repeated
+// receives from one peer return the same value. ReadFrom may run from several
+// goroutines, so the cache is locked; the read path takes the shared lock and
+// only a first sighting takes the exclusive one.
 func (m *MagicConn) udpAddr(ap netip.AddrPort) *net.UDPAddr {
 	ap = canonicalAddrPort(ap)
+	m.recvAddrsMu.RLock()
+	addr, ok := m.recvAddrs[ap]
+	m.recvAddrsMu.RUnlock()
+	if ok {
+		return addr
+	}
+	m.recvAddrsMu.Lock()
+	defer m.recvAddrsMu.Unlock()
+	// Another goroutine may have added ap since the shared lock was dropped.
+	// Reuse its value so that one peer keeps one address.
 	if addr, ok := m.recvAddrs[ap]; ok {
 		return addr
 	}
-	addr := udpAddrFromAddrPort(ap)
+	addr = udpAddrFromAddrPort(ap)
 	m.recvAddrs[ap] = addr
 	return addr
 }
