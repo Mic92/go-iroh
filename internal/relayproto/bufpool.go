@@ -7,23 +7,30 @@ var (
 	largePool = sync.Pool{New: func() any { b := make([]byte, MaxPacketSize); return &b }}
 )
 
-// GetBuf returns a pooled buffer of length n (n <= MaxPacketSize).
+// GetBuf returns a buffer of length n. A frame may encode to more than
+// MaxPacketSize, which no pool here holds, so n above that is allocated.
 func GetBuf(n int) *[]byte {
 	var p *[]byte
-	if n <= 2048 {
+	switch {
+	case n <= 2048:
 		p = smallPool.Get().(*[]byte)
-	} else {
+	case n <= MaxPacketSize:
 		p = largePool.Get().(*[]byte)
+	default:
+		b := make([]byte, n)
+		return &b
 	}
 	*p = (*p)[:n]
 	return p
 }
 
-// PutBuf returns a buffer obtained from GetBuf.
+// PutBuf returns a buffer obtained from GetBuf. A buffer larger than either
+// pool holds is dropped rather than kept.
 func PutBuf(p *[]byte) {
-	if cap(*p) <= 2048 {
+	switch c := cap(*p); {
+	case c <= 2048:
 		smallPool.Put(p)
-	} else {
+	case c <= MaxPacketSize:
 		largePool.Put(p)
 	}
 }
