@@ -86,11 +86,16 @@ func NewMap(configs ...Config) *Map {
 // enables QUIC address discovery on [DefaultQUICPort]. net_report only probes
 // relays whose config has a QUIC section, so a nil default would disable
 // address discovery for every URL-built map, including [DefaultMap]. A relay
-// without QAD just fails the probe, which stays latency-only.
+// without QAD just fails the probe, which stays latency-only. Plain http://
+// relays get no QUIC section: QAD requires TLS, so probing them would only
+// spend the probe timeout.
 func MapFromURLs(urls ...netaddr.RelayURL) *Map {
 	configs := make([]Config, len(urls))
 	for i, u := range urls {
-		configs[i] = Config{URL: u, QUIC: &QUICConfig{Port: DefaultQUICPort}}
+		configs[i] = Config{URL: u}
+		if pu := u.URL(); pu == nil || pu.Scheme != "http" {
+			configs[i].QUIC = &QUICConfig{Port: DefaultQUICPort}
+		}
 	}
 	return NewMap(configs...)
 }

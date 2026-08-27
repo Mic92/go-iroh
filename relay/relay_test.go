@@ -72,3 +72,15 @@ func TestDefaultMapHasN0Relays(t *testing.T) {
 		t.Errorf("default map missing NA-east relay; got %v", urls)
 	}
 }
+
+func TestMapFromURLsNoQUICForPlainHTTP(t *testing.T) {
+	https, _ := netaddr.ParseRelayURL("https://relay.example")
+	plain, _ := netaddr.ParseRelayURL("http://10.0.0.1:3340")
+	m := MapFromURLs(https, plain)
+	if c, _ := m.Get(https); c.QUIC == nil {
+		t.Fatalf("https relay lost its QUIC config")
+	}
+	if c, _ := m.Get(plain); c.QUIC != nil {
+		t.Fatalf("http relay got QUIC config %+v; QAD needs TLS", c.QUIC)
+	}
+}
