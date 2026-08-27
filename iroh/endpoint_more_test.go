@@ -823,7 +823,7 @@ func TestEndpointIDMappedSendFansOut(t *testing.T) {
 func TestEndpointLocalNATTraversalCandidates(t *testing.T) {
 	ctx := context.Background()
 
-	unspecified, err := Bind(ctx)
+	unspecified, err := Bind(ctx, WithoutInterfaceAddrs())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1215,12 +1215,12 @@ func TestEndpointQADCandidatesOpenSelectedQNTRouteDataPath(t *testing.T) {
 	mode := relay.ModeCustom(relay.MapFromURLs(relayURL))
 
 	const alpn = "iroh-qad-qnt-data-path/0"
-	server, err := Bind(ctx, WithALPNs(alpn), WithRelayMode(mode))
+	server, err := Bind(ctx, WithALPNs(alpn), WithRelayMode(mode), WithoutInterfaceAddrs())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Shutdown(ctx)
-	client, err := Bind(ctx, WithRelayMode(mode))
+	client, err := Bind(ctx, WithRelayMode(mode), WithoutInterfaceAddrs())
 	if err != nil {
 		t.Fatal(err)
 	}

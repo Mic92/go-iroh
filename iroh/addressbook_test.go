@@ -86,3 +86,27 @@ func TestConnectBackByID(t *testing.T) {
 	}
 	back.Close()
 }
+
+// TestWildcardBindAdvertisesInterfaceAddrs: an endpoint on [::]:0 must give
+// peers something dialable without a relay.
+func TestWildcardBindAdvertisesInterfaceAddrs(t *testing.T) {
+	ctx := context.Background()
+	if len(interfaceAddrs(false)) == 0 {
+		t.Skip("no non-loopback interfaces")
+	}
+	ep := bindLocal(t, ctx, WithBindAddr(netip.MustParseAddrPort("[::]:0")))
+	port := ep.LocalAddr().Port()
+	ips := ep.Addr().IPAddrs()
+	if len(ips) == 0 {
+		t.Fatalf("Addr() = %v has no IPs", ep.Addr())
+	}
+	for _, ip := range ips {
+		if ip.Addr().IsUnspecified() || ip.Port() != port {
+			t.Fatalf("bad advertised addr %v (port %d)", ip, port)
+		}
+	}
+	off := bindLocal(t, ctx, WithBindAddr(netip.MustParseAddrPort("[::]:0")), WithoutInterfaceAddrs())
+	if ips := off.Addr().IPAddrs(); len(ips) != 0 {
+		t.Fatalf("WithoutInterfaceAddrs: Addr() = %v", off.Addr())
+	}
+}

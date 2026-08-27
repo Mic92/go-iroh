@@ -71,6 +71,8 @@ type Endpoint struct {
 	// report cannot drop pinned candidates, nor pinning keep stale ones.
 	externalPinned     []netip.AddrPort
 	externalDiscovered []netip.AddrPort
+	externalIface      []netip.AddrPort
+	noIfaceAddrs       bool
 	netReport          netReportRunner
 	lastReport         *NetReport
 	nextStable         uint64
@@ -110,6 +112,7 @@ type config struct {
 	pathSelector    socket.PathSelector
 	relayFirst      bool
 	relayTLS        *stdtls.Config
+	noIfaceAddrs    bool
 	verifySource    func(net.Addr) bool
 	hooks           []EndpointHooks
 	custom          []CustomTransport
@@ -249,6 +252,16 @@ func WithoutRelayTransports() Option {
 func WithRelayFirstDial() Option {
 	return func(c *config) error {
 		c.relayFirst = true
+		return nil
+	}
+}
+
+// WithoutInterfaceAddrs stops a wildcard-bound endpoint from advertising
+// the addresses of its local network interfaces. Only the addresses learned
+// from net-report, NAT-PMP and [Endpoint.AddExternalAddr] remain.
+func WithoutInterfaceAddrs() Option {
+	return func(c *config) error {
+		c.noIfaceAddrs = true
 		return nil
 	}
 }
@@ -517,6 +530,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		// must not be advertised regardless of the requested disableIP.
 		disableIP:    c.disableIP || udp == nil,
 		relayFirst:   c.relayFirst,
+		noIfaceAddrs: c.noIfaceAddrs,
 		verifySource: c.verifySource,
 		hooks:        append([]EndpointHooks(nil), c.hooks...),
 		custom:       append([]CustomTransport(nil), c.custom...),
@@ -567,7 +581,9 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 			return nil, err
 		}
 	}
+	ep.refreshInterfaceAddrs()
 	ep.addrWatch = watch.NewValueFunc(ep.Addr(), endpointAddrEqual)
+	go ep.runInterfaceAddrs(serveCtx)
 	if ep.netReport != nil {
 		go ep.runNetReport(serveCtx, c.netReportEvery)
 	}
@@ -605,7 +621,7 @@ func endpointNetReportRunner(c config, relayMap *relay.Map, dialer netreport.QAD
 		client = client.WithQADDialer(dialer)
 	}
 	return func(ctx context.Context) (*netreport.Report, error) {
-		return client.GetReport(ctx, netreport.IfStateDetails{HaveV4: true, HaveV6: true}, false)
+		return client.GetReport(ctx, ifState(), false)
 	}
 }
 
@@ -713,10 +729,13 @@ func (e *Endpoint) LocalAddr() netip.AddrPort {
 	return e.udp.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
-// externalNATLocked returns the pinned and net-report-discovered external
-// candidates, pinned first, deduplicated. e.mu must be held.
+// externalNATLocked returns the pinned, interface and net-report-discovered
+// external candidates in that order, deduplicated. e.mu must be held.
 func (e *Endpoint) externalNATLocked() []netip.AddrPort {
 	out := append([]netip.AddrPort(nil), e.externalPinned...)
+	for _, addr := range e.externalIface {
+		out = appendUniqueNATTraversalCandidate(out, addr)
+	}
 	for _, addr := range e.externalDiscovered {
 		out = appendUniqueNATTraversalCandidate(out, addr)
 	}
@@ -1016,9 +1035,10 @@ func equalAddrPorts(a, b []netip.AddrPort) bool {
 }
 
 // Addr returns the endpoint's [netaddr.EndpointAddr] from currently-known local
-// information: its id, the bound direct address, any custom transport
-// addresses, and (when relays are enabled and a home relay is connected) its
-// home relay URL. Later slices add reflexive addresses.
+// information: its id, the bound address if specific or the local interface
+// addresses if bound to a wildcard, addresses from [Endpoint.AddExternalAddr]
+// and net-report, any custom transport addresses, and (when relays are enabled
+// and a home relay is connected) its home relay URL.
 func (e *Endpoint) Addr() netaddr.EndpointAddr {
 	a := netaddr.NewEndpointAddr(e.ID())
 	if !e.disableIP {

@@ -63,6 +63,7 @@ func (r qadRelay) bind(t testing.TB, ctx context.Context, opts ...Option) *Endpo
 		WithRelayTLSConfig(&tls.Config{RootCAs: r.rootCAs}),
 		WithNetReport(),
 		WithBindAddr(netip.MustParseAddrPort("0.0.0.0:0")),
+		WithoutInterfaceAddrs(),
 	}, opts...)
 	ep, err := Bind(ctx, opts...)
 	if err != nil {
