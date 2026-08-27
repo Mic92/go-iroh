@@ -63,6 +63,7 @@ type Endpoint struct {
 	mu          sync.Mutex
 	closed      bool
 	closedCh    chan struct{}
+	handshook   chan acceptResult
 	acceptOwner acceptOwner
 	addrWatch   *watch.Value[netaddr.EndpointAddr]
 	// externalPinned holds addresses pinned via AddExternalAddr until
@@ -537,6 +538,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		lookup:       c.lookup,
 		book:         book,
 		closedCh:     make(chan struct{}),
+		handshook:    make(chan acceptResult),
 		stableIDs:    make(map[*quic.Conn]uint64),
 	}
 	// Assigned after the literal: the runner needs ep.transport so QAD
@@ -1523,27 +1525,55 @@ func (e *Endpoint) Accept(ctx context.Context) (*Conn, error) {
 	return conn, nil
 }
 
+type acceptResult struct {
+	conn *Conn
+	err  error
+}
+
+// accept completes handshakes concurrently so one stalled attempt does not
+// hold back connections arriving after it.
 func (e *Endpoint) accept(ctx context.Context) (*Conn, error) {
+	lctx, stop := context.WithCancel(ctx)
+	defer stop()
+	lnErr := make(chan error, 1)
+	go func() {
+		for {
+			in, err := e.acceptIncoming(lctx)
+			if err != nil {
+				lnErr <- err
+				return
+			}
+			accepting, err := in.Accept()
+			if err != nil {
+				lnErr <- err
+				return
+			}
+			go e.handshakeAccepted(accepting.qc)
+		}
+	}()
 	for {
-		in, err := e.acceptIncoming(ctx)
-		if err != nil {
+		select {
+		case r := <-e.handshook:
+			if errors.Is(r.err, ErrConnClosedDuringHandshake) {
+				continue
+			}
+			return r.conn, r.err
+		case err := <-lnErr:
 			return nil, err
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
-		accepting, err := in.Accept()
-		if err != nil {
-			return nil, err
+	}
+}
+
+func (e *Endpoint) handshakeAccepted(qc *quic.Conn) {
+	conn, err := e.finishAccepting(context.Background(), qc)
+	select {
+	case e.handshook <- acceptResult{conn, err}:
+	case <-e.closedCh:
+		if conn != nil {
+			conn.CloseWithError(0, "")
 		}
-		conn, err := accepting.Connection(ctx)
-		if errors.Is(err, ErrConnClosedDuringHandshake) {
-			// A connection attempt dying before its handshake completes must
-			// not tear down the acceptor; wait for the next incoming
-			// connection instead.
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		return conn, nil
 	}
 }
 
