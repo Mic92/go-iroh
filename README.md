@@ -36,7 +36,7 @@ Protocols (Rust-compatible ports):
 
 | Package | Purpose |
 |---|---|
-| `blobs` | content-addressed blob tickets, identifiers, and BAO transfer |
+| `blobs` | content-addressed blob tickets, identifiers, blob stores, and BAO transfer |
 | `gossip` | iroh-gossip pub/sub mesh (HyParView membership, PlumTree broadcast) |
 | `docs` | iroh-docs multi-writer key-value documents and range sync |
 | `endpointticket` | Rust-compatible endpoint ticket codec |
