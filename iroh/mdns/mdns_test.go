@@ -66,7 +66,8 @@ func TestDiscoveryResolveFromPacket(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := sk.Public().EndpointID()
-	d := New(id, WithLookupTimeout(20*time.Millisecond))
+	self, _ := key.GenerateSecretKey()
+	d := New(self.Public().EndpointID(), WithLookupTimeout(20*time.Millisecond))
 	packet, err := buildAnnouncement(DefaultServiceName, announcementData{
 		id:   id,
 		port: 7777,
@@ -178,4 +179,42 @@ func sameAddrPorts(a, b []netip.AddrPort) bool {
 		seen[addr]--
 	}
 	return true
+}
+
+// TestDiscoveryAnswersQueries: a node that starts after another one announced
+// still finds it, because the older node answers the browse query. Uses a
+// random service name so LAN neighbours do not interfere.
+func TestDiscoveryAnswersQueries(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	svcKey, _ := key.GenerateSecretKey()
+	svc := "t" + endpointLabel(svcKey.Public().EndpointID())[:10]
+
+	oldKey, _ := key.GenerateSecretKey()
+	old := New(oldKey.Public().EndpointID(), WithServiceName(svc), WithQueryInterval(time.Hour))
+	old.Publish(dns.NewEndpointData(netaddr.IPAddr{Addr: netip.MustParseAddrPort("192.0.2.1:1111")}))
+	oldErr := make(chan error, 1)
+	go func() { oldErr <- old.Start(ctx) }()
+	select {
+	case err := <-oldErr:
+		t.Skipf("mdns listen: %v", err)
+	case <-time.After(1500 * time.Millisecond):
+		// both RFC 6762 announcements are out now
+	}
+
+	newKey, _ := key.GenerateSecretKey()
+	late := New(newKey.Public().EndpointID(), WithServiceName(svc), WithQueryInterval(time.Hour))
+	go late.Start(ctx)
+	for {
+		for _, id := range late.Peers() {
+			if id.Equal(oldKey.Public().EndpointID()) {
+				return
+			}
+		}
+		select {
+		case <-late.Updated():
+		case <-ctx.Done():
+			t.Fatalf("late node never heard the old one; peers=%v", late.Peers())
+		}
+	}
 }

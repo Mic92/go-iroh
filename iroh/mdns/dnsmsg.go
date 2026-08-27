@@ -191,6 +191,10 @@ func parseAnnouncement(packet []byte, service string) (dns.EndpointInfo, bool) {
 	if err != nil {
 		return dns.EndpointInfo{}, false
 	}
+	return infoFromMessage(msg, service)
+}
+
+func infoFromMessage(msg dnsMessage, service string) (dns.EndpointInfo, bool) {
 	instService := "." + serviceName(service)
 	hosts := make(map[string][]netip.Addr)
 	txt := make(map[string]map[string]string)
@@ -250,7 +254,9 @@ func parseAnnouncement(packet []byte, service string) (dns.EndpointInfo, bool) {
 }
 
 type dnsMessage struct {
-	answers []resourceRecord
+	response  bool
+	questions []string
+	answers   []resourceRecord
 }
 
 type resourceRecord struct {
@@ -272,18 +278,20 @@ func parseDNS(packet []byte) (dnsMessage, error) {
 	ns := int(binary.BigEndian.Uint16(packet[8:10]))
 	ar := int(binary.BigEndian.Uint16(packet[10:12]))
 	off := 12
+	var msg dnsMessage
+	msg.response = packet[2]&0x80 != 0
 	for i := 0; i < qd; i++ {
-		var err error
-		_, off, err = readName(packet, off)
+		name, next, err := readName(packet, off)
 		if err != nil {
 			return dnsMessage{}, err
 		}
+		off = next
 		if off+4 > len(packet) {
 			return dnsMessage{}, errors.New("mdns: short question")
 		}
 		off += 4
+		msg.questions = append(msg.questions, strings.ToLower(strings.TrimSuffix(name, ".")))
 	}
-	var msg dnsMessage
 	for i := 0; i < an+ns+ar; i++ {
 		rr, next, err := readRR(packet, off)
 		if err != nil {

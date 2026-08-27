@@ -10,6 +10,7 @@ import (
 	"iter"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 	"github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 )
 
 const (
@@ -29,6 +31,9 @@ const (
 
 	defaultLookupTimeout = 10 * time.Second
 	mdnsPort             = 5353
+	// DefaultQueryInterval is how often the service is browsed so peers that
+	// joined later, or whose announcement was lost, are still found.
+	DefaultQueryInterval = time.Minute
 )
 
 var (
@@ -46,9 +51,14 @@ type Discovery struct {
 	passive     bool
 	timeout     time.Duration
 
-	mu    sync.RWMutex
-	peers map[key.EndpointID]peerInfo
-	conn  *net.UDPConn
+	interval time.Duration
+
+	mu      sync.RWMutex
+	peers   map[key.EndpointID]peerInfo
+	conn4   *net.UDPConn
+	conn6   *net.UDPConn
+	last    []byte // most recent announcement, answered to queries
+	updated chan struct{}
 }
 
 type peerInfo struct {
@@ -86,6 +96,16 @@ func WithLookupTimeout(timeout time.Duration) Option {
 	}
 }
 
+// WithQueryInterval sets how often the local network is browsed for the
+// service while Start runs. Non-positive values use [DefaultQueryInterval].
+func WithQueryInterval(every time.Duration) Option {
+	return func(d *Discovery) {
+		if every > 0 {
+			d.interval = every
+		}
+	}
+}
+
 // New returns a Discovery for id using the default iroh local-network service
 // name.
 func New(id key.EndpointID, opts ...Option) *Discovery {
@@ -93,7 +113,9 @@ func New(id key.EndpointID, opts ...Option) *Discovery {
 		id:          id,
 		serviceName: DefaultServiceName,
 		timeout:     defaultLookupTimeout,
+		interval:    DefaultQueryInterval,
 		peers:       make(map[key.EndpointID]peerInfo),
+		updated:     make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -101,38 +123,68 @@ func New(id key.EndpointID, opts ...Option) *Discovery {
 	return d
 }
 
-// Start listens for mDNS packets until ctx is cancelled. It is safe to call
-// Publish before Start, but Resolve only observes remote responses while Start
-// is running.
+// Start listens for mDNS packets on IPv4 and IPv6 until ctx is cancelled,
+// answers queries for this endpoint's instance, and browses the service every
+// query interval. It is safe to call Publish before Start, but Resolve and
+// Peers only observe remote responses while Start is running.
 func (d *Discovery) Start(ctx context.Context) error {
 	if d == nil {
 		return errors.New("mdns: nil Discovery")
 	}
-	conn, err := listenIPv4MDNS(ctx)
-	if err != nil {
-		return err
+	conn4, err4 := listenMDNS(ctx, false)
+	conn6, err6 := listenMDNS(ctx, true)
+	if err4 != nil && err6 != nil {
+		return errors.Join(err4, err6)
 	}
-	defer conn.Close()
-
 	d.mu.Lock()
-	if d.conn == nil {
-		d.conn = conn
-	}
+	d.conn4, d.conn6 = conn4, conn6
 	d.mu.Unlock()
 	defer func() {
 		d.mu.Lock()
-		if d.conn == conn {
-			d.conn = nil
-		}
+		d.conn4, d.conn6 = nil, nil
 		d.mu.Unlock()
 	}()
+	errc := make(chan error, 2)
+	for _, c := range []*net.UDPConn{conn4, conn6} {
+		if c != nil {
+			defer c.Close()
+			stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+			defer stop()
+			go func() { errc <- d.readLoop(ctx, c) }()
+		}
+	}
 
-	go func() {
-		<-ctx.Done()
-		_ = conn.Close()
-	}()
+	// RFC 6762 §8.3: announce at least twice, one second apart. Then browse
+	// so already-running peers answer.
+	d.reannounce()
+	d.browse()
+	second := time.After(time.Second)
+	tick := time.NewTicker(d.interval)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-errc:
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		case <-second:
+			d.reannounce()
+		case <-tick.C:
+			d.browse()
+		}
+	}
+}
 
-	buf := make([]byte, 1500)
+func (d *Discovery) reannounce() {
+	d.mu.RLock()
+	last := d.last
+	d.mu.RUnlock()
+	d.writeMulticast(last)
+}
+
+func (d *Discovery) readLoop(ctx context.Context, conn *net.UDPConn) error {
+	buf := make([]byte, 9000)
 	for {
 		n, _, err := conn.ReadFromUDPAddrPort(buf)
 		if err != nil {
@@ -145,33 +197,60 @@ func (d *Discovery) Start(ctx context.Context) error {
 	}
 }
 
-func listenIPv4MDNS(ctx context.Context) (*net.UDPConn, error) {
+// Peers returns the endpoints heard on the local network so far.
+func (d *Discovery) Peers() []key.EndpointID {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]key.EndpointID, 0, len(d.peers))
+	for id := range d.peers {
+		out = append(out, id)
+	}
+	return out
+}
+
+// Updated is signalled (coalesced) when Peers gains a member or a member's
+// addresses change.
+func (d *Discovery) Updated() <-chan struct{} { return d.updated }
+
+func listenMDNS(ctx context.Context, v6 bool) (*net.UDPConn, error) {
+	network, host := "udp4", "0.0.0.0"
+	if v6 {
+		network, host = "udp6", "::"
+	}
 	lc := net.ListenConfig{Control: reusePortControl}
-	pc, err := lc.ListenPacket(ctx, "udp4", net.JoinHostPort("0.0.0.0", fmt.Sprint(mdnsPort)))
+	pc, err := lc.ListenPacket(ctx, network, net.JoinHostPort(host, fmt.Sprint(mdnsPort)))
 	if err != nil {
-		return nil, fmt.Errorf("mdns: listen udp4: %w", err)
+		return nil, fmt.Errorf("mdns: listen %s: %w", network, err)
 	}
 	conn, ok := pc.(*net.UDPConn)
 	if !ok {
 		_ = pc.Close()
 		return nil, errors.New("mdns: listen did not return UDPConn")
 	}
-	p := ipv4.NewPacketConn(conn)
-	group := &net.UDPAddr{IP: net.IPv4(224, 0, 0, 251)}
+	join := func(ifi *net.Interface) error {
+		if v6 {
+			p := ipv6.NewPacketConn(conn)
+			_ = p.SetMulticastLoopback(true)
+			return p.JoinGroup(ifi, &net.UDPAddr{IP: ipv6Multicast.Addr().AsSlice()})
+		}
+		p := ipv4.NewPacketConn(conn)
+		_ = p.SetMulticastLoopback(true)
+		return p.JoinGroup(ifi, &net.UDPAddr{IP: ipv4Multicast.Addr().AsSlice()})
+	}
 	joined := false
 	ifaces, _ := net.Interfaces()
 	for i := range ifaces {
 		if ifaces[i].Flags&net.FlagUp == 0 || ifaces[i].Flags&net.FlagMulticast == 0 {
 			continue
 		}
-		if err := p.JoinGroup(&ifaces[i], group); err == nil {
+		if err := join(&ifaces[i]); err == nil {
 			joined = true
 		}
 	}
 	if !joined {
-		if err := p.JoinGroup(nil, group); err != nil {
+		if err := join(nil); err != nil {
 			_ = conn.Close()
-			return nil, fmt.Errorf("mdns: join ipv4 multicast: %w", err)
+			return nil, fmt.Errorf("mdns: join %s multicast: %w", network, err)
 		}
 	}
 	return conn, nil
@@ -187,6 +266,9 @@ func (d *Discovery) Publish(data dns.EndpointData) {
 	if err != nil {
 		return
 	}
+	d.mu.Lock()
+	d.last = packet
+	d.mu.Unlock()
 	go d.writeMulticast(packet)
 }
 
@@ -236,19 +318,54 @@ func (d *Discovery) item(id key.EndpointID) (iroh.Item, bool) {
 }
 
 func (d *Discovery) handlePacket(packet []byte) {
-	info, ok := parseAnnouncement(packet, d.serviceName)
-	if !ok {
+	msg, err := parseDNS(packet)
+	if err != nil {
+		return
+	}
+	if !msg.response {
+		d.answer(msg.questions)
+		return
+	}
+	info, ok := infoFromMessage(msg, d.serviceName)
+	if !ok || info.ID.Equal(d.id) {
 		return
 	}
 	d.mu.Lock()
-	if d.peers == nil {
-		d.peers = make(map[key.EndpointID]peerInfo)
-	}
+	prev, known := d.peers[info.ID]
 	d.peers[info.ID] = peerInfo{
 		data:        cloneEndpointData(info.Data),
 		lastUpdated: uint64(time.Now().UnixMicro()),
 	}
 	d.mu.Unlock()
+	same := func(a, b netaddr.TransportAddr) bool { return a.Compare(b) == 0 }
+	if !known || !slices.EqualFunc(prev.data.Addrs(), info.Data.Addrs(), same) {
+		select {
+		case d.updated <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// answer responds with our announcement when a query names our service or
+// our instance.
+func (d *Discovery) answer(questions []string) {
+	if d.passive {
+		return
+	}
+	svc := strings.ToLower(serviceName(d.serviceName))
+	inst := strings.ToLower(instanceName(d.serviceName, d.id))
+	if slices.Contains(questions, svc) || slices.Contains(questions, inst) {
+		d.reannounce()
+	}
+}
+
+// browse asks every instance of the service to announce itself.
+func (d *Discovery) browse() {
+	packet, err := buildQuery(serviceName(d.serviceName))
+	if err != nil {
+		return
+	}
+	d.writeMulticast(packet)
 }
 
 func (d *Discovery) query(id key.EndpointID) {
@@ -265,18 +382,37 @@ func (d *Discovery) writeMulticast(packet []byte) {
 		return
 	}
 	d.mu.RLock()
-	conn := d.conn
+	conn4, conn6 := d.conn4, d.conn6
 	d.mu.RUnlock()
-	if conn != nil {
-		_, _ = conn.WriteToUDPAddrPort(packet, ipv4Multicast)
+	if conn4 == nil && conn6 == nil {
+		c, err := net.ListenUDP("udp4", nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = c.WriteToUDPAddrPort(packet, ipv4Multicast)
 		return
 	}
-	conn, err := net.ListenUDP("udp4", nil)
-	if err != nil {
-		return
+	if conn4 != nil {
+		_, _ = conn4.WriteToUDPAddrPort(packet, ipv4Multicast)
 	}
-	defer conn.Close()
-	_, _ = conn.WriteToUDPAddrPort(packet, ipv4Multicast)
+	if conn6 != nil {
+		// ff02::fb is link-scoped, so send once per multicast interface.
+		sent := false
+		ifaces, _ := net.Interfaces()
+		for _, ifi := range ifaces {
+			if ifi.Flags&net.FlagUp == 0 || ifi.Flags&net.FlagMulticast == 0 {
+				continue
+			}
+			dst := netip.AddrPortFrom(ipv6Multicast.Addr().WithZone(ifi.Name), mdnsPort)
+			if _, err := conn6.WriteToUDPAddrPort(packet, dst); err == nil {
+				sent = true
+			}
+		}
+		if !sent {
+			_, _ = conn6.WriteToUDPAddrPort(packet, ipv6Multicast)
+		}
+	}
 }
 
 func (d *Discovery) announcement(data dns.EndpointData) ([]byte, error) {
@@ -377,5 +513,4 @@ func infoFromAnnouncement(a announcementData) dns.EndpointInfo {
 var (
 	_ iroh.AddressPublisher = (*Discovery)(nil)
 	_ iroh.AddressResolver  = (*Discovery)(nil)
-	_                       = ipv6Multicast
 )
