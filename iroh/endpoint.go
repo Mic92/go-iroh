@@ -2,6 +2,7 @@ package iroh
 
 import (
 	"context"
+	stdtls "crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -107,6 +108,7 @@ type config struct {
 	transportConfig *QUICTransportConfig
 	pathSelector    socket.PathSelector
 	relayFirst      bool
+	relayTLS        *stdtls.Config
 	verifySource    func(net.Addr) bool
 	hooks           []EndpointHooks
 	custom          []CustomTransport
@@ -246,6 +248,18 @@ func WithoutRelayTransports() Option {
 func WithRelayFirstDial() Option {
 	return func(c *config) error {
 		c.relayFirst = true
+		return nil
+	}
+}
+
+// WithRelayTLSConfig sets the TLS client configuration used towards relay
+// servers: the relay WebSocket connection, the net-report HTTPS and
+// captive-portal probes, and QAD. Use it to trust a private CA for
+// self-hosted relays. QAD honours RootCAs, InsecureSkipVerify and
+// VerifyPeerCertificate only.
+func WithRelayTLSConfig(cfg *stdtls.Config) Option {
+	return func(c *config) error {
+		c.relayTLS = cfg
 		return nil
 	}
 }
@@ -459,6 +473,7 @@ func Bind(ctx context.Context, opts ...Option) (*Endpoint, error) {
 		relayActor = socket.NewRelayActor(socket.RelayActorConfig{
 			SecretKey: c.secretKey,
 			Map:       relayMap,
+			TLSConfig: c.relayTLS,
 		})
 	}
 
@@ -574,6 +589,9 @@ func endpointNetReportRunner(c config, relayMap *relay.Map, dialer netreport.QAD
 		return nil
 	}
 	client := netreport.NewClient(relayMap)
+	if c.relayTLS != nil {
+		client = client.WithTLSConfig(c.relayTLS).WithQADTLSConfig(qadTLSFromStd(c.relayTLS))
+	}
 	if dialer != nil {
 		client = client.WithQADDialer(dialer)
 	}
@@ -593,6 +611,16 @@ func (e *Endpoint) qadDialer() netreport.QADDialer {
 	}
 	return func(ctx context.Context, addr netip.AddrPort, tlsConf *itls.Config, cfg *quic.Config) (*quic.Conn, error) {
 		return e.transport.Dial(ctx, net.UDPAddrFromAddrPort(addr), tlsConf, cfg)
+	}
+}
+
+// qadTLSFromStd carries the certificate verification policy of a crypto/tls
+// config over to the forked TLS stack QAD runs on.
+func qadTLSFromStd(c *stdtls.Config) *itls.Config {
+	return &itls.Config{
+		RootCAs:               c.RootCAs,
+		InsecureSkipVerify:    c.InsecureSkipVerify, //nolint:gosec // caller's policy
+		VerifyPeerCertificate: c.VerifyPeerCertificate,
 	}
 }
 

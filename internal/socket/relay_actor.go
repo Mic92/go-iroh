@@ -3,6 +3,7 @@ package socket
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"errors"
 	mrand "math/rand/v2"
 	"sync"
@@ -162,6 +163,8 @@ type RelayActorConfig struct {
 	SecretKey key.SecretKey
 	// Map is the relay map; consulted for per-relay auth tokens.
 	Map *relay.Map
+	// TLSConfig, if non-nil, is the TLS client config for relay connections.
+	TLSConfig *tls.Config
 	// dialer overrides the relay dial function. nil uses [defaultRelayDialer].
 	dialer relayDialer
 }
@@ -620,6 +623,7 @@ func (r *activeRelay) dial() (relayClient, bool, error) {
 		c, err := r.parent.dialer(ctx, r.url, relayclient.Options{
 			SecretKey: r.parent.cfg.SecretKey,
 			AuthToken: r.parent.authTokenFor(r.url),
+			TLSConfig: r.parent.cfg.TLSConfig,
 		})
 		done <- result{c: c, err: err}
 	}()
