@@ -385,7 +385,13 @@ func (g *Gossip) send(ctx context.Context, peer PeerID, msg gossipproto.Message)
 	g.mu.Unlock()
 	if sender == nil {
 		if !hasAddr {
-			return fmt.Errorf("gossip: no address for peer %s", peer)
+			// Peers learned through Join/Shuffle carry no address here; the
+			// endpoint's address book may still know them.
+			id, err := endpointFromPeerID(peer)
+			if err != nil {
+				return fmt.Errorf("gossip: no address for peer %s", peer)
+			}
+			addr = netaddr.NewEndpointAddr(id)
 		}
 		if err := g.connect(ctx, peer, addr); err != nil {
 			return err

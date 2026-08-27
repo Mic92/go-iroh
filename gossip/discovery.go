@@ -62,6 +62,7 @@ type Discovery struct {
 	peers   map[key.EndpointID]discoveryPeer
 	topic   *Topic
 	pending *dns.EndpointData
+	updated chan struct{}
 }
 
 type discoveryPeer struct {
@@ -76,6 +77,7 @@ func New(id key.EndpointID, opts ...Option) *Discovery {
 		topicID: DefaultDiscoveryTopic,
 		timeout: defaultDiscoveryTimeout,
 		peers:   make(map[key.EndpointID]discoveryPeer),
+		updated: make(chan struct{}, 1),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -98,6 +100,19 @@ func (d *Discovery) Start(ctx context.Context) error {
 	if pending != nil {
 		d.publishPeerData(*pending)
 	}
+	// A subscriber that falls behind has its handle closed by Gossip; that
+	// must not end discovery, so subscribe again while ctx lives.
+	for {
+		if err := d.run(ctx); err != nil {
+			return err
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+	}
+}
+
+func (d *Discovery) run(ctx context.Context) error {
 	topic, err := d.gossip.Subscribe(ctx, d.topicID, d.bootstrap)
 	if err != nil {
 		return fmt.Errorf("gossip: discovery subscribe: %w", err)
@@ -105,31 +120,68 @@ func (d *Discovery) Start(ctx context.Context) error {
 	d.mu.Lock()
 	d.topic = topic
 	d.mu.Unlock()
-	go func() {
-		<-ctx.Done()
-		_ = topic.Close()
-	}()
+	stop := context.AfterFunc(ctx, func() { _ = topic.Close() })
+	defer stop()
 	for ev, err := range topic.Events() {
 		if err != nil {
 			return err
 		}
-		if ev.Kind == NeighborUp {
+		switch ev.Kind {
+		case NeighborUp:
+			d.addPeer(ev.Peer, nil)
 			d.mu.Lock()
 			pending := cloneEndpointDataPtr(d.pending)
 			d.mu.Unlock()
 			if pending != nil {
 				d.publishPeerData(*pending)
 			}
-			continue
-		}
-		if ev.Kind != PeerData {
-			continue
-		}
-		if err := d.handlePeerData(ev.Peer, ev.Data); err != nil {
-			continue
+		case PeerData:
+			_ = d.handlePeerData(ev.Peer, ev.Data)
 		}
 	}
 	return nil
+}
+
+// Peers returns the endpoints learned from the topic so far, excluding
+// ourselves. Their addresses, when known, have been handed to the endpoint,
+// so each is dialable by ID.
+func (d *Discovery) Peers() []key.EndpointID {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]key.EndpointID, 0, len(d.peers))
+	for id := range d.peers {
+		if !id.Equal(d.id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// Updated is signalled (coalesced) whenever Peers gains a member or a
+// member's addresses change.
+func (d *Discovery) Updated() <-chan struct{} { return d.updated }
+
+func (d *Discovery) addPeer(id key.EndpointID, data *dns.EndpointData) {
+	if id.Equal(d.id) {
+		return
+	}
+	d.mu.Lock()
+	prev, known := d.peers[id]
+	p := discoveryPeer{data: prev.data, lastUpdated: uint64(time.Now().UnixMicro())}
+	if data != nil {
+		p.data = cloneEndpointData(*data)
+	}
+	d.peers[id] = p
+	d.mu.Unlock()
+	if data != nil && d.gossip != nil && d.gossip.ep != nil {
+		d.gossip.ep.AddEndpointAddr(netaddr.NewEndpointAddr(id, data.Addrs()...))
+	}
+	if !known || data != nil {
+		select {
+		case d.updated <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // Publish advertises data on the gossip topic. It is fire-and-forget and
@@ -224,15 +276,7 @@ func (d *Discovery) handlePeerData(id key.EndpointID, b []byte) error {
 	if err != nil {
 		return err
 	}
-	if id.Equal(d.id) {
-		return nil
-	}
-	d.mu.Lock()
-	d.peers[id] = discoveryPeer{
-		data:        cloneEndpointData(data),
-		lastUpdated: uint64(time.Now().UnixMicro()),
-	}
-	d.mu.Unlock()
+	d.addPeer(id, &data)
 	return nil
 }
 
@@ -240,7 +284,7 @@ func (d *Discovery) item(id key.EndpointID) (iroh.Item, bool) {
 	d.mu.Lock()
 	peer, ok := d.peers[id]
 	d.mu.Unlock()
-	if !ok {
+	if !ok || len(peer.data.Addrs()) == 0 {
 		return iroh.Item{}, false
 	}
 	info := dns.EndpointInfo{ID: id, Data: cloneEndpointData(peer.data)}
