@@ -27,6 +27,7 @@ import (
 const (
 	relayPath               = "/relay"
 	pingPath                = "/ping"
+	captivePortalPath       = "/generate_204"
 	maxFrameSize            = 1024 * 1024
 	defaultEstablishTimeout = 30 * time.Second
 	defaultWriteTimeout     = 2 * time.Second
@@ -52,6 +53,7 @@ type relayMetrics struct {
 	pings              atomic.Uint64
 	datagramsForwarded atomic.Uint64
 	datagramsDropped   atomic.Uint64
+	qadConnections     atomic.Uint64
 }
 
 // Option configures a [Server].
@@ -86,18 +88,25 @@ func (s *Server) Snapshot() metrics.Snapshot {
 		"pings":               s.metrics.pings.Load(),
 		"datagrams_forwarded": s.metrics.datagramsForwarded.Load(),
 		"datagrams_dropped":   s.metrics.datagramsDropped.Load(),
+		"qad_connections":     s.metrics.qadConnections.Load(),
 	}
 }
 
-// ServeHTTP handles relay WebSocket requests at /relay and net-report latency
-// probes at /ping. Rust iroh clients require a 200 from /ping before selecting
-// a relay as their home relay (iroh-relay/src/http.rs).
+// ServeHTTP handles relay WebSocket requests at /relay, net-report latency
+// probes at /ping and the captive-portal check at /generate_204
+// (iroh-relay/src/http.rs, server.rs serve_no_content_handler). The latter
+// must be reachable over plain HTTP.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case relayPath:
 		s.handleRelay(w, r)
 	case pingPath:
 		w.WriteHeader(http.StatusOK)
+	case captivePortalPath:
+		if c := r.Header.Get("X-Iroh-Challenge"); c != "" && len(c) <= 64 {
+			w.Header().Set("X-Iroh-Response", "response "+c)
+		}
+		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.NotFound(w, r)
 	}

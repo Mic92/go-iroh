@@ -29,7 +29,7 @@ func TestServeRelaysAndHealth(t *testing.T) {
 	logger := log.New(io.Discard, "", 0)
 
 	done := make(chan error, 1)
-	go func() { done <- serve(ctx, ln, logger, time.Second) }()
+	go func() { done <- serve(ctx, ln, logger, serveOpts{shutdownTimeout: time.Second}) }()
 
 	base := "http://" + ln.Addr().String()
 

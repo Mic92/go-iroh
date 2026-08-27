@@ -387,3 +387,23 @@ func TestDroppedDatagramsAreCounted(t *testing.T) {
 		t.Fatalf("Snapshot = %+v, want dropped=1 forwarded=0", snapshot)
 	}
 }
+
+// TestRelayServerCaptivePortalCheck mirrors what net-report's captive portal
+// probe expects from a relay.
+func TestRelayServerCaptivePortalCheck(t *testing.T) {
+	ts := httptest.NewServer(New())
+	defer ts.Close()
+	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/generate_204", nil)
+	req.Header.Set("X-Iroh-Challenge", "ts_relay.example")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Iroh-Response"); got != "response ts_relay.example" {
+		t.Fatalf("X-Iroh-Response = %q", got)
+	}
+}
