@@ -297,6 +297,9 @@ func (s *AddressLookupServices) Resolve(ctx context.Context, id key.EndpointID) 
 		merged := make(chan lookupResult)
 		for _, resolver := range resolvers {
 			seq := resolver.Resolve(iterCtx, id)
+			if seq == nil {
+				continue
+			}
 			wg.Add(1)
 			go func(seq iter.Seq2[Item, error]) {
 				defer wg.Done()
