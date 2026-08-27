@@ -99,7 +99,7 @@ func BenchmarkConnStreamScaling(b *testing.B) {
 	for _, streams := range []int{1, 4, 16, 64} {
 		b.Run(fmt.Sprintf("streams=%d", streams), func(b *testing.B) {
 			client, server := benchmarkConnPairAddr(b, "iroh-workload-stream-scaling/0", workloadIPv4())
-			benchmarkConnDownloadFlows(b, []*Conn{client}, []*Conn{server}, streams)
+			benchmarkConcurrentDownloads(b, []*Conn{client}, []*Conn{server}, streams)
 		})
 	}
 }
@@ -108,7 +108,7 @@ func BenchmarkConnConnectionScaling(b *testing.B) {
 	for _, connections := range []int{1, 4, 16} {
 		b.Run(fmt.Sprintf("connections=%d", connections), func(b *testing.B) {
 			clients, servers := benchmarkConnFanout(b, connections)
-			benchmarkConnDownloadFlows(b, clients, servers, 1)
+			benchmarkConcurrentDownloads(b, clients, servers, 1)
 		})
 	}
 }
@@ -164,11 +164,25 @@ type acceptedConn struct {
 	err  error
 }
 
-func benchmarkConnDownloadFlows(b *testing.B, clients, servers []*Conn, streamsPerConn int) {
-	b.Helper()
+// requireBenchtime1x calls b.Fatalf unless the benchmark is running with
+// -benchtime=1x. It must not call b.Helper: helper frames are skipped in
+// failure reports, which would attribute the failure to the caller.
+func requireBenchtime1x(b *testing.B) {
 	if b.N != 1 {
 		b.Fatalf("scaling benchmark requires -benchtime=1x; b.N=%d", b.N)
 	}
+}
+
+// benchmarkConcurrentDownloads runs clients*streamsPerConn downloads at once
+// and reports them as a single operation.
+//
+// The total byte count is fixed and divided evenly among the downloads, so
+// raising the stream or connection count splits the same work instead of
+// adding more. The two axes are therefore comparable with each other and
+// with the single-download case.
+func benchmarkConcurrentDownloads(b *testing.B, clients, servers []*Conn, streamsPerConn int) {
+	b.Helper()
+	requireBenchtime1x(b)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	flows := len(clients) * streamsPerConn
@@ -243,6 +257,8 @@ func workloadScalingBytes(b *testing.B) int64 {
 	return bytes
 }
 
+// benchmarkConnDownloadServer serves one connection's streams for
+// benchmarkConcurrentDownloads.
 func benchmarkConnDownloadServer(ctx context.Context, server *Conn, streams int, bytes int64, done chan<- error) {
 	for i := range streams {
 		stream, err := server.AcceptStream(ctx)
