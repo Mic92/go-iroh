@@ -106,7 +106,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type session struct {
 	id             key.EndpointID
 	version        relayproto.ProtocolVersion
-	send           chan []byte
+	send           chan *[]byte
 	queuedBytes    atomic.Int64
 	maxQueuedBytes int64
 	replaced       chan []byte
@@ -158,7 +158,7 @@ func (s *Server) handleRelay(w http.ResponseWriter, r *http.Request) {
 	sess := &session{
 		id:             id,
 		version:        version,
-		send:           make(chan []byte, relayproto.PerClientSendQueueDepth),
+		send:           make(chan *[]byte, relayproto.PerClientSendQueueDepth),
 		maxQueuedBytes: s.maxQueuedBytes,
 		replaced:       make(chan []byte, 1),
 	}
@@ -280,8 +280,10 @@ func writeLoop(ctx context.Context, conn *websocket.Conn, sess *session, timeout
 			}
 			return errors.New("relayserver: session replaced")
 		case b := <-sess.send:
-			sess.queuedBytes.Add(-int64(len(b)))
-			if err := write(b); err != nil {
+			sess.queuedBytes.Add(-int64(len(*b)))
+			err := write(*b)
+			relayproto.PutBuf(b)
+			if err != nil {
 				return err
 			}
 		}
@@ -345,8 +347,9 @@ func (s *Server) lookup(id key.EndpointID) *session {
 }
 
 func (s *session) enqueue(msg relayproto.RelayToClientMsg) bool {
-	b := msg.AppendTo(make([]byte, 0, msg.EncodedLen()))
-	n := int64(len(b))
+	b := relayproto.GetBuf(msg.EncodedLen())
+	*b = msg.AppendTo((*b)[:0])
+	n := int64(len(*b))
 	for {
 		queued := s.queuedBytes.Load()
 		if n > s.maxQueuedBytes || queued > s.maxQueuedBytes-n {
@@ -361,6 +364,7 @@ func (s *session) enqueue(msg relayproto.RelayToClientMsg) bool {
 		return true
 	default:
 		s.queuedBytes.Add(-n)
+		relayproto.PutBuf(b)
 		return false
 	}
 }
