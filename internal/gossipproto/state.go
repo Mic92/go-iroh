@@ -1,7 +1,9 @@
 package gossipproto
 
 import (
+	"bytes"
 	"math/rand"
+	"slices"
 	"time"
 )
 
@@ -108,12 +110,15 @@ func NewStateWithRand(me PeerID, data PeerData, config Config, r *rand.Rand) *St
 	}
 }
 
-// Topics returns a snapshot of joined topic IDs.
+// Topics returns a snapshot of joined topic IDs, sorted.
 func (s *State) Topics() []TopicID {
 	out := make([]TopicID, 0, len(s.topics))
 	for topic := range s.topics {
 		out = append(out, topic)
 	}
+	slices.SortFunc(out, func(a, b TopicID) int {
+		return bytes.Compare(a[:], b[:])
+	})
 	return out
 }
 
@@ -158,7 +163,8 @@ func (s *State) Handle(ev InEvent) []OutEvent {
 		}, false)
 	case PeerDisconnected:
 		var out []OutEvent
-		for topic, st := range s.topics {
+		for _, topic := range s.Topics() {
+			st := s.topics[topic]
 			for _, ev := range st.Handle(TopicInEvent{Kind: TopicPeerDisconnected, Peer: ev.Peer, Now: ev.Now}) {
 				s.handleTopicOut(topic, ev, &out)
 			}
@@ -168,7 +174,8 @@ func (s *State) Handle(ev InEvent) []OutEvent {
 	case UpdatePeerData:
 		s.meData = clonePeerData(ev.Data)
 		var out []OutEvent
-		for topic, st := range s.topics {
+		for _, topic := range s.Topics() {
+			st := s.topics[topic]
 			for _, ev := range st.Handle(TopicInEvent{Kind: TopicUpdatePeerData, Data: s.meData, Now: ev.Now}) {
 				s.handleTopicOut(topic, ev, &out)
 			}
