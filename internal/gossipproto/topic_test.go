@@ -9,7 +9,7 @@ import (
 func TestTopicStateJoinAndBroadcast(t *testing.T) {
 	me := PeerID(seq32(1))
 	peer := PeerID(seq32(2))
-	state := NewTopicState(me, nil, DefaultTopicConfig())
+	state := NewTopicStateWithRand(me, nil, DefaultTopicConfig(), testRand(t))
 
 	got := state.Handle(TopicInEvent{
 		Kind: TopicCommandEvent,
@@ -78,7 +78,7 @@ func TestStateJoinQuitAndRoute(t *testing.T) {
 	me := PeerID(seq32(1))
 	peer := PeerID(seq32(2))
 	topic := TopicID(seq32(3))
-	state := NewState(me, nil, DefaultConfig())
+	state := NewStateWithRand(me, nil, DefaultConfig(), testRand(t))
 
 	got := state.Handle(InEvent{
 		Kind:  CommandEvent,
@@ -116,9 +116,9 @@ func TestStateDisconnectPeerOnlyAfterLastTopic(t *testing.T) {
 	peer := PeerID(seq32(2))
 	topicA := TopicID(seq32(3))
 	topicB := TopicID(seq32(4))
-	state := NewState(me, nil, DefaultConfig())
-	state.topics[topicA] = NewTopicState(me, nil, DefaultTopicConfig())
-	state.topics[topicB] = NewTopicState(me, nil, DefaultTopicConfig())
+	state := NewStateWithRand(me, nil, DefaultConfig(), testRand(t))
+	state.topics[topicA] = NewTopicStateWithRand(me, nil, DefaultTopicConfig(), testRand(t))
+	state.topics[topicB] = NewTopicStateWithRand(me, nil, DefaultTopicConfig(), testRand(t))
 	state.peerTopics[peer] = map[TopicID]struct{}{topicA: {}, topicB: {}}
 
 	msg := Message{
@@ -143,7 +143,7 @@ func TestStateDisconnectPeerOnlyAfterLastTopic(t *testing.T) {
 func TestStateThreadsMaxPayloadSizeToPlumtree(t *testing.T) {
 	me := PeerID(seq32(1))
 	topic := TopicID(seq32(2))
-	state := NewState(me, nil, Config{MaxMessageSize: 1})
+	state := NewStateWithRand(me, nil, Config{MaxMessageSize: 1}, testRand(t))
 	state.Handle(InEvent{
 		Kind:  CommandEvent,
 		Topic: topic,

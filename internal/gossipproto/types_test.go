@@ -2,8 +2,12 @@ package gossipproto
 
 import (
 	"encoding/hex"
+	"math/rand"
+	"os"
 	"reflect"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/tmc/go-iroh/internal/postcard"
 )
@@ -139,4 +143,23 @@ func seq32(start byte) [32]byte {
 		out[i] = start + byte(i)
 	}
 	return out
+}
+
+// testRand returns a generator seeded from GOIROH_TEST_SEED, or from the clock
+// when that is unset. The state machines otherwise seed themselves from the
+// clock with no way to recover the seed, so a failure could not be rerun
+// against the input that produced it. t.Log reports the seed and the command
+// to replay it, and go test prints that only for tests that fail.
+func testRand(t *testing.T) *rand.Rand {
+	t.Helper()
+	seed := time.Now().UnixNano()
+	if s := os.Getenv("GOIROH_TEST_SEED"); s != "" {
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			t.Fatalf("GOIROH_TEST_SEED=%q: %v", s, err)
+		}
+		seed = n
+	}
+	t.Logf("rand seed %d; replay with GOIROH_TEST_SEED=%d go test -run %s ./internal/gossipproto/", seed, seed, t.Name())
+	return rand.New(rand.NewSource(seed))
 }

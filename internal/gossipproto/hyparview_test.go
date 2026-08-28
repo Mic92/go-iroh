@@ -11,7 +11,7 @@ func TestHyparviewRequestJoin(t *testing.T) {
 	me := PeerID(seq32(1))
 	peer := PeerID(seq32(2))
 	data := PeerData{1, 2, 3}
-	state := NewHyparviewState(me, &data, DefaultHyparviewConfig())
+	state := NewHyparviewStateWithRand(me, &data, DefaultHyparviewConfig(), testRand(t))
 
 	got := state.Handle(HyparviewInEvent{Kind: HyparviewRequestJoin, Peer: peer})
 	wantData := data
@@ -92,7 +92,7 @@ func TestHyparviewForwardJoin(t *testing.T) {
 	joining := PeerID(seq32(4))
 	data := PeerData{9}
 	config := DefaultHyparviewConfig()
-	state := NewHyparviewState(me, nil, config)
+	state := NewHyparviewStateWithRand(me, nil, config, testRand(t))
 	state.active.insert(sender)
 	state.active.insert(next)
 
@@ -137,7 +137,7 @@ func TestHyparviewNeighborRefusalDisconnects(t *testing.T) {
 	from := PeerID(seq32(3))
 	config := DefaultHyparviewConfig()
 	config.ActiveViewCapacity = 1
-	state := NewHyparviewState(me, nil, config)
+	state := NewHyparviewStateWithRand(me, nil, config, testRand(t))
 	state.active.insert(active)
 
 	got := state.Handle(HyparviewInEvent{
@@ -178,7 +178,7 @@ func TestHyparviewHighPriorityJoinEvictsActive(t *testing.T) {
 	passive := PeerID(seq32(4))
 	config := DefaultHyparviewConfig()
 	config.ActiveViewCapacity = 1
-	state := NewHyparviewState(me, nil, config)
+	state := NewHyparviewStateWithRand(me, nil, config, testRand(t))
 	state.active.insert(old)
 	state.passive.insert(passive)
 
@@ -227,7 +227,7 @@ func TestHyparviewHighPriorityJoinEvictsActive(t *testing.T) {
 func TestHyparviewDisconnectKeepsAlivePeerPassive(t *testing.T) {
 	me := PeerID(seq32(1))
 	peer := PeerID(seq32(2))
-	state := NewHyparviewState(me, nil, DefaultHyparviewConfig())
+	state := NewHyparviewStateWithRand(me, nil, DefaultHyparviewConfig(), testRand(t))
 	state.active.insert(peer)
 
 	got := state.Handle(HyparviewInEvent{
@@ -325,7 +325,7 @@ func TestHyparviewPendingNeighborTimerRefills(t *testing.T) {
 	next := PeerID(seq32(3))
 	config := DefaultHyparviewConfig()
 	config.ActiveViewCapacity = 1
-	state := NewHyparviewState(me, nil, config)
+	state := NewHyparviewStateWithRand(me, nil, config, testRand(t))
 	state.passive.insert(missed)
 	state.passive.insert(next)
 	state.pendingNeighbor[missed] = struct{}{}
