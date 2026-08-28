@@ -3,6 +3,7 @@ package gossipproto
 import (
 	"bytes"
 	"math/rand"
+	"slices"
 	"testing"
 	"time"
 )
@@ -99,7 +100,8 @@ func (s *stateSim) remove(i int) {
 	delete(s.timers, peer)
 	delete(s.delivered, peer)
 	var out []stateSimOut
-	for id, node := range s.nodes {
+	for _, id := range sortedPeers(s.nodes) {
+		node := s.nodes[id]
 		out = append(out, stateSimOut{id: id, events: node.Handle(InEvent{
 			Kind: PeerDisconnected,
 			Peer: peer,
@@ -114,6 +116,20 @@ func (s *stateSim) remove(i int) {
 type stateSimOut struct {
 	id     PeerID
 	events []OutEvent
+}
+
+// sortedPeers returns the keys of m in a fixed order. The simulation seeds
+// each node, so ranging over a map is the one thing that makes a round
+// nondeterministic: the order nodes act in decides the overlay they converge
+// to, and an unlucky order left a node unreachable about once in a hundred
+// runs.
+func sortedPeers[V any](m map[PeerID]V) []PeerID {
+	ids := make([]PeerID, 0, len(m))
+	for id := range m {
+		ids = append(ids, id)
+	}
+	slices.SortFunc(ids, func(a, b PeerID) int { return bytes.Compare(a[:], b[:]) })
+	return ids
 }
 
 func (s *stateSim) broadcast(origin int, content []byte) {
@@ -168,12 +184,12 @@ func (s *stateSim) drainMessages() {
 func (s *stateSim) fireTimers() {
 	pending := s.timers
 	s.timers = make(map[PeerID][]Timer)
-	for id, timers := range pending {
+	for _, id := range sortedPeers(pending) {
 		node := s.nodes[id]
 		if node == nil {
 			continue
 		}
-		for _, timer := range timers {
+		for _, timer := range pending[id] {
 			s.apply(id, node.Handle(InEvent{
 				Kind:  TimerExpired,
 				Timer: timer,
@@ -208,7 +224,8 @@ func (s *stateSim) apply(from PeerID, events []OutEvent) {
 
 func (s *stateSim) requireOverlay(t *testing.T, name string) {
 	t.Helper()
-	for id, node := range s.nodes {
+	for _, id := range sortedPeers(s.nodes) {
+		node := s.nodes[id]
 		topic := node.topics[s.topic]
 		if topic == nil {
 			t.Fatalf("%s: %x has no topic", name, id)
@@ -226,7 +243,7 @@ func (s *stateSim) requireOverlay(t *testing.T, name string) {
 func (s *stateSim) requireBroadcast(t *testing.T, origin int, content []byte, maxHop Round) {
 	t.Helper()
 	originID := s.peer(origin)
-	for id := range s.nodes {
+	for _, id := range sortedPeers(s.nodes) {
 		var found bool
 		var hop Round
 		for _, ev := range s.delivered[id] {
