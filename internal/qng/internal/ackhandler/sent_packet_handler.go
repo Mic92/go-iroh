@@ -1168,11 +1168,19 @@ func (h *sentPacketHandler) setLossDetectionTimer(now monotime.Time) {
 	}
 }
 
+func (h *sentPacketHandler) hasOutstandingAppPackets() bool {
+	for _, r := range h.pathList {
+		if r.p.space.history.HasOutstandingPackets() || r.p.space.history.HasOutstandingPathProbes() {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *sentPacketHandler) lossDetectionTime(now monotime.Time) alarmTimer {
 	appData := h.getAppDataPath(protocol.PathIDZero).space
 	// cancel the alarm if no packets are outstanding
-	if h.peerCompletedAddressValidation && !h.hasOutstandingCryptoPackets() &&
-		!appData.history.HasOutstandingPackets() && !appData.history.HasOutstandingPathProbes() {
+	if h.peerCompletedAddressValidation && !h.hasOutstandingCryptoPackets() && !h.hasOutstandingAppPackets() {
 		return alarmTimer{}
 	}
 
