@@ -642,6 +642,11 @@ func (p *packetPacker) maybeGetCryptoPacket(
 			maxPacketSize -= cf.Length(v)
 		}
 	}
+	if len(pl.frames) == 0 && addPingIfEmpty {
+		ping := &wire.PingFrame{}
+		pl.frames = append(pl.frames, ackhandler.Frame{Frame: ping, Handler: emptyHandler{}})
+		pl.length += ping.Length(v)
+	}
 	return hdr, pl
 }
 
@@ -921,8 +926,9 @@ func (p *packetPacker) packPTOProbePacket1RTT(maxPacketSize protocol.ByteCount, 
 	pn, pnLen := p.pnManager.PeekPacketNumber(protocol.Encryption1RTT)
 	hdrLen := wire.ShortHeaderLen(connID, pnLen)
 	pl := p.maybeGetAppDataPacket(maxPacketSize-protocol.ByteCount(s.Overhead())-hdrLen, false, true, now, v)
-	if pl.length == 0 {
-		if !addPingIfEmpty {
+	hasAckEliciting := pl.numStreamFrames() > 0 || ackhandler.HasAckElicitingFrames(pl.frames)
+	if !hasAckEliciting {
+		if !addPingIfEmpty && pl.length == 0 {
 			return nil, nil
 		}
 		ping := &wire.PingFrame{}
