@@ -1056,26 +1056,19 @@ func (c *Conn) maybeResetTimer() {
 			}
 		}
 	}
-	// If the connection is hard-blocked, we can't even send acknowledgments,
-	// nor can we send PTO probe packets.
-	if t := c.qntMigrationFallbackDeadline(); !t.IsZero() && t.Before(deadline) {
-		deadline = t
-	}
-	if c.blocked == blockModeHardBlocked {
-		c.timer.Reset(monotime.Until(deadline))
-		return
-	}
-
 	if t := c.receivedPacketHandler.GetAlarmTimeout(); !t.IsZero() && t.Before(deadline) {
 		deadline = t
 	}
 	if t := c.sentPacketHandler.GetLossDetectionTimeout(); !t.IsZero() && t.Before(deadline) {
 		deadline = t
 	}
+	if t := c.qntMigrationFallbackDeadline(); !t.IsZero() && t.Before(deadline) {
+		deadline = t
+	}
 	if t := c.qntNextRetryDeadline(); !t.IsZero() && t.Before(deadline) {
 		deadline = t
 	}
-	if c.blocked == blockModeCongestionLimited {
+	if c.blocked == blockModeHardBlocked || c.blocked == blockModeCongestionLimited {
 		c.timer.Reset(monotime.Until(deadline))
 		return
 	}
@@ -1440,7 +1433,9 @@ func (c *Conn) handleOnePacket(rp receivedPacket, datagramPayloadChecksum qlog.D
 	}
 
 	p.buffer.MaybeRelease()
-	c.blocked = blockModeNone
+	if wasProcessed {
+		c.blocked = blockModeNone
+	}
 	return wasProcessed, nil
 }
 
