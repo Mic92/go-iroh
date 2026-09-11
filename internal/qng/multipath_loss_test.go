@@ -179,3 +179,126 @@ func TestMultipathStreamSurvivesLoss(t *testing.T) {
 		t.Fatalf("server received %d bytes, want %d", res.n, payloadSize)
 	}
 }
+
+// TestSinglePathStreamSurvivesLoss verifies that single-path bulk stream transfers
+// complete reliably under simulated packet loss across multiple transfer sizes.
+func TestSinglePathStreamSurvivesLoss(t *testing.T) {
+	tests := []struct {
+		name     string
+		lossRate float64
+		size     int
+	}{
+		{name: "Loss0.5Pct-64KB", lossRate: 0.005, size: 64 << 10},
+		{name: "Loss0.5Pct-256KB", lossRate: 0.005, size: 256 << 10},
+		{name: "Loss0.5Pct-1MB", lossRate: 0.005, size: 1 << 20},
+		{name: "Loss5Pct-256KB", lossRate: 0.05, size: 256 << 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverTLS, clientTLS, _, _, _, _ := multipathTLSConfigs(t)
+
+			serverCfg := &Config{KeepAlivePeriod: 0}
+			clientCfg := &Config{KeepAlivePeriod: 0}
+
+			serverUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer serverUDP.Close()
+			serverLossy := newLossyPacketConn(serverUDP, tt.lossRate, 100)
+			serverTr := &Transport{Conn: serverLossy, ConnectionIDLength: 8}
+			defer serverTr.Close()
+			ln, err := serverTr.Listen(serverTLS, serverCfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ln.Close()
+
+			clientUDP, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer clientUDP.Close()
+			clientLossy := newLossyPacketConn(clientUDP, tt.lossRate, 200)
+			clientTr := &Transport{Conn: clientLossy, ConnectionIDLength: 8}
+			defer clientTr.Close()
+
+			deadline := time.Now().Add(20 * time.Second)
+			ctx, cancel := context.WithDeadline(context.Background(), deadline)
+			defer cancel()
+
+			type acceptResult struct {
+				conn *Conn
+				n    int
+				err  error
+			}
+			serverDone := make(chan acceptResult, 1)
+			go func() {
+				conn, err := ln.Accept(ctx)
+				if err != nil {
+					serverDone <- acceptResult{err: err}
+					return
+				}
+				str, err := conn.AcceptStream(ctx)
+				if err != nil {
+					serverDone <- acceptResult{conn: conn, err: err}
+					return
+				}
+				// A wedged connection must surface as a stream error, not as a
+				// blocked goroutine that outlives the context.
+				if err := str.SetReadDeadline(deadline); err != nil {
+					serverDone <- acceptResult{conn: conn, err: err}
+					return
+				}
+				n, err := io.Copy(io.Discard, str)
+				serverDone <- acceptResult{conn: conn, n: int(n), err: err}
+			}()
+
+			clientConn, err := clientTr.Dial(ctx, ln.Addr(), clientTLS, clientCfg)
+			if err != nil {
+				t.Fatalf("dial: %v", err)
+			}
+			defer clientConn.CloseWithError(0, "")
+
+			serverLossy.enabled.Store(true)
+			clientLossy.enabled.Store(true)
+
+			str, err := clientConn.OpenStreamSync(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := str.SetWriteDeadline(deadline); err != nil {
+				t.Fatal(err)
+			}
+			payload := make([]byte, tt.size)
+			if _, err := str.Write(payload); err != nil {
+				t.Fatalf("stream write: %v", err)
+			}
+			if err := str.Close(); err != nil {
+				t.Fatalf("stream close: %v", err)
+			}
+
+			var res acceptResult
+			select {
+			case res = <-serverDone:
+			case <-ctx.Done():
+				t.Fatalf("server did not finish within the deadline: %v", ctx.Err())
+			}
+			cancel()
+			if res.conn != nil {
+				defer res.conn.CloseWithError(0, "")
+			}
+			if res.err != nil {
+				t.Fatalf("server: %v", res.err)
+			}
+			if res.n != tt.size {
+				t.Fatalf("server received %d bytes, want %d", res.n, tt.size)
+			}
+
+			clientStats := clientConn.ConnectionStats()
+			t.Logf("[%s] PacketsSent: %d, PacketsLost: %d, PTOs: %d, SpuriousLosses: %d",
+				tt.name, clientStats.PacketsSent, clientStats.PacketsLost, clientStats.PTOs, clientStats.SpuriousLosses)
+		})
+	}
+}

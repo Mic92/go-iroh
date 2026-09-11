@@ -937,6 +937,9 @@ func (h *sentPacketHandler) detectSpuriousLosses(ack *wire.AckFrame, pid protoco
 					TimeReordering:   timeReordering,
 				})
 			}
+			if h.connStats != nil {
+				h.connStats.SpuriousLosses.Add(1)
+			}
 			spuriousLosses = append(spuriousLosses, pn)
 		}
 	}
@@ -1333,6 +1336,16 @@ func (h *sentPacketHandler) detectLostPackets(now monotime.Time, encLevel protoc
 	}
 }
 
+// countPTO records one fired PTO alarm. Every branch of OnLossDetectionTimeout
+// that treats the alarm as a probe timeout calls it, so ConnectionStats.PTOs
+// counts the address-validation and nonzero-path probes too, not just the
+// ordinary 1-RTT one.
+func (h *sentPacketHandler) countPTO() {
+	if h.connStats != nil {
+		h.connStats.PTOs.Add(1)
+	}
+}
+
 func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 	defer h.setLossDetectionTimer(now)
 
@@ -1369,6 +1382,7 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 	appData := h.getAppDataPath(protocol.PathIDZero)
 	if h.totalBytesInFlight() == 0 && !h.peerCompletedAddressValidation {
 		appData.ptoCount++
+		h.countPTO()
 		appData.numProbesToSend++
 		if h.initialPackets != nil {
 			appData.ptoMode = SendPTOInitial
@@ -1391,6 +1405,7 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 		// immediately, forever. The path has gone a full PTO backoff without
 		// an acknowledgment; declare its outstanding packets lost so their
 		// frames retransmit on path 0 and the path stops arming the timer.
+		h.countPTO()
 		h.declareAppDataPathLost(ptoPathID)
 		h.setLossDetectionTimer(now)
 		return nil
@@ -1400,6 +1415,7 @@ func (h *sentPacketHandler) OnLossDetectionTimeout(now monotime.Time) error {
 		return nil
 	}
 	appData.ptoCount++
+	h.countPTO()
 	if h.logger.Debug() {
 		h.logger.Debugf("Loss detection alarm for %s fired in PTO mode. PTO count: %d", encLevel, appData.ptoCount)
 	}

@@ -998,6 +998,10 @@ type ConnectionStats struct {
 	// (does not monotonically increase, because packets that are declared lost
 	// can subsequently be received).
 	PacketsLost uint64
+	// PTOs is the total number of loss detection PTO alarms that fired.
+	PTOs uint64
+	// SpuriousLosses is the total number of packets declared lost that were subsequently acknowledged.
+	SpuriousLosses uint64
 	// PathCIDsBlocked is the number of PATH_CIDS_BLOCKED frames received from
 	// the peer on this connection.
 	PathCIDsBlocked uint64
@@ -1016,6 +1020,8 @@ func (c *Conn) ConnectionStats() ConnectionStats {
 		PacketsReceived: c.connStats.PacketsReceived.Load(),
 		BytesLost:       c.connStats.BytesLost.Load(),
 		PacketsLost:     c.connStats.PacketsLost.Load(),
+		PTOs:            c.connStats.PTOs.Load(),
+		SpuriousLosses:  c.connStats.SpuriousLosses.Load(),
 		PathCIDsBlocked: c.connStats.PathCIDsBlocked.Load(),
 	}
 }

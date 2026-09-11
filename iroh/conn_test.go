@@ -179,6 +179,8 @@ func TestConnStatsMapping(t *testing.T) {
 		PacketsReceived: 8,
 		BytesLost:       9,
 		PacketsLost:     10,
+		PTOs:            11,
+		SpuriousLosses:  12,
 	}
 	got := connStats(quic.ConnectionStats{
 		MinRTT:          want.MinRTT,
@@ -191,6 +193,8 @@ func TestConnStatsMapping(t *testing.T) {
 		PacketsReceived: want.PacketsReceived,
 		BytesLost:       want.BytesLost,
 		PacketsLost:     want.PacketsLost,
+		PTOs:            want.PTOs,
+		SpuriousLosses:  want.SpuriousLosses,
 	})
 	if got != want {
 		t.Fatalf("connStats() = %+v, want %+v", got, want)

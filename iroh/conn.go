@@ -203,6 +203,10 @@ type ConnStats struct {
 	// PacketsLost is the number of packets declared lost on the underlying
 	// connection. It may decrease if packets declared lost are later received.
 	PacketsLost uint64
+	// PTOs is the number of probe timeout alarms that fired.
+	PTOs uint64
+	// SpuriousLosses is the number of packets declared lost that were later acknowledged.
+	SpuriousLosses uint64
 }
 
 // PathInfo is a snapshot of one currently open network path for a connection.
@@ -412,6 +416,8 @@ func connStats(s quic.ConnectionStats) ConnStats {
 		PacketsReceived: s.PacketsReceived,
 		BytesLost:       s.BytesLost,
 		PacketsLost:     s.PacketsLost,
+		PTOs:            s.PTOs,
+		SpuriousLosses:  s.SpuriousLosses,
 	}
 }
 
