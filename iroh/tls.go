@@ -59,10 +59,12 @@ func (p KeyExchangePolicy) curves() []tls.CurveID {
 }
 
 // ServerName returns the TLS server name (SNI) iroh uses to address id:
-// BASE32_DNSSEC(id) + ".iroh.invalid". A dialing endpoint puts this in its
-// ClientHello; the accepting endpoint proves it holds id by presenting id as
-// its raw public key. Deriving the name from the id (rather than a constant)
-// also keeps per-peer 0-RTT session tickets in separate cache buckets.
+// BASE32_DNSSEC(id) + ".iroh.invalid". go-iroh puts this in its ClientHello;
+// the accepting endpoint proves it holds id by presenting id as its raw public
+// key. Upstream Rust iroh stopped sending SNI in 1.1.0, so an accepting
+// endpoint must not require it. Deriving the name from the id (rather than a
+// constant) also keeps per-peer 0-RTT session tickets in separate cache
+// buckets.
 func ServerName(id key.EndpointID) string {
 	b := id.Bytes()
 	return base32DNSSEC.EncodeToString(b[:]) + tlsNameSuffix
